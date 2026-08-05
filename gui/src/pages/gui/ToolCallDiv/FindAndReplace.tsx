@@ -206,7 +206,7 @@ export function FindAndReplaceDisplay({
 
   // Unified container component that always renders the same structure
   const renderContainer = (content: React.ReactNode) => (
-    <div className="outline-command-border -outline-offset-0.5 rounded-default bg-editor mx-2 my-1 flex w-full min-w-0 max-w-full flex-col outline outline-1">
+    <div className="outline-command-border -outline-offset-0.5 rounded-default bg-editor mx-2 my-1 flex min-w-0 max-w-full flex-col overflow-x-auto outline outline-1">
       <div
         className={`find-widget-skip bg-editor sticky -top-2 z-10 m-0 flex cursor-pointer items-center justify-between gap-3 px-1.5 py-1 ${showContent ? "rounded-t-default border-command-border border-b" : "rounded-default"}`}
         onClick={() => {

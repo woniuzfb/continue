@@ -197,6 +197,13 @@ export abstract class BaseLLM implements ILLM {
   /** Tool overrides for this model */
   toolOverrides?: ToolOverride[];
 
+  /**
+   * When true, tool-call outputs (e.g. an MCP `read_file` tool returning file
+   * contents) are not counted toward the recorded `promptTokens`. The outputs
+   * are still sent to the model — only the token-usage accounting is affected.
+   */
+  excludeToolOutputsFromTokenCount?: boolean;
+
   lastRequestId: string | undefined;
 
   private _llmOptions: LLMOptions;
@@ -300,6 +307,8 @@ export abstract class BaseLLM implements ILLM {
     this.sourceFile = options.sourceFile;
     this.isFromAutoDetect = options.isFromAutoDetect;
     this.toolOverrides = options.toolOverrides;
+    this.excludeToolOutputsFromTokenCount =
+      options.excludeToolOutputsFromTokenCount;
   }
 
   get contextLength() {
@@ -345,8 +354,45 @@ export abstract class BaseLLM implements ILLM {
     interaction: ILLMInteractionLog | undefined,
     usage: Usage | undefined,
     error?: any,
+    tokensToExclude: number = 0,
   ): InteractionStatus {
     let promptTokens = this.countTokens(prompt);
+    // Optionally exclude tool-call outputs (e.g. MCP read_file results) from
+    // the recorded prompt token usage. The outputs are still sent to the model
+    // — this only adjusts what is logged/displayed as token consumption.
+    if (tokensToExclude > 0) {
+      promptTokens = Math.max(0, promptTokens - tokensToExclude);
+      // Also adjust the provider-reported `usage` (used for cost/analytics),
+      // otherwise cost accounting would still include the tool outputs. We
+      // subtract from the reported prompt tokens and clamp cached tokens so
+      // they never exceed the adjusted total.
+      if (usage) {
+        const adjustedPromptTokens = Math.max(
+          0,
+          usage.promptTokens - tokensToExclude,
+        );
+        const details = usage.promptTokensDetails;
+        usage = {
+          ...usage,
+          promptTokens: adjustedPromptTokens,
+          ...(details
+            ? {
+                promptTokensDetails: {
+                  ...details,
+                  ...(typeof details.cachedTokens === "number"
+                    ? {
+                        cachedTokens: Math.min(
+                          details.cachedTokens,
+                          adjustedPromptTokens,
+                        ),
+                      }
+                    : {}),
+                },
+              }
+            : {}),
+        };
+      }
+    }
     let generatedTokens = this.countTokens(completion);
     let thinkingTokens = thinking ? this.countTokens(thinking) : 0;
 
@@ -400,6 +446,27 @@ export abstract class BaseLLM implements ILLM {
         return "error";
       }
     }
+  }
+
+  /**
+   * Sum the token counts of all `tool`-role messages in the given list.
+   * Used to optionally exclude tool-call outputs (e.g. MCP `read_file`
+   * results) from the recorded prompt token usage.
+   */
+  private _countToolOutputTokens(messages: ChatMessage[]): number {
+    let total = 0;
+    for (const msg of messages) {
+      if (msg.role === "tool" && msg.content) {
+        // `content` may be a string or a MessagePart[]; normalize to string
+        // before counting so we never pass a non-string to the tokenizer.
+        const content =
+          typeof msg.content === "string"
+            ? msg.content
+            : renderChatMessage(msg);
+        total += this.countTokens(content);
+      }
+    }
+    return total;
   }
 
   private async parseError(resp: any): Promise<Error> {
@@ -960,6 +1027,7 @@ export abstract class BaseLLM implements ILLM {
       maxTokens: completionOptions.maxTokens ?? DEFAULT_MAX_TOKENS,
       supportsImages: this.supportsImages(),
       tools: options.tools,
+      excludeToolOutputsFromTokenCount: this.excludeToolOutputsFromTokenCount,
     });
   }
 
@@ -1140,6 +1208,7 @@ export abstract class BaseLLM implements ILLM {
         maxTokens: completionOptions.maxTokens ?? DEFAULT_MAX_TOKENS,
         supportsImages: this.supportsImages(),
         tools: optionsWithOverrides.tools,
+        excludeToolOutputsFromTokenCount: this.excludeToolOutputsFromTokenCount,
       });
 
       messages = compiledChatMessages;
@@ -1150,6 +1219,13 @@ export abstract class BaseLLM implements ILLM {
     const prompt = this.templateMessages
       ? this.templateMessages(messagesCopy)
       : this._formatChatMessages(messagesCopy);
+
+    // Optionally exclude tool-call outputs (e.g. MCP read_file results) from
+    // the recorded prompt token usage. The outputs are still sent to the model
+    // — only the logged/displayed token consumption is adjusted.
+    const tokensToExclude = this.excludeToolOutputsFromTokenCount
+      ? this._countToolOutputTokens(messages)
+      : 0;
 
     if (logEnabled) {
       interaction?.logItem({
@@ -1284,6 +1360,8 @@ export abstract class BaseLLM implements ILLM {
         thinking.join(""),
         interaction,
         usage,
+        undefined,
+        tokensToExclude,
       );
     } catch (e) {
       Logger.error(e as Error, {
@@ -1303,6 +1381,7 @@ export abstract class BaseLLM implements ILLM {
         interaction,
         usage,
         e,
+        tokensToExclude,
       );
       throw e;
     } finally {
@@ -1315,6 +1394,7 @@ export abstract class BaseLLM implements ILLM {
           interaction,
           usage,
           "cancel",
+          tokensToExclude,
         );
       }
     }

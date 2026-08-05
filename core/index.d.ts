@@ -730,6 +730,15 @@ export interface LLMOptions {
   sourceFile?: string;
   isFromAutoDetect?: boolean;
 
+  /**
+   * When true, content returned by tool calls (e.g. an MCP `read_file` tool
+   * returning file contents) is excluded from the model's token-usage
+   * accounting. Tool outputs are still sent to the model — they are just not
+   * counted toward the recorded `promptTokens`. Useful for local/free models
+   * where you only care about the "real" conversation cost.
+   */
+  excludeToolOutputsFromTokenCount?: boolean;
+
   /** Tool overrides for this model */
   toolOverrides?: ToolOverride[];
 }
@@ -1280,6 +1289,14 @@ export interface ModelDescription {
 
   sourceFile?: string;
   isFromAutoDetect?: boolean;
+
+  /**
+   * When true, content returned by tool calls (e.g. an MCP `read_file` tool
+   * returning file contents) is excluded from the model's token-usage
+   * accounting. Tool outputs are still sent to the model — they are just not
+   * counted toward the recorded `promptTokens`.
+   */
+  excludeToolOutputsFromTokenCount?: boolean;
 
   /** Tool overrides for this model */
   toolOverrides?: ToolOverride[];

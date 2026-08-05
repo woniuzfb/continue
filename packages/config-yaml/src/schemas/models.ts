@@ -196,6 +196,14 @@ const baseModelFields = {
     .record(z.string(), z.union([z.string(), z.boolean(), z.number()]))
     .optional(),
   autocompleteOptions: autocompleteOptionsSchema.optional(),
+  /**
+   * When true, the content returned by tool calls (e.g. an MCP `read_file` tool
+   * returning file contents) is excluded from the model's token-usage
+   * accounting. Tool outputs are still sent to the model — they are just not
+   * counted toward the recorded `promptTokens`. Useful for local/free models
+   * where you only care about the "real" conversation cost.
+   */
+  excludeToolOutputsFromTokenCount: z.boolean().optional(),
 };
 
 export const modelSchema = z.object({

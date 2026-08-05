@@ -11,7 +11,6 @@ import { autodetectTemplateType } from "./autodetect.js";
 import {
   addSpaceToAnyEmptyMessages,
   chatMessageIsEmpty,
-  isUserOrToolMsg,
   messageHasToolCallId,
 } from "./messages.js";
 
@@ -447,6 +446,7 @@ function compileChatMessages({
   maxTokens,
   supportsImages,
   tools,
+  excludeToolOutputsFromTokenCount,
 }: {
   modelName: string;
   msgs: ChatMessage[];
@@ -454,8 +454,27 @@ function compileChatMessages({
   maxTokens: number;
   supportsImages: boolean;
   tools?: Tool[];
+  /**
+   * When true, `tool`-role message tokens are treated as free (0) for BOTH the
+   * pruning budget and the reported `inputTokens` / `contextPercentage`. The
+   * tool outputs are still reassembled and sent to the model unchanged — this
+   * only defers pruning and lowers the displayed context usage, matching the
+   * `_logEnd` accounting that also excludes tool outputs. Intended for models
+   * whose real usable window exceeds the configured `contextLength` (or that
+   * cache tool outputs), so large read_file/MCP results don't evict history.
+   */
+  excludeToolOutputsFromTokenCount?: boolean;
 }): CompiledMessagesResult {
   let didPrune = false;
+
+  // Count a message toward the token budget/metrics, treating tool outputs as
+  // free when the caller opted in. Wrapper tokens (base/extra/toolCallId) are
+  // also dropped for tool messages here; they are negligible next to the tool
+  // output payload and keeping the rule "a tool message costs 0" simple.
+  const countMsgForBudget = (msg: ChatMessage): number =>
+    excludeToolOutputsFromTokenCount && msg.role === "tool"
+      ? 0
+      : countChatMessageTokens(modelName, msg);
 
   let msgsCopy: ChatMessage[] = msgs.map((m) => ({ ...m }));
 
@@ -481,10 +500,13 @@ function compileChatMessages({
   // Extract the tool sequence from the end of the message array
   const toolSequence = extractToolSequence(msgsCopy);
 
-  // Count tokens for all messages in the tool sequence
+  // Count tokens for all messages in the tool sequence. Tool outputs here are
+  // part of the always-preserved last sequence, but when excluded they should
+  // not inflate the budget/metrics either — matching `_logEnd` which subtracts
+  // ALL tool-output tokens (not just history ones).
   let lastMessagesTokens = 0;
   for (const msg of toolSequence) {
-    lastMessagesTokens += countChatMessageTokens(modelName, msg);
+    lastMessagesTokens += countMsgForBudget(msg);
   }
 
   // System message
@@ -528,10 +550,12 @@ function compileChatMessages({
     );
   }
 
-  // Now remove messages till we're under the limit
+  // Now remove messages till we're under the limit. Tool outputs count as 0
+  // toward the budget when excluded, so large read_file/MCP results never
+  // trigger eviction of older history (deferred pruning).
   let currentTotal = 0;
   const historyWithTokens = msgsCopy.map((message) => {
-    const tokens = countChatMessageTokens(modelName, message);
+    const tokens = countMsgForBudget(message);
     currentTotal += tokens;
     return {
       ...message,
