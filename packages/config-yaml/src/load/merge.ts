@@ -28,6 +28,7 @@ export function mergeUnrolledAssistants(
   incoming: AssistantUnrolled,
 ): AssistantUnrolled {
   const assistant: AssistantUnrolled = {
+    ...incoming,
     ...current,
     env: { ...current.env, ...incoming.env },
     requestOptions: mergeConfigYamlRequestOptions(

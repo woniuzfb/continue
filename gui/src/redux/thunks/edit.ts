@@ -147,7 +147,6 @@ export const enterEdit = createAsyncThunk<
       saveCurrentSession({
         openNewSession: true,
         // Because this causes a lag before Edit is focused. TODO just have that happen in background
-        generateTitle: false,
       }),
     );
 

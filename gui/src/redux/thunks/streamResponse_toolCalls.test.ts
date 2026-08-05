@@ -263,6 +263,7 @@ describe("streamResponseThunk - tool calls", () => {
       "session/setInlineErrorMessage",
       "session/setIsPruned",
       "session/setContextPercentage",
+      "session/setContextMetrics",
       "symbols/updateFromContextItems/fulfilled",
       "session/streamUpdate",
       "session/streamUpdate",
@@ -282,6 +283,7 @@ describe("streamResponseThunk - tool calls", () => {
       "session/setInlineErrorMessage",
       "session/setIsPruned",
       "session/setContextPercentage",
+      "session/setContextMetrics",
       "session/streamUpdate",
       "session/addPromptCompletionPair",
       "session/setInactive",
@@ -543,6 +545,10 @@ describe("streamResponseThunk - tool calls", () => {
         isPruned: false,
         title: "Session summary",
         inlineErrorMessage: undefined,
+        contextMetrics: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.9,
+        }),
       },
     });
   });
@@ -738,6 +744,13 @@ describe("streamResponseThunk - tool calls", () => {
         payload: 0.9,
       },
       {
+        type: "session/setContextMetrics",
+        payload: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.9,
+        }),
+      },
+      {
         type: "symbols/updateFromContextItems/fulfilled",
         meta: {
           arg: [],
@@ -811,7 +824,6 @@ describe("streamResponseThunk - tool calls", () => {
         type: "session/saveCurrent/pending",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -884,7 +896,6 @@ describe("streamResponseThunk - tool calls", () => {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -1043,6 +1054,10 @@ describe("streamResponseThunk - tool calls", () => {
         isPruned: false,
         title: "Session summary",
         inlineErrorMessage: undefined,
+        contextMetrics: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.9,
+        }),
       },
       ui: {
         ...initialState.ui,
@@ -1292,6 +1307,13 @@ describe("streamResponseThunk - tool calls", () => {
         payload: 0.85,
       },
       {
+        type: "session/setContextMetrics",
+        payload: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.85,
+        }),
+      },
+      {
         type: "symbols/updateFromContextItems/fulfilled",
         meta: {
           arg: [],
@@ -1365,7 +1387,6 @@ describe("streamResponseThunk - tool calls", () => {
         type: "session/saveCurrent/pending",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -1438,7 +1459,6 @@ describe("streamResponseThunk - tool calls", () => {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -1588,6 +1608,13 @@ describe("streamResponseThunk - tool calls", () => {
         payload: 0.85,
       },
       {
+        type: "session/setContextMetrics",
+        payload: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.85,
+        }),
+      },
+      {
         type: "session/streamUpdate",
         payload: [
           {
@@ -1626,7 +1653,6 @@ describe("streamResponseThunk - tool calls", () => {
         type: "session/saveCurrent/pending",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -1699,7 +1725,6 @@ describe("streamResponseThunk - tool calls", () => {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -1869,6 +1894,10 @@ describe("streamResponseThunk - tool calls", () => {
         contextPercentage: 0.85,
         inlineErrorMessage: undefined,
         isPruned: false,
+        contextMetrics: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.85,
+        }),
       },
       ui: {
         ...initialState.ui,

@@ -45,6 +45,7 @@ import {
 
 const PROVIDER_HANDLES_TEMPLATING: string[] = [
   "lmstudio",
+  "Local",
   "lemonade",
   "openai",
   "nvidia",
@@ -225,6 +226,10 @@ function modelSupportsReasoning(
     return true;
   }
   if (model.model.includes("grok-4")) {
+    return true;
+  }
+  // LLM: prefix models expose a reasoning toggle, but default to disabled
+  if (model.model.startsWith("LLM:")) {
     return true;
   }
 

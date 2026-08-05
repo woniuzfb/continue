@@ -41,6 +41,7 @@ import { LLMClasses, llmFromDescription } from "../llm/llms";
 import CustomLLMClass from "../llm/llms/CustomLLM";
 import { LLMReranker } from "../llm/llms/llm";
 import TransformersJsEmbeddingsProvider from "../llm/llms/TransformersJsEmbeddingsProvider";
+import { deduplicateModels } from "./yaml/models";
 import { getAllPromptFiles } from "../promptFiles/getPromptFiles";
 import { copyOf } from "../util";
 import { GlobalContext } from "../util/GlobalContext";
@@ -334,6 +335,10 @@ async function intermediateToFinalConfig({
       }
     }),
   );
+
+  // Deduplicate models: explicitly configured models (isFromAutoDetect !== true)
+  // take priority over autodetected duplicates with the same model name.
+  models = deduplicateModels(models);
 
   applyRequestOptionsToModels(models, config, [
     "chat",

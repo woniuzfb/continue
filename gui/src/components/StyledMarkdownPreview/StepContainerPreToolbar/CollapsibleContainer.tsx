@@ -18,11 +18,15 @@ export function CollapsibleContainer({
 
   // If not collapsible, just render children without any collapsible behavior
   if (!collapsible) {
-    return <div className={className}>{children}</div>;
+    return (
+      <div className={`w-full max-w-full overflow-x-auto ${className}`}>
+        {children}
+      </div>
+    );
   }
 
   return (
-    <div className={`relative ${className}`}>
+    <div className={`relative w-full max-w-full overflow-x-auto ${className}`}>
       <div className={`overflow-hidden ${isExpanded ? "" : maxHeight}`}>
         {children}
       </div>

@@ -11,6 +11,9 @@ import {
   errorToolCall,
   setActive,
   setAppliedRulesAtIndex,
+  setContextInputTokens,
+  setContextLength,
+  setContextMetrics,
   setContextPercentage,
   setInactive,
   setInlineErrorMessage,
@@ -133,11 +136,13 @@ export const streamNormalInput = createAsyncThunk<
     );
 
     // Construct messages (excluding system message)
-    const baseSystemMessage = getBaseSystemMessage(
-      state.session.mode,
-      selectedChatModel,
-      activeTools,
-    );
+    const baseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
+      ? ""
+      : getBaseSystemMessage(
+          state.session.mode,
+          selectedChatModel,
+          activeTools,
+        );
 
     const systemMessage = systemToolsFramework
       ? addSystemMessageToolsToSystemMessage(
@@ -187,11 +192,32 @@ export const streamNormalInput = createAsyncThunk<
       }
     }
 
-    const { compiledChatMessages, didPrune, contextPercentage } =
-      precompiledRes.content;
+    const {
+      compiledChatMessages,
+      didPrune,
+      contextPercentage,
+      inputTokens,
+      contextLength,
+    } = precompiledRes.content;
 
     dispatch(setIsPruned(didPrune));
     dispatch(setContextPercentage(contextPercentage));
+    if (inputTokens !== undefined) {
+      dispatch(setContextInputTokens(inputTokens));
+    }
+    if (contextLength !== undefined) {
+      dispatch(setContextLength(contextLength));
+    }
+    // 保存指标快照（不含 compiledChatMessages，避免 session 文件膨胀），
+    // saveCurrentSession 会持久化到 session 文件，下次加载时直接还原
+    dispatch(
+      setContextMetrics({
+        didPrune,
+        contextPercentage,
+        inputTokens,
+        contextLength,
+      }),
+    );
 
     const start = Date.now();
     const streamAborter = state.session.streamAborter;

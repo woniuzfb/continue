@@ -187,7 +187,7 @@ function handleExport(_args: string[]): SlashCommandResult {
   };
 }
 
-function handleImport(args: string[]): SlashCommandResult {
+async function handleImport(args: string[]): Promise<SlashCommandResult> {
   const filePath = args.join(" ").trim();
   if (!filePath) {
     return {
@@ -229,7 +229,7 @@ function handleImport(args: string[]): SlashCommandResult {
         ...session,
         sessionId: uuidv4(),
       };
-      historyManager.save(session);
+      await historyManager.save(session);
       return {
         exit: false,
         output: chalk.green(
@@ -239,7 +239,7 @@ function handleImport(args: string[]): SlashCommandResult {
       };
     }
 
-    historyManager.save(session);
+    await historyManager.save(session);
     return {
       exit: false,
       output: chalk.green(

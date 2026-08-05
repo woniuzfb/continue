@@ -193,7 +193,7 @@ describe("constructMessages", () => {
     expect(content[2].text).toBe("User message with context");
   });
 
-  test("should inject thinking messages with no changes", () => {
+  test("should filter out thinking messages to avoid inflated context", () => {
     const thinkingMessage: ThinkingChatMessage = {
       role: "thinking",
       content: "Thinking process...",
@@ -213,10 +213,9 @@ describe("constructMessages", () => {
       {},
     );
 
-    // Should have system message + thinking message
-    expect(messages.length).toBe(2);
-    expect(messages[1].role).toBe("thinking");
-    expect(messages[1].content).toBe("Thinking process...");
+    // Thinking messages should be filtered out, only system message remains
+    expect(messages.length).toBe(1);
+    expect(messages[0].role).toBe("system");
   });
 
   test("should inject assistant messages with no changes", () => {

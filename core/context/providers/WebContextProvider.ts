@@ -5,8 +5,7 @@ import {
   ContextProviderExtras,
   FetchFunction,
 } from "../..";
-import { getHeaders } from "../../continueServer/stubs/headers";
-const TRIAL_PROXY_URL = "https://proxy-server-blue-l6vsfbzhba-uw.a.run.app";
+const LOCAL_WEB_SEARCH_BASE_URL = "http://127.0.0.1:5000/";
 
 export const fetchSearchResults = async (
   query: string,
@@ -17,7 +16,6 @@ export const fetchSearchResults = async (
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(await getHeaders()),
     },
     body: JSON.stringify({
       query,
@@ -27,13 +25,21 @@ export const fetchSearchResults = async (
 
   if (!resp.ok) {
     const text = await resp.text();
+
     throw new Error(`Failed to fetch web context: ${text}`);
   }
-  return await resp.json();
+
+  const data = await resp.json();
+
+  if (!Array.isArray(data)) {
+    throw new Error("Local web search returned a non-array response");
+  }
+
+  return data;
 };
 
 export default class WebContextProvider extends BaseContextProvider {
-  public static ENDPOINT = new URL("web", TRIAL_PROXY_URL);
+  public static ENDPOINT = new URL("web", LOCAL_WEB_SEARCH_BASE_URL);
   private static DEFAULT_N = 6;
 
   static description: ContextProviderDescription = {

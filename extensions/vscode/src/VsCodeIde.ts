@@ -2,8 +2,8 @@ import * as child_process from "node:child_process";
 import { exec } from "node:child_process";
 
 import { Range } from "core";
-import { EXTENSION_NAME } from "core/util/constants";
 import { DEFAULT_IGNORES, defaultIgnoresGlob } from "core/indexing/ignore";
+import { EXTENSION_NAME } from "core/util/constants";
 import * as URI from "uri-js";
 import * as vscode from "vscode";
 
@@ -359,7 +359,7 @@ class VsCodeIde implements IDE {
     await this.ideUtils.saveFile(vscode.Uri.parse(fileUri));
   }
 
-  private static MAX_BYTES = 100000;
+  private static MAX_BYTES = 10000000;
 
   async readFile(fileUri: string): Promise<string> {
     try {
@@ -406,6 +406,28 @@ class VsCodeIde implements IDE {
     } catch (e) {
       return "";
     }
+  }
+
+  async showOpenDialog(options: {
+    selectFiles?: boolean;
+    selectFolders?: boolean;
+    canSelectMany?: boolean;
+    title?: string;
+    defaultUri?: string;
+    filters?: Record<string, string[]>;
+  }): Promise<string[]> {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectFiles: options.selectFiles ?? true,
+      canSelectFolders: options.selectFolders ?? false,
+      canSelectMany: options.canSelectMany ?? false,
+      title: options.title,
+      defaultUri: options.defaultUri
+        ? vscode.Uri.parse(options.defaultUri)
+        : undefined,
+      filters: options.filters,
+      openLabel: options.title ?? "Select",
+    });
+    return (uris ?? []).map((u) => u.fsPath);
   }
 
   async openUrl(url: string): Promise<void> {

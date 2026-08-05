@@ -24,6 +24,8 @@ import {
   normalizeToMessageParts,
   renderContextItems,
   renderContextItemsWithStatus,
+  replaceFileContentBlocks,
+  stripInlineImageBase64,
 } from "core/util/messageContent";
 import { toolCallStateToContextItems } from "../../pages/gui/ToolCallDiv/utils";
 
@@ -61,6 +63,17 @@ export function constructMessages(
 
   const historyCopy = [...filteredHistory];
 
+  // Find the index of the last user message in history so we can keep
+  // <file_content> blocks only in the current message (the last one),
+  // stripping them from previous history messages.
+  let lastUserMsgIndexInHistory = -1;
+  for (let i = historyCopy.length - 1; i >= 0; i--) {
+    if (historyCopy[i].message.role === "user") {
+      lastUserMsgIndexInHistory = i;
+      break;
+    }
+  }
+
   const msgs: MessageWithContextItems[] = [];
   let appliedRuleIndex = -1;
   let index = -1;
@@ -69,9 +82,11 @@ export function constructMessages(
     if (
       item.message.role === "system" ||
       item.message.role === "tool" ||
+      item.message.role === "thinking" ||
       chatMessageIsEmpty(item.message)
     ) {
-      // Tool messages will be re-inserted
+      // Tool messages will be re-inserted; thinking messages are
+      // filtered out to avoid inflated context from reasoning_content.
       continue;
     }
 
@@ -79,6 +94,24 @@ export function constructMessages(
       appliedRuleIndex = index;
       // Gather context items for user messages
       let content = normalizeToMessageParts(item.message);
+
+      // Strip <file_content> blocks and inline markdown image base64 from
+      // history messages (previous user messages), but keep them in the
+      // current (last) user message so the model can still see the image.
+      const isHistory = index !== lastUserMsgIndexInHistory;
+      if (isHistory) {
+        content = content.map((part) => {
+          if (part.type === "text") {
+            return {
+              ...part,
+              text: stripInlineImageBase64(
+                replaceFileContentBlocks(part.text ?? ""),
+              ),
+            };
+          }
+          return part;
+        });
+      }
 
       const ctxItemParts = item.contextItems
         .map((ctxItem) => {
@@ -96,11 +129,6 @@ export function constructMessages(
           ...item.message,
           content,
         },
-      });
-    } else if (item.message.role === "thinking") {
-      msgs.push({
-        ctxItems: item.contextItems,
-        message: item.message,
       });
     } else if (item.message.role === "assistant") {
       // When using system message tools, convert tool calls/states to text content

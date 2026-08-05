@@ -36,6 +36,12 @@
   border: 1px solid transparent;
 }
 
+/* When attachments are present, give the editor a larger min-height so the
+   input box grows to accommodate the extra chip row above the toolbar. */
+.has-attachments .ProseMirror {
+  min-height: 80px;
+}
+
 .tiptap img.ProseMirror-selectednode {
   border: 1px solid var(--vscode-badge-background, #bfe2b6);
 }

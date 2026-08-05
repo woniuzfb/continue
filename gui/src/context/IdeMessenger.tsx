@@ -188,9 +188,10 @@ export class IdeMessenger implements IIdeMessenger {
     let returnVal: GeneratorReturnType<FromWebviewProtocol[T][1]> | undefined =
       undefined;
     let error: string | null = null;
+    let resolvePending: (() => void) | null = null;
 
-    // This handler receieves individual WebviewMessengerResults
-    // And pushes them to buffer
+    // This handler receives individual WebviewMessengerResults
+    // And pushes them to buffer, then notifies the waiting generator
     const handler = (event: {
       data: Message<WebviewProtocolGeneratorMessage<T>>;
     }) => {
@@ -198,8 +199,9 @@ export class IdeMessenger implements IIdeMessenger {
         const responseData = event.data.data;
         if ("error" in responseData) {
           error = responseData.error;
+          resolvePending?.();
+          resolvePending = null;
           return;
-          // throw new Error(responseData.error);
         }
         if (responseData.done) {
           window.removeEventListener("message", handler);
@@ -208,6 +210,8 @@ export class IdeMessenger implements IIdeMessenger {
         } else {
           buffer.push(responseData.content);
         }
+        resolvePending?.();
+        resolvePending = null;
       }
     };
     window.addEventListener("message", handler);
@@ -226,8 +230,12 @@ export class IdeMessenger implements IIdeMessenger {
           const chunks = buffer.slice(index);
           index = buffer.length;
           yield chunks;
+        } else {
+          // Wait for the next message event instead of polling every 50ms
+          await new Promise<void>((resolve) => {
+            resolvePending = resolve;
+          });
         }
-        await new Promise((resolve) => setTimeout(resolve, 50));
       }
 
       if (buffer.length > index) {

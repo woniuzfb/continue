@@ -1,13 +1,15 @@
 import { Editor, JSONContent } from "@tiptap/react";
+import { DocumentIcon } from "@heroicons/react/24/outline";
 import {
   ContextItemWithId,
   InputModifiers,
   RuleMetadata,
   SlashCommandSource,
 } from "core";
-import { memo, useMemo } from "react";
+import { memo, useContext, useMemo } from "react";
 import { defaultBorderRadius, vscBackground } from "..";
 import { useAppSelector } from "../../redux/hooks";
+import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { selectSlashCommandComboBoxInputs } from "../../redux/selectors";
 import { ContextItemsPeek } from "./belowMainInput/ContextItemsPeek";
 import { RulesPeek } from "./belowMainInput/RulesPeek";
@@ -15,6 +17,7 @@ import { GradientBorder } from "./GradientBorder";
 import { ToolbarOptions } from "./InputToolbar";
 import { Lump } from "./Lump";
 import { TipTapEditor } from "./TipTapEditor";
+import { AttachmentMeta, AttachedFile } from "./types";
 
 interface ContinueInputBoxProps {
   isLastUserInput: boolean;
@@ -23,10 +26,15 @@ interface ContinueInputBoxProps {
     editorState: JSONContent,
     modifiers: InputModifiers,
     editor: Editor,
+    attachments?: AttachedFile[],
   ) => void;
   editorState?: JSONContent;
   contextItems?: ContextItemWithId[];
   appliedRules?: RuleMetadata[];
+  /** Already-sent attachments (read from message.metadata) rendered as
+   * read-only file chips below the message box. Clicking a chip opens the
+   * file in the IDE. Only relevant for non-main (history) inputs. */
+  attachments?: AttachmentMeta[];
   hidden?: boolean;
   inputId: string; // used to keep track of things per input in redux
 }
@@ -54,6 +62,7 @@ const EDIT_ALLOWED_SLASH_COMMAND_SOURCES: SlashCommandSource[] = [
 
 function ContinueInputBox(props: ContinueInputBoxProps) {
   const isStreaming = useAppSelector((state) => state.session.isStreaming);
+  const ideMessenger = useContext(IdeMessengerContext);
   const availableSlashCommands = useAppSelector(
     selectSlashCommandComboBoxInputs,
   );
@@ -105,7 +114,7 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
     return {} as ToolbarOptions;
   }, [isInEdit, editModeState.applyState.status]);
 
-  const { appliedRules = [], contextItems = [] } = props;
+  const { appliedRules = [], contextItems = [], attachments = [] } = props;
 
   return (
     <div
@@ -135,6 +144,31 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
             inputId={props.inputId}
           />
         </GradientBorder>
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1 px-1 pb-1 pt-1">
+            {attachments.map((file, idx) => (
+              <button
+                key={`${file.path}-${idx}`}
+                type="button"
+                title={file.path}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  ideMessenger.post("openFile", { path: file.path });
+                }}
+                className="border-vsc-input-border bg-vsc-editor-background flex shrink-0 cursor-pointer flex-col items-center justify-center overflow-hidden rounded border transition-colors hover:brightness-125"
+                style={{ width: 28, height: 28 }}
+              >
+                <DocumentIcon className="text-vsc-foreground h-2.5 w-2.5" />
+                <span
+                  className="text-vsc-foreground mt-px block max-w-[90%] truncate text-center"
+                  style={{ fontSize: 6, lineHeight: 1 }}
+                >
+                  {file.name}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {(appliedRules.length > 0 || contextItems.length > 0) && (

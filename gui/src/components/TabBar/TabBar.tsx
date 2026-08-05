@@ -156,10 +156,15 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
   }, [currentSessionId, currentSessionTitle]);
 
   const handleNewTab = async () => {
-    // Save current session before creating new one
+    // 必须在 dispatch(newSession()) 之前发起 save：saveCurrentSession 内部第一行
+    // 同步读取 getState().session，newSession 后会读到空 history 而跳过保存。
+    // 用 void fire-and-forget：同步部分（getState、find、updateSessionMetadata）
+    // 微秒级完成，异步部分（IPC、LLM 标题生成）在后台执行不阻塞 UI。
     if (hasHistory) {
-      await dispatch(
-        saveCurrentSession({ openNewSession: false, generateTitle: true }),
+      void dispatch(
+        saveCurrentSession({
+          openNewSession: false,
+        }),
       );
     }
 
@@ -185,17 +190,20 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
     const targetTab = tabs.find((tab) => tab.id === id);
     if (!targetTab) return;
 
+    // 先切 UI（立即响应），save/load 在后台执行。
+    // 旧实现 await loadSession 阻塞 setActiveTab，目标 session 未命中 LRU
+    // 缓存时（如 new session tab）需等 IPC + compileChatForContextMetrics
+    // 完成才能看到 tab 切换，造成明显卡顿。
+    const shouldSave = hasHistory;
+    dispatch(setActiveTab(id));
     if (targetTab.sessionId) {
-      // Switch to existing session
-      await dispatch(
+      void dispatch(
         loadSession({
           sessionId: targetTab.sessionId,
-          saveCurrentSession: hasHistory,
+          saveCurrentSession: shouldSave,
         }),
       );
     }
-
-    dispatch(setActiveTab(id));
   };
 
   const handleTabClose = async (id: string) => {

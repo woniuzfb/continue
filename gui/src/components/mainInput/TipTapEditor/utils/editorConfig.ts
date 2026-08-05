@@ -5,6 +5,7 @@ import Image from "@tiptap/extension-image";
 import Paragraph from "@tiptap/extension-paragraph";
 import Placeholder from "@tiptap/extension-placeholder";
 import Text from "@tiptap/extension-text";
+import { DOMParser, DOMSerializer } from "@tiptap/pm/model";
 import { Plugin } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { useEditor } from "@tiptap/react";
@@ -74,6 +75,32 @@ export function hasValidEditorContent(json: JSONContent): boolean {
 }
 
 /**
+ * 将剪贴板纯文本解析为 ProseMirror Slice, 按单个换行分割, 空行创建空 <p>,
+ * 从而保留粘贴内容中的空行 (ProseMirror 默认 fallback 用 `+` 量符合并连续换行会丢空行)。
+ */
+export function parseClipboardText(
+  text: string,
+  $context: any,
+  view: any,
+): import("@tiptap/pm/model").Slice {
+  const { schema } = view.state;
+  const marks = $context.marks();
+  const serializer = DOMSerializer.fromSchema(schema);
+  const dom = document.createElement("div");
+  text.split(/\r\n|\r|\n/).forEach((block) => {
+    const p = dom.appendChild(document.createElement("p"));
+    if (block) {
+      p.appendChild(serializer.serializeNode(schema.text(block, marks)));
+    }
+  });
+  const parser = DOMParser.fromSchema(schema);
+  return parser.parseSlice(dom, {
+    preserveWhitespace: true,
+    context: $context,
+  });
+}
+
+/**
  * This function is called only once, so we need to use refs to pass in the latest values
  */
 export function createEditorConfig(options: {
@@ -96,6 +123,7 @@ export function createEditorConfig(options: {
   const inDropdownRef = useRef(false);
   const defaultModelRef = useUpdatingRef(defaultModel);
   const isStreamingRef = useUpdatingRef(isStreaming);
+  const hasAttachmentsRef = useUpdatingRef(props.hasAttachments);
   const getSubmenuContextItemsRef = useUpdatingRef(getSubmenuContextItems);
   const availableContextProvidersRef = useUpdatingRef(
     props.availableContextProviders,
@@ -382,6 +410,41 @@ export function createEditorConfig(options: {
         class: "ProseMirror outline-none overflow-hidden",
         style: `font-size: ${getFontSize()}px;`,
       },
+      // 统一复制/粘贴的换行约定: ProseMirror 默认用 `\n\n` 作段落分隔符, 而外部源
+      // (VS Code、浏览器) 用 `\n` 作换行。覆盖 clipboardTextSerializer 用 `\n` 分隔,
+      // 使 text/plain 格式与外部源一致, 从而 parseClipboardText 无需区分来源。
+      //   <p>A</p><p></p><p>B</p> → "A\n\nB" (1 空行, 与外部源一致)
+      clipboardTextSerializer: (slice) =>
+        slice.content.textBetween(0, slice.content.size, "\n"),
+      // 粘贴纯文本时保留空行: ProseMirror 默认 fallback 用 `text.split(/(?:\r\n?|\n)+/)`
+      // 合并连续换行, 导致空行丢失。这里按单个换行分割, 空行创建空 <p>, 其余沿用默认逻辑。
+      clipboardTextParser: (text, $context, _plain, view) =>
+        parseClipboardText(text, $context, view),
+      // 从 VS Code/浏览器等外部源复制时, 剪贴板同时含 text/plain 和 text/html, ProseMirror
+      // 默认走 HTML 解析分支, clipboardTextParser 不被调用, 空行丢失。这里在有纯文本且
+      // 无图片时接管粘贴, 强制走纯文本路径以保留空行。
+      // 由于 clipboardTextSerializer 已统一为 `\n` 分隔, 内部和外部源的 text/plain 格式
+      // 一致, 无需检测 data-pm-slice 标记。
+      handlePaste: (view, event) => {
+        const cd = event.clipboardData;
+        if (!cd) return false;
+        // 有图片文件时让 Image 扩展的 paste 插件处理
+        const items = Array.from(cd.items || []);
+        if (
+          items.some((i) => i.kind === "file" && i.type.startsWith("image/"))
+        ) {
+          return false;
+        }
+        const text = cd.getData("text/plain");
+        if (!text) return false;
+        const slice = parseClipboardText(
+          text,
+          view.state.selection.$from,
+          view,
+        );
+        view.dispatch(view.state.tr.replaceSelection(slice));
+        return true;
+      },
     },
     content: props.editorState,
     editable: !isStreaming || props.isMainInput,
@@ -397,8 +460,10 @@ export function createEditorConfig(options: {
 
     const json = editor.getJSON();
 
-    // Don't do anything if input box doesn't have valid content
-    if (!hasValidEditorContent(json)) {
+    // Don't do anything if input box doesn't have valid content.
+    // Pending attached files count as valid content so the user can send
+    // an attachments-only message without typing any text.
+    if (!hasValidEditorContent(json) && !hasAttachmentsRef.current) {
       return;
     }
 

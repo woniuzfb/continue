@@ -287,6 +287,25 @@ export interface Session {
   chatModelTitle?: string | null;
   /** Optional: cumulative usage and cost for all LLM API calls in this session */
   usage?: SessionUsage;
+  /**
+   * Optional: 当 history 仅部分加载（懒加载）时为 true。
+   * save 时若为 true，会先读取磁盘上的完整 history，
+   * 把当前 history 替换到尾部对应位置，保留未加载的头部。
+   */
+  historyTruncated?: boolean;
+  /** Optional: 已加载的 history 中最旧一条对应的全局 offset（头部未加载条数） */
+  historyLoadedOffset?: number;
+  /**
+   * Optional: 最近一次 LLM 调用后的 context 指标快照（不含编译后的消息数组）。
+   * 加载会话时直接读取，避免重新 compile（懒加载场景下尤为关键，
+   * 因为前端可能只有部分 history）。
+   */
+  contextMetrics?: {
+    didPrune: boolean;
+    contextPercentage: number;
+    inputTokens?: number;
+    contextLength?: number;
+  };
 }
 
 export interface BaseSessionMetadata {
@@ -876,6 +895,15 @@ export interface IDE {
 
   readFile(fileUri: string): Promise<string>;
 
+  showOpenDialog(options: {
+    selectFiles?: boolean;
+    selectFolders?: boolean;
+    canSelectMany?: boolean;
+    title?: string;
+    defaultUri?: string;
+    filters?: Record<string, string[]>;
+  }): Promise<string[]>;
+
   readRangeInFile(fileUri: string, range: Range): Promise<string>;
 
   showLines(fileUri: string, startLine: number, endLine: number): Promise<void>;
@@ -1453,6 +1481,12 @@ export interface ContinueUIConfig {
   codeWrap?: boolean;
   showSessionTabs?: boolean;
   continueAfterToolRejection?: boolean;
+  skipBaseSystemMessage?: boolean;
+  renderInlineLatex?: boolean;
+  disableModelAutoSwitch?: boolean;
+  lazyLoadHistory?: boolean;
+  lazyLoadHistoryInitialCount?: number;
+  lazyLoadHistoryPageSize?: number;
 }
 
 export interface ContextMenuConfig {
@@ -1672,6 +1706,28 @@ export interface ExperimentalConfig {
    * Automatically read LLM chat responses aloud using system TTS models
    */
   readResponseTTS?: boolean;
+
+  /**
+   * Specifies an MCP server and tool to use for text-to-speech instead of the system default.
+   * Requires readResponseTTS to be true.
+   * Example: { mcpId: "my-tts-server", toolName: "speak" }
+   */
+  readResponseTTSServer?: { mcpId: string; toolName: string };
+
+  /**
+   * Stream text to TTS as it arrives from the LLM, rather than waiting for the full response.
+   * This provides more natural real-time audio output.
+   * Requires readResponseTTS to be true.
+   */
+  readResponseTTSStream?: boolean;
+
+  /**
+   * If set to true, the model's thinking/reasoning content (e.g., chain-of-thought)
+   * will be excluded from TTS output. This prevents internal reasoning text
+   * from being read aloud when the model returns "thinking" chunks.
+   * Only applies when readResponseTTS is true.
+   */
+  readResponseTTSExcludeThinking?: boolean;
 
   /**
    * If set to true, we will attempt to pull down and install an instance of Chromium
@@ -1952,6 +2008,8 @@ export interface CompiledMessagesResult {
   compiledChatMessages: ChatMessage[];
   didPrune: boolean;
   contextPercentage: number;
+  inputTokens?: number;
+  contextLength?: number;
 }
 
 export interface AddToChatPayload {

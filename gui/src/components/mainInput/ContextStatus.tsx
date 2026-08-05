@@ -4,6 +4,15 @@ import { saveCurrentSession } from "../../redux/thunks/session";
 import { useCompactConversation } from "../../util/compactConversation";
 import { ToolTip } from "../gui/Tooltip";
 
+// 将 token 数格式化为紧凑形式：1234 -> 1.2K, 128000 -> 128K
+function formatTokens(tokens: number): string {
+  if (tokens >= 1000) {
+    const k = tokens / 1000;
+    return `${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}K`;
+  }
+  return String(tokens);
+}
+
 const ContextStatus = () => {
   const dispatch = useAppDispatch();
   const contextPercentage = useAppSelector(
@@ -17,6 +26,10 @@ const ContextStatus = () => {
   const history = useAppSelector((state) => state.session.history);
   const percent = Math.round((contextPercentage ?? 0) * 100);
   const isPruned = useAppSelector((state) => state.session.isPruned);
+  const contextInputTokens = useAppSelector(
+    (state) => state.session.contextInputTokens,
+  );
+  const contextLength = useAppSelector((state) => state.session.contextLength);
 
   const isDifferentModelAndSameHistory = useMemo(() => {
     if (!selectedChatModel) return false;
@@ -30,16 +43,26 @@ const ContextStatus = () => {
   }, [history.length, selectedChatModel]);
 
   const compactConversation = useCompactConversation();
-  if (!isPruned && percent < 60) {
-    return null;
-  }
 
   // if user changed to a different model, we shouldn't show the context status until the user sends a new message
   if (isDifferentModelAndSameHistory) {
     return null;
   }
 
-  const barColorClass = isPruned ? "bg-error" : "bg-description";
+  // 颜色随百分比分段：< 60% 灰；60-80% 黄；>= 80% 或已裁剪 红
+  let ringColorClass = "text-description";
+  if (isPruned || percent >= 80) {
+    ringColorClass = "text-error";
+  } else if (percent >= 60) {
+    ringColorClass = "text-warning";
+  }
+
+  // 进度环几何参数
+  const ringSize = 14;
+  const ringStroke = 2;
+  const ringRadius = (ringSize - ringStroke) / 2; // 6
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const ringDashOffset = ringCircumference * (1 - percent / 100);
 
   return (
     <div>
@@ -56,6 +79,14 @@ const ContextStatus = () => {
             <span className="inline-block">
               {`${percent}% of context filled.`}
             </span>
+            {contextInputTokens !== undefined &&
+              contextLength !== undefined && (
+                <span className="text-description inline-block">
+                  {`${formatTokens(contextInputTokens)} / ${formatTokens(
+                    contextLength,
+                  )} tokens`}
+                </span>
+              )}
             {isPruned && (
               <span className="inline-block">
                 {`Oldest messages are being removed.`}
@@ -77,7 +108,6 @@ const ContextStatus = () => {
                       void dispatch(
                         saveCurrentSession({
                           openNewSession: true,
-                          generateTitle: false,
                         }),
                       );
                     }}
@@ -90,12 +120,41 @@ const ContextStatus = () => {
           </div>
         }
       >
-        <div className="border-command-border relative h-[14px] w-[7px] rounded-[1px] border-[0.5px] border-solid md:h-[10px] md:w-[5px]">
-          <div
-            className={`transition-height absolute bottom-0 left-0 w-full duration-300 ease-in-out ${barColorClass}`}
-            style={{ height: `${percent}%` }}
+        <svg
+          width={ringSize}
+          height={ringSize}
+          viewBox={`0 0 ${ringSize} ${ringSize}`}
+          className={ringColorClass}
+          data-testid="context-status-ring"
+        >
+          {/* 背景圆环 */}
+          <circle
+            cx={ringSize / 2}
+            cy={ringSize / 2}
+            r={ringRadius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={ringStroke}
+            opacity={0.2}
           />
-        </div>
+          {/* 进度圆环（从顶部顺时针填充） */}
+          <circle
+            cx={ringSize / 2}
+            cy={ringSize / 2}
+            r={ringRadius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={ringStroke}
+            strokeLinecap="round"
+            strokeDasharray={ringCircumference}
+            strokeDashoffset={ringDashOffset}
+            style={{
+              transform: "rotate(-90deg)",
+              transformOrigin: "center",
+              transition: "stroke-dashoffset 0.3s ease-in-out",
+            }}
+          />
+        </svg>
       </ToolTip>
     </div>
   );

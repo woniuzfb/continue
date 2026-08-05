@@ -54,12 +54,24 @@ async function downloadSqlite(target, targetDir) {
 }
 
 async function installAndCopySqlite(target) {
+  // 检查是否已有匹配 target 的缓存 binary，避免每次打包都重新下载
+  const buildDir = "../../core/node_modules/sqlite3/build";
+  const nodeFile = `${buildDir}/Release/node_sqlite3.node`;
+  const targetMarker = `${buildDir}/.target-${target}`;
+  if (fs.existsSync(nodeFile) && fs.existsSync(targetMarker)) {
+    console.log(
+      `[info] sqlite3 binary already present for ${target}, skipping download`,
+    );
+    return;
+  }
   // Replace the installed with pre-built
   console.log("[info] Downloading pre-built sqlite3 binary");
-  rimrafSync("../../core/node_modules/sqlite3/build");
+  rimrafSync(buildDir);
   await downloadSqlite(target, "../../core/node_modules/sqlite3/build.tar.gz");
   execCmdSync("cd ../../core/node_modules/sqlite3 && tar -xvzf build.tar.gz");
   fs.unlinkSync("../../core/node_modules/sqlite3/build.tar.gz");
+  // 写入 target 标记，供下次缓存判断
+  fs.writeFileSync(targetMarker, target);
 }
 
 async function installAndCopyEsbuild(target) {

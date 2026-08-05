@@ -436,6 +436,7 @@ class OpenAI extends BaseLLM {
 
   protected modifyChatBody(
     body: ChatCompletionCreateParams,
+    completionOptions?: CompletionOptions,
   ): ChatCompletionCreateParams {
     body.stop = body.stop?.slice(0, this.getMaxStopWords());
 

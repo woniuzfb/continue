@@ -1,5 +1,6 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/server/.venv/bin/python3",
+  "python.defaultInterpreterPath": "${workspaceFolder}/server/.venv/bin/python",
+  "python.terminal.activateEnvironment": false,
   "rust-analyzer.linkedProjects": ["./server/Cargo.toml"],
   "python.analysis.extraPaths": [],
   "python.autoComplete.extraPaths": [],
@@ -55,5 +56,8 @@
   "conventionalCommits.promptBody": false,
   "conventionalCommits.promptFooter": false,
   "conventionalCommits.promptScopes": true,
-  "conventionalCommits.scopes": ["reg"]
+  "conventionalCommits.scopes": ["reg"],
+  "[markdown]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  }
 }

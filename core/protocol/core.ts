@@ -17,6 +17,7 @@ import { GlobalContextModelSelections } from "../util/GlobalContext";
 import {
   BaseSessionMetadata,
   BrowserSerializedContinueConfig,
+  ChatHistoryItem,
   ChatMessage,
   CompiledMessagesResult,
   CompleteOnboardingPayload,
@@ -60,6 +61,28 @@ export interface ListHistoryOptions {
   workspaceDirectory?: string;
 }
 
+export interface LoadPageHistoryRequest {
+  id: string;
+  // 从末尾算起的偏移：0 = 最新一轮，N = 跳过最新 N 条之后开始
+  offset: number;
+  // 要加载的条数
+  limit: number;
+}
+
+export interface LoadPageHistoryResponse {
+  items: ChatHistoryItem[];
+  hasMore: boolean;
+  total: number;
+  session: Pick<
+    Session,
+    | "title"
+    | "mode"
+    | "chatModelTitle"
+    | "workspaceDirectory"
+    | "contextMetrics"
+  >;
+}
+
 export type ToCoreFromIdeOrWebviewProtocol = {
   // Special
   ping: [string, string];
@@ -70,6 +93,7 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   "history/list": [ListHistoryOptions, BaseSessionMetadata[]];
   "history/delete": [{ id: string }, void];
   "history/load": [{ id: string }, Session];
+  "history/loadPage": [LoadPageHistoryRequest, LoadPageHistoryResponse];
   "history/save": [Session, void];
   "history/share": [{ id: string; outputDir?: string }, void];
   "history/clear": [undefined, void];

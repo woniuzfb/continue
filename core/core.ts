@@ -308,16 +308,24 @@ export class Core {
       return sessions.slice(0, limit);
     });
 
-    on("history/delete", (msg) => {
-      historyManager.delete(msg.data.id);
+    on("history/delete", async (msg) => {
+      // save/delete 现为异步（跨进程锁不再阻塞事件循环）。保持错误向上传播，
+      // 与旧同步实现一致：gui 侧 await request("history/delete") 会收到该错误。
+      await historyManager.delete(msg.data.id);
     });
 
     on("history/load", (msg) => {
       return historyManager.load(msg.data.id);
     });
 
-    on("history/save", (msg) => {
-      historyManager.save(msg.data);
+    on("history/loadPage", (msg) => {
+      const { id, offset, limit } = msg.data;
+      return historyManager.loadPage(id, offset, limit);
+    });
+
+    on("history/save", async (msg) => {
+      // 异步保存；错误向上传播（gui 侧 await request("history/save")）。
+      await historyManager.save(msg.data);
     });
 
     on("history/share", async (msg) => {
@@ -628,16 +636,16 @@ export class Core {
       }
 
       try {
-        await compactConversation({
+        const result = await compactConversation({
           sessionId: msg.data.sessionId,
           index: msg.data.index,
           historyManager,
           currentModel,
         });
-        return undefined;
+        return result;
       } catch (error) {
         Logger.error(`Error compacting conversation: ${error}`);
-        return undefined;
+        throw error;
       }
     });
 

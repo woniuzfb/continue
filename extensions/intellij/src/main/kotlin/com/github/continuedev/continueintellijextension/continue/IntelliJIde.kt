@@ -27,6 +27,9 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.openapi.fileChooser.FileChooser
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.testFramework.LightVirtualFile
@@ -347,6 +350,30 @@ class IntelliJIDE(
 
     override suspend fun readFile(filepath: String): String =
         fileUtils.readFile(filepath)
+
+    override suspend fun showOpenDialog(params: ShowOpenDialogParams): List<String> =
+        withContext(Dispatchers.EDT) {
+            val descriptor = FileChooserDescriptorFactory
+                .createAllFilesDescriptor()
+                .withFileFilter { vFile ->
+                    // When folder selection is requested, only allow directories
+                    if (params.selectFolders == true && params.selectFiles != true) {
+                        vFile.isDirectory
+                    } else {
+                        true
+                    }
+                }
+                .apply {
+                    isChooseFiles = params.selectFiles ?: true
+                    isChooseFolders = params.selectFolders ?: false
+                    isMultipleSelection = params.canSelectMany ?: false
+                    title = params.title
+                }
+
+            val initial = params.defaultUri?.let { VirtualFileManager.getInstance().findFileByUrl(it) }
+            val chosen = FileChooser.chooseFiles(descriptor, project, initial)
+            chosen.mapNotNull { it.toUriOrNull() }
+        }
 
     override suspend fun readRangeInFile(filepath: String, range: Range): String {
         val fullContents = readFile(filepath)

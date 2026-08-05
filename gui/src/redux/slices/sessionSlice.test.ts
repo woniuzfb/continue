@@ -133,6 +133,59 @@ describe("sessionSlice streamUpdate", () => {
       );
       expect(newState.history[1].message.id).toBe("mock-uuid-1");
     });
+
+    it("should create separate thinking item when reasoning_content arrives", () => {
+      // Simulates the user's scenario: server sends
+      //   {"delta": {"role": "assistant", "reasoning_content": "..."}}
+      // which fromChatCompletionChunk converts to {role:"thinking", content:"..."}.
+      // Initial state mirrors what submitEditorAndInitAtIndex creates:
+      //   [user_msg, empty assistant placeholder]
+      const initialState = createInitialState();
+      initialState.history.push({
+        message: {
+          role: "assistant" as const,
+          content: "",
+          id: "assistant-placeholder",
+        },
+        contextItems: [],
+      });
+
+      const thinkingAction = {
+        type: "session/streamUpdate",
+        payload: [
+          {
+            role: "thinking" as const,
+            content: "思考中…",
+          },
+        ],
+      };
+      let newState = sessionSlice.reducer(initialState, thinkingAction);
+
+      // History should now be: [user, assistant_placeholder, thinking]
+      expect(newState.history).toHaveLength(3);
+      const thinkingItem = newState.history[2];
+      expect(thinkingItem.message.role).toBe("thinking");
+      // Thinking content should be stored on message.content (read by Chat.tsx
+      // via renderChatMessage when rendering the ThinkingBlockPeek).
+      expect(thinkingItem.message.content).toBe("思考中…");
+
+      // Now stream an assistant content chunk - should create a 4th item
+      const answerAction = {
+        type: "session/streamUpdate",
+        payload: [
+          {
+            role: "assistant" as const,
+            content: "你",
+          },
+        ],
+      };
+      newState = sessionSlice.reducer(newState, answerAction);
+      expect(newState.history).toHaveLength(4);
+      expect(newState.history[3].message.role).toBe("assistant");
+      expect(newState.history[3].message.content).toBe("你");
+      // Thinking item content should be preserved
+      expect(newState.history[2].message.content).toBe("思考中…");
+    });
   });
 
   describe("Tool Call With Response", () => {

@@ -143,68 +143,108 @@ async function gatherContextItems({
     },
     [],
   );
-  let contextItems: ContextItemWithId[] = [];
+  const contextItems: ContextItemWithId[] = [];
 
   const isInAgentMode = getState().session.mode === "agent";
 
-  // Process context item attributes
-  for (const item of deduplicatedInputs) {
-    const result = await ideMessenger.request("context/getContextItems", {
-      name: item.provider,
-      query: item.query ?? "",
-      fullInput: stripImages(parts),
-      selectedCode,
-      isInAgentMode,
-    });
-    if (result.status === "success") {
-      contextItems.push(...result.content);
-    }
-  }
+  // Build all context requests in parallel to minimize first-token latency
+  // (previously each provider was fetched sequentially, 3+ IPC round-trips).
+  // IMPORTANT: results are collected into per-source buckets and only assembled
+  // AFTER every request settles, so the final ordering is deterministic and no
+  // longer depends on which IPC response happens to arrive first. This
+  // preserves the original sequential ordering: currentFile first (matching the
+  // previous `unshift`), then @-mentions in input order, then codebase.
+  const parallelRequests: Promise<void>[] = [];
 
-  // cmd+enter to use codebase
+  // 1. @-mentioned context providers — run in parallel, but keep input order by
+  //    writing each provider's results into its own fixed slot.
+  const mentionResults: ContextItemWithId[][] = new Array(
+    deduplicatedInputs.length,
+  );
+  deduplicatedInputs.forEach((item, mentionIdx) => {
+    parallelRequests.push(
+      (async () => {
+        const result = await ideMessenger.request("context/getContextItems", {
+          name: item.provider,
+          query: item.query ?? "",
+          fullInput: stripImages(parts),
+          selectedCode,
+          isInAgentMode,
+        });
+        mentionResults[mentionIdx] =
+          result.status === "success" ? result.content : [];
+      })(),
+    );
+  });
+
+  // 2. Codebase context (cmd+enter) — in parallel with other requests
+  let codebaseResults: ContextItemWithId[] = [];
   if (
     modifiers.useCodebase &&
     !deduplicatedInputs.some((item) => item.provider === "codebase")
   ) {
-    const result = await ideMessenger.request("context/getContextItems", {
-      name: "codebase",
-      query: "",
-      fullInput: stripImages(parts),
-      selectedCode,
-      isInAgentMode,
-    });
-
-    if (result.status === "success") {
-      contextItems.push(...result.content);
-    }
+    parallelRequests.push(
+      (async () => {
+        const result = await ideMessenger.request("context/getContextItems", {
+          name: "codebase",
+          query: "",
+          fullInput: stripImages(parts),
+          selectedCode,
+          isInAgentMode,
+        });
+        if (result.status === "success") {
+          codebaseResults = result.content;
+        }
+      })(),
+    );
   }
 
-  // noContext modifier adds currently open file if it's not already present
+  // 3. Current file (unless suppressed) — in parallel with other requests
+  let currentFileItem: ContextItemWithId | undefined;
   if (
     !modifiers.noContext &&
     !deduplicatedInputs.some((item) => item.provider === "currentFile")
   ) {
-    const currentFileResponse = await ideMessenger.request(
-      "context/getContextItems",
-      {
-        name: "currentFile",
-        query: "non-mention-usage",
-        fullInput: "",
-        selectedCode: [],
-        isInAgentMode,
-      },
+    parallelRequests.push(
+      (async () => {
+        const currentFileResponse = await ideMessenger.request(
+          "context/getContextItems",
+          {
+            name: "currentFile",
+            query: "non-mention-usage",
+            fullInput: "",
+            selectedCode: [],
+            isInAgentMode,
+          },
+        );
+        if (currentFileResponse.status === "success") {
+          const currentFile = currentFileResponse.content[0];
+          if (currentFile?.uri?.value) {
+            currentFile.id = {
+              providerTitle: "file",
+              itemId: currentFile.uri.value,
+            };
+            currentFileItem = currentFile;
+          }
+        }
+      })(),
     );
-    if (currentFileResponse.status === "success") {
-      const currentFile = currentFileResponse.content[0];
-      if (currentFile?.uri?.value) {
-        currentFile.id = {
-          providerTitle: "file",
-          itemId: currentFile.uri.value,
-        };
-        contextItems.unshift(currentFile);
-      }
+  }
+
+  // Wait for ALL context requests to complete in parallel
+  await Promise.all(parallelRequests);
+
+  // Assemble deterministically regardless of settle order:
+  // currentFile first, then @-mentions (input order), then codebase.
+  if (currentFileItem) {
+    contextItems.push(currentFileItem);
+  }
+  for (const bucket of mentionResults) {
+    if (bucket) {
+      contextItems.push(...bucket);
     }
   }
+  contextItems.push(...codebaseResults);
 
   // Deduplicates based on either providerTitle + itemId or uri type + value
   const deduplicatedOutputs = contextItems.reduce<ContextItemWithId[]>(

@@ -6,6 +6,8 @@
     serif;
   line-height: 1.2;
   text-indent: 0;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .katex * {
   -ms-high-contrast-adjust: none !important;
@@ -864,6 +866,8 @@
   display: block;
   margin: 1em 0;
   text-align: center;
+  max-width: 100%;
+  overflow-x: auto;
 }
 .katex-display > .katex {
   display: block;

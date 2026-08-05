@@ -220,3 +220,26 @@ export async function llmsFromModelConfig({
     return [baseLlm];
   }
 }
+
+/**
+ * Deduplicate models by model name. Explicitly configured models
+ * (isFromAutoDetect !== true) take priority over autodetected ones.
+ * If both are same type, the first encountered is kept.
+ */
+export function deduplicateModels<
+  T extends { model: string; isFromAutoDetect?: boolean },
+>(models: T[]): T[] {
+  const seen = new Map<string, T>();
+  for (const m of models) {
+    const key = m.model;
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, m);
+    } else if (!m.isFromAutoDetect && existing.isFromAutoDetect) {
+      // Explicit config wins over autodetected
+      seen.set(key, m);
+    }
+    // If both are explicit or both are autodetected, keep the first one
+  }
+  return Array.from(seen.values());
+}

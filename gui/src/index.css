@@ -24,6 +24,7 @@ html,
 body,
 #root {
   height: 100%;
+  max-width: 100%;
   line-height: 1.3;
   background-color: var(--vscode-editor-background);
   font-family:
@@ -43,9 +44,10 @@ body,
 body {
   padding: 0;
   color: var(--vscode-editor-foreground);
-  padding: 0px;
   margin: 0px;
   height: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 /* To override the default `-webkit-focus-ring-color` that is an ugly orange */

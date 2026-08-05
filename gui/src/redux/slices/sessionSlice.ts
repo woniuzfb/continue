@@ -200,6 +200,81 @@ export type ChatHistoryItemWithMessageId = ChatHistoryItem & {
   message: ChatMessage & { id: string };
 };
 
+/**
+ * context 指标快照（用于持久化到 session 文件 / LRU 缓存）。
+ * 不含 compiledChatMessages，避免 session 文件体积膨胀和重复持久化文件内容。
+ */
+export type ContextMetricsSnapshot = {
+  didPrune: boolean;
+  contextPercentage: number;
+  inputTokens?: number;
+  contextLength?: number;
+};
+
+// ── Session LRU cache ──────────────────────────────────────────────
+// When switching tabs, the in-memory session state (including lazily-loaded
+// full history) would be lost. This cache preserves the state so switching
+// back restores it without re-reading from disk.
+const MAX_CACHED_SESSIONS = 5;
+
+export type CachedSession = {
+  sessionId: string;
+  title: string;
+  history: ChatHistoryItemWithMessageId[];
+  mode: MessageModes;
+  chatModelTitle?: string | null;
+  hasReasoningEnabled?: boolean;
+  // Lazy-load pagination state
+  historyTruncated?: boolean;
+  historyLoadedOffset?: number;
+  historyTotalCount?: number;
+  hasMoreHistory?: boolean;
+  // Context metrics
+  isPruned?: boolean;
+  contextPercentage?: number;
+  contextInputTokens?: number;
+  contextLength?: number;
+  // 最近一次 LLM 调用后的 context 指标快照（用于持久化/缓存恢复）
+  contextMetrics?: ContextMetricsSnapshot;
+  // Draft & symbols
+  mainEditorDraft?: JSONContent | undefined;
+  symbols: FileSymbolMap;
+};
+
+const sessionCacheMap = new Map<string, CachedSession>();
+
+/** Read a cached session (LRU: marks as most-recently-used). */
+export function getCachedSession(sessionId: string): CachedSession | undefined {
+  const cached = sessionCacheMap.get(sessionId);
+  if (cached) {
+    // Move to end (most recently used)
+    sessionCacheMap.delete(sessionId);
+    sessionCacheMap.set(sessionId, cached);
+  }
+  return cached;
+}
+
+/** Store a session in the cache, evicting the oldest if at capacity. */
+export function setCachedSession(
+  sessionId: string,
+  session: CachedSession,
+): void {
+  if (sessionCacheMap.has(sessionId)) {
+    sessionCacheMap.delete(sessionId);
+  } else if (sessionCacheMap.size >= MAX_CACHED_SESSIONS) {
+    const oldestKey = sessionCacheMap.keys().next().value;
+    if (oldestKey) {
+      sessionCacheMap.delete(oldestKey);
+    }
+  }
+  sessionCacheMap.set(sessionId, session);
+}
+
+/** Remove a session from the cache (e.g. when deleted). */
+export function deleteCachedSession(sessionId: string): void {
+  sessionCacheMap.delete(sessionId);
+}
+
 type SessionState = {
   lastSessionId?: string;
   isSessionMetadataLoading: boolean;
@@ -210,6 +285,10 @@ type SessionState = {
   id: string;
   streamAborter: AbortController;
   mainEditorContentTrigger?: JSONContent | undefined;
+  // Draft content of the main input editor, preserved across route changes
+  // (e.g. navigating to /history or /config and back) so the user's in-progress
+  // input is not lost when the Chat route unmounts.
+  mainEditorDraft?: JSONContent | undefined;
   symbols: FileSymbolMap;
   mode: MessageModes;
   isInEdit: boolean;
@@ -221,8 +300,19 @@ type SessionState = {
   hasReasoningEnabled?: boolean;
   isPruned?: boolean;
   contextPercentage?: number;
+  contextInputTokens?: number;
+  contextLength?: number;
+  // 最近一次 LLM 调用后的 context 指标快照；与 contextPercentage 等字段冗余存储，
+  // 用于 saveCurrentSession 持久化到 session 文件，加载时直接还原。
+  contextMetrics?: ContextMetricsSnapshot;
   inlineErrorMessage?: InlineErrorMessageType;
   compactionLoading: Record<number, boolean>; // Track compaction loading by message index
+  // 懒加载分页状态
+  historyTruncated?: boolean; // 当前 history 是否仅部分加载
+  historyLoadedOffset?: number; // 头部未加载条数（全局）
+  historyTotalCount?: number; // 磁盘上完整 history 总条数
+  hasMoreHistory?: boolean; // 是否还有更早的消息可加载
+  isHistoryLoading?: boolean; // 是否正在加载更多历史
 };
 
 export const INITIAL_SESSION_STATE: SessionState = {
@@ -335,6 +425,13 @@ export const sessionSlice = createSlice({
     ) => {
       state.mainEditorContentTrigger = action.payload;
     },
+    // Persist/restore the main input draft across route changes
+    setMainEditorDraft: (
+      state,
+      action: PayloadAction<JSONContent | undefined>,
+    ) => {
+      state.mainEditorDraft = action.payload;
+    },
     updateFileSymbols: (state, action: PayloadAction<FileSymbolMap>) => {
       state.symbols = {
         ...state.symbols,
@@ -434,6 +531,8 @@ export const sessionSlice = createSlice({
         state.inlineErrorMessage = undefined;
         state.isPruned = false;
         state.contextPercentage = undefined;
+        // 历史被截断后，旧 context 指标已 stale
+        state.contextMetrics = undefined;
       }
     },
     deleteMessage: (state, action: PayloadAction<number>) => {
@@ -442,6 +541,10 @@ export const sessionSlice = createSlice({
       state.inlineErrorMessage = undefined;
       state.isPruned = false;
       state.contextPercentage = undefined;
+      state.contextInputTokens = undefined;
+      state.contextLength = undefined;
+      // 历史被删除后，旧 context 指标已 stale
+      state.contextMetrics = undefined;
     },
     deleteCompaction: (state, action: PayloadAction<number>) => {
       // Removes the conversation summary from the specified message
@@ -474,6 +577,8 @@ export const sessionSlice = createSlice({
         ...state.history[index],
         ...updates,
       };
+      // 历史被编辑/重试后，旧 context 指标已 stale
+      state.contextMetrics = undefined;
     },
     addContextItemsAtIndex: (
       state,
@@ -524,6 +629,27 @@ export const sessionSlice = createSlice({
     streamUpdate: (state, action: PayloadAction<ChatMessage[]>) => {
       if (state.history.length) {
         for (const message of action.payload) {
+          // Handle metadata-only messages (yielded by BaseLLM.streamChat when
+          // the backend compiles non-precompiled messages). These carry context
+          // pruning info so the frontend doesn't need a separate compile request.
+          if (
+            message.role === "assistant" &&
+            message.content === "" &&
+            "metadata" in message &&
+            message.metadata &&
+            ("didPrune" in message.metadata ||
+              "contextPercentage" in message.metadata)
+          ) {
+            state.isPruned = !!(message.metadata as any).didPrune;
+            state.contextPercentage =
+              (message.metadata as any).contextPercentage ?? 0;
+            state.contextInputTokens = (
+              message.metadata as any
+            ).contextInputTokens;
+            state.contextLength = (message.metadata as any).contextLength;
+            continue;
+          }
+
           let lastItem = state.history[state.history.length - 1];
           let lastMessage = lastItem.message;
 
@@ -695,6 +821,15 @@ export const sessionSlice = createSlice({
       state.inlineErrorMessage = undefined;
       state.isPruned = false;
       state.contextPercentage = undefined;
+      state.contextInputTokens = undefined;
+      state.contextLength = undefined;
+      state.contextMetrics = undefined;
+      // 重置懒加载分页状态
+      state.historyTruncated = false;
+      state.historyLoadedOffset = 0;
+      state.historyTotalCount = undefined;
+      state.hasMoreHistory = false;
+      state.isHistoryLoading = false;
 
       if (payload) {
         state.history = payload.history as any;
@@ -703,11 +838,133 @@ export const sessionSlice = createSlice({
         if (payload.mode) {
           state.mode = payload.mode;
         }
+        // 从 payload 继承分页元数据（loadSession 传入）
+        if (payload.historyTruncated) {
+          state.historyTruncated = true;
+          state.historyLoadedOffset = payload.historyLoadedOffset ?? 0;
+        }
+        // 从 payload 恢复 context 指标快照（loadSession 传入）
+        if (payload.contextMetrics) {
+          state.contextMetrics = payload.contextMetrics;
+          state.isPruned = payload.contextMetrics.didPrune;
+          state.contextPercentage = payload.contextMetrics.contextPercentage;
+          state.contextInputTokens = payload.contextMetrics.inputTokens;
+          state.contextLength = payload.contextMetrics.contextLength;
+        }
       } else {
         state.history = [];
         state.title = NEW_SESSION_TITLE;
         state.id = uuidv4();
       }
+    },
+    /**
+     * 从 LRU 缓存恢复一个 session 的完整内存状态。
+     * 与 newSession 不同，这里恢复所有缓存的字段（context 指标、
+     * 分页状态、symbols、draft 等），避免切换 tab 后丢失。
+     */
+    restoreCachedSession: (
+      state,
+      { payload }: PayloadAction<CachedSession>,
+    ) => {
+      state.lastSessionId = state.id;
+
+      state.streamAborter.abort();
+      state.streamAborter = new AbortController();
+
+      state.isStreaming = false;
+      state.inlineErrorMessage = undefined;
+      state.compactionLoading = {};
+      state.codeBlockApplyStates = { states: [], curIndex: 0 };
+      state.newestToolbarPreviewForInput = {};
+
+      // 恢复缓存的字段
+      state.id = payload.sessionId;
+      state.title = payload.title;
+      state.history = payload.history;
+      state.mode = payload.mode;
+      state.symbols = payload.symbols || {};
+      state.hasReasoningEnabled = payload.hasReasoningEnabled;
+      // 懒加载分页状态
+      state.historyTruncated = payload.historyTruncated;
+      state.historyLoadedOffset = payload.historyLoadedOffset;
+      state.historyTotalCount = payload.historyTotalCount;
+      state.hasMoreHistory = payload.hasMoreHistory;
+      state.isHistoryLoading = false;
+      // Context 指标
+      state.isPruned = payload.isPruned;
+      state.contextPercentage = payload.contextPercentage;
+      state.contextInputTokens = payload.contextInputTokens;
+      state.contextLength = payload.contextLength;
+      state.contextMetrics = payload.contextMetrics;
+      // Draft
+      state.mainEditorDraft = payload.mainEditorDraft;
+    },
+    /**
+     * 在 history 头部 prepend 更早的消息（懒加载上滑时调用）。
+     * 同时更新分页游标和 hasMore 标记。
+     *
+     * 竞态保护：如果 loadMoreHistory 的 IPC 往返期间 history 已被完整加载
+     * （如用户在此期间发送消息触发 loadFullHistory），跳过 prepend，
+     * 避免在已完整的 history 头部插入重复条目。
+     */
+    prependHistoryItems: (
+      state,
+      {
+        payload,
+      }: PayloadAction<{
+        items: ChatHistoryItemWithMessageId[];
+        hasMore: boolean;
+        newLoadedOffset: number;
+        totalCount: number;
+      }>,
+    ) => {
+      // history 已完整加载（loadFullHistory 在 IPC 往返期间抢先完成），
+      // 跳过 prepend 避免重复条目
+      if (!state.historyTruncated) {
+        state.isHistoryLoading = false;
+        return;
+      }
+      state.history = [...payload.items, ...state.history];
+      state.historyLoadedOffset = payload.newLoadedOffset;
+      state.hasMoreHistory = payload.hasMore;
+      state.historyTotalCount = payload.totalCount;
+      state.historyTruncated = payload.hasMore;
+      state.isHistoryLoading = false;
+    },
+    setIsHistoryLoading: (state, { payload }: PayloadAction<boolean>) => {
+      state.isHistoryLoading = payload;
+    },
+    /**
+     * 初始化分页元数据（loadSession 在懒加载模式下 dispatch）。
+     */
+    setHistoryPagination: (
+      state,
+      { payload }: PayloadAction<{ hasMore: boolean; totalCount: number }>,
+    ) => {
+      state.hasMoreHistory = payload.hasMore;
+      state.historyTotalCount = payload.totalCount;
+    },
+    /**
+     * 当 history 全量加载完成（无更多分页）时，清除 truncated 标记。
+     */
+    markHistoryFullyLoaded: (state) => {
+      state.historyTruncated = false;
+      state.hasMoreHistory = false;
+      state.historyLoadedOffset = 0;
+    },
+    /**
+     * 发送新消息前加载完整 history（loadFullHistory thunk 调用）。
+     * 直接替换 state.history 并清除所有分页标记。
+     */
+    setFullHistory: (
+      state,
+      { payload }: PayloadAction<ChatHistoryItemWithMessageId[]>,
+    ) => {
+      state.history = payload;
+      state.historyTruncated = false;
+      state.hasMoreHistory = false;
+      state.historyLoadedOffset = 0;
+      state.isHistoryLoading = false;
     },
     updateSessionTitle: (state, { payload }: PayloadAction<string>) => {
       state.title = payload;
@@ -1001,6 +1258,31 @@ export const sessionSlice = createSlice({
     setContextPercentage: (state, action: PayloadAction<number>) => {
       state.contextPercentage = action.payload;
     },
+    setContextInputTokens: (state, action: PayloadAction<number>) => {
+      state.contextInputTokens = action.payload;
+    },
+    setContextLength: (state, action: PayloadAction<number>) => {
+      state.contextLength = action.payload;
+    },
+    /**
+     * 保存最近一次 LLM 调用后的 context 指标快照（不含 compiledChatMessages）。
+     * streamNormalInput 拿到 compileChat 结果后 dispatch，
+     * saveCurrentSession 会把它持久化到 session 文件。
+     */
+    setContextMetrics: (
+      state,
+      action: PayloadAction<ContextMetricsSnapshot>,
+    ) => {
+      state.contextMetrics = action.payload;
+    },
+    /**
+     * 清除 context 指标快照（标记为 stale）。
+     * 切换 model / 修改 rules / tools / 编辑历史消息时调用，
+     * 下次发送消息后会重新计算并覆盖。
+     */
+    clearContextMetrics: (state) => {
+      state.contextMetrics = undefined;
+    },
   },
   selectors: {
     selectIsGatheringContext: (state) => {
@@ -1064,6 +1346,7 @@ export const {
   updateHistoryItemAtIndex,
   clearDanglingMessages,
   setMainEditorContentTrigger,
+  setMainEditorDraft,
   deleteMessage,
   deleteCompaction,
   setIsGatheringContext,
@@ -1089,7 +1372,17 @@ export const {
   setInlineErrorMessage,
   setIsPruned,
   setContextPercentage,
+  setContextInputTokens,
+  setContextLength,
+  setContextMetrics,
+  clearContextMetrics,
   setCompactionLoading,
+  prependHistoryItems,
+  setIsHistoryLoading,
+  setHistoryPagination,
+  markHistoryFullyLoaded,
+  setFullHistory,
+  restoreCachedSession,
 } = sessionSlice.actions;
 
 export const { selectIsGatheringContext } = sessionSlice.selectors;

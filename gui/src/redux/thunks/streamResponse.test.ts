@@ -232,6 +232,13 @@ describe("streamResponseThunk", () => {
         payload: 0.8,
       },
       {
+        type: "session/setContextMetrics",
+        payload: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.8,
+        }),
+      },
+      {
         type: "symbols/updateFromContextItems/fulfilled",
         meta: expect.objectContaining({
           arg: [],
@@ -283,7 +290,7 @@ describe("streamResponseThunk", () => {
       {
         type: "session/saveCurrent/pending",
         meta: expect.objectContaining({
-          arg: { generateTitle: true, openNewSession: false },
+          arg: { openNewSession: false },
           requestStatus: "pending",
         }),
         payload: undefined,
@@ -334,7 +341,7 @@ describe("streamResponseThunk", () => {
       {
         type: "session/saveCurrent/fulfilled",
         meta: expect.objectContaining({
-          arg: { generateTitle: true, openNewSession: false },
+          arg: { openNewSession: false },
           requestStatus: "fulfilled",
         }),
         payload: undefined,
@@ -430,6 +437,10 @@ describe("streamResponseThunk", () => {
         isPruned: false,
         inlineErrorMessage: undefined,
         contextPercentage: 0.8,
+        contextMetrics: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.8,
+        }),
         history: [
           {
             contextItems: [],
@@ -601,6 +612,7 @@ describe("streamResponseThunk", () => {
       "session/setInlineErrorMessage",
       "session/setIsPruned",
       "session/setContextPercentage",
+      "session/setContextMetrics",
       "symbols/updateFromContextItems/fulfilled",
       "session/streamUpdate",
       "session/streamUpdate",
@@ -620,6 +632,7 @@ describe("streamResponseThunk", () => {
       "session/setInlineErrorMessage",
       "session/setIsPruned",
       "session/setContextPercentage",
+      "session/setContextMetrics",
       "session/streamUpdate",
       "session/addPromptCompletionPair",
       "session/setInactive",
@@ -867,6 +880,10 @@ describe("streamResponseThunk", () => {
         id: "session-123",
         streamAborter: expect.any(AbortController),
         contextPercentage: 0.9,
+        contextMetrics: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.9,
+        }),
         isPruned: false,
         inlineErrorMessage: undefined,
       },
@@ -1033,6 +1050,13 @@ describe("streamResponseThunk", () => {
         payload: 0.8,
       },
       {
+        type: "session/setContextMetrics",
+        payload: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.8,
+        }),
+      },
+      {
         type: "symbols/updateFromContextItems/fulfilled",
         meta: {
           arg: [],
@@ -1074,7 +1098,6 @@ describe("streamResponseThunk", () => {
         type: "session/saveCurrent/pending",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -1147,7 +1170,6 @@ describe("streamResponseThunk", () => {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -1264,6 +1286,10 @@ describe("streamResponseThunk", () => {
         id: "session-123",
         streamAborter: expect.any(AbortController), // New controller after abort
         contextPercentage: 0.8,
+        contextMetrics: expect.objectContaining({
+          didPrune: false,
+          contextPercentage: 0.8,
+        }),
         inlineErrorMessage: undefined,
         isPruned: false,
         title: "Session summary",

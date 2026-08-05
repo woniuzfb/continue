@@ -39,6 +39,7 @@ import { renderChatMessage } from "../util/messageContent.js";
 import { isOllamaInstalled } from "../util/ollamaHelper.js";
 import { withExponentialBackoff } from "../util/withExponentialBackoff.js";
 
+import { applyToolOverrides } from "../tools/applyToolOverrides.js";
 import {
   autodetectPromptTemplates,
   autodetectTemplateFunction,
@@ -66,7 +67,6 @@ import {
   toCompleteBody,
   toFimBody,
 } from "./openaiTypeConverters.js";
-import { applyToolOverrides } from "../tools/applyToolOverrides.js";
 
 export class LLMError extends Error {
   constructor(
@@ -543,11 +543,11 @@ export abstract class BaseLLM implements ILLM {
 
   private _formatChatMessages(messages: ChatMessage[]): string {
     const msgsCopy = messages ? messages.map((msg) => ({ ...msg })) : [];
-    let formatted = "";
-    for (const msg of msgsCopy) {
-      formatted += this._formatChatMessage(msg);
+    const parts: string[] = new Array(msgsCopy.length);
+    for (let i = 0; i < msgsCopy.length; i++) {
+      parts[i] = this._formatChatMessage(msgsCopy[i]);
     }
-    return formatted;
+    return parts.join("");
   }
 
   private _formatChatMessage(msg: ChatMessage): string {
@@ -965,6 +965,7 @@ export abstract class BaseLLM implements ILLM {
 
   protected modifyChatBody(
     body: ChatCompletionCreateParams,
+    completionOptions?: CompletionOptions,
   ): ChatCompletionCreateParams {
     return body;
   }
@@ -1192,7 +1193,7 @@ export abstract class BaseLLM implements ILLM {
             includeReasoningDetailsField: this.supportsReasoningDetailsField,
             includeReasoningContentField: this.supportsReasoningContentField,
           });
-          body = this.modifyChatBody(body);
+          body = this.modifyChatBody(body, completionOptions);
 
           if (logEnabled) {
             interaction?.logItem({

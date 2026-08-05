@@ -21,7 +21,14 @@ export async function compactConversation({
   index,
   historyManager,
   currentModel,
-}: CompactionParams): Promise<void> {
+}: CompactionParams): Promise<string> {
+  // 守卫：不允许 compact 首轮对话（index=0）。
+  // 服务端依据历史上下文的首轮对话来持久对话，compact 会修改该位置
+  // 的消息（写入 conversationSummary），破坏首轮对话的原始内容。
+  if (index === 0) {
+    throw new Error("compactConversation: 不允许 compact 首轮对话（index=0）");
+  }
+
   // Get the current session
   const session = historyManager.load(sessionId);
   const historyUpToIndex = session.history.slice(0, index + 1);
@@ -108,5 +115,8 @@ export async function compactConversation({
     history: updatedHistory,
   };
 
-  historyManager.save(updatedSession);
+  await historyManager.save(updatedSession);
+
+  // 返回 summary 给前端，前端直接更新 state 而不 reload
+  return stripImages(response.content);
 }

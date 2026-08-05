@@ -2,7 +2,7 @@
   "name": "continue",
   "icon": "media/icon.png",
   "author": "Continue Dev, Inc",
-  "version": "1.3.40",
+  "version": "2.1.3",
   "repository": {
     "type": "git",
     "url": "https://github.com/continuedev/continue"
@@ -327,12 +327,6 @@
         "command": "continue.docsReIndex",
         "category": "Continue",
         "title": "Docs Force Re-Index",
-        "group": "Continue"
-      },
-      {
-        "command": "continue.focusContinueInput",
-        "category": "Continue",
-        "title": "Focus Continue Chat",
         "group": "Continue"
       },
       {
@@ -665,6 +659,7 @@
     "package": "node scripts/package.js",
     "package-all": "node scripts/package-all.js",
     "package:pre-release": "node scripts/package.js --pre-release",
+    "package:full": "cd ../../gui && npm run build && cd ../core && npm run build && cd ../extensions/vscode && npm run package",
     "build:rust": "cargo-cp-artifact -ac sync sync.node -- cargo build --manifest-path ../../sync/Cargo.toml --message-format=json-render-diagnostics",
     "build-debug:rust": "npm run build:rust --",
     "build-release:rust": "npm run build:rust -- --release",

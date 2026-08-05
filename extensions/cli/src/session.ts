@@ -116,13 +116,13 @@ class SessionManager {
   updateHistory(history: ChatHistoryItem[]): void {
     const session = this.getCurrentSession();
     session.history = history;
-    saveSession();
+    void saveSession();
   }
 
   updateTitle(title: string): void {
     const session = this.getCurrentSession();
     session.title = title;
-    saveSession();
+    void saveSession();
   }
 
   clear(): void {
@@ -174,7 +174,7 @@ class SessionManager {
     // Update session and persist
     const session = this.getCurrentSession();
     session.usage = { ...this.sessionUsage };
-    saveSession(); // Persist immediately
+    void saveSession(); // Persist immediately
   }
 
   getTotalCost(): number {
@@ -276,7 +276,7 @@ function hasSessionContent(session: Session): boolean {
 /**
  * Save the current session to file
  */
-export function saveSession(): void {
+export async function saveSession(): Promise<void> {
   try {
     const manager = SessionManager.getInstance();
     if (!manager.hasSession()) {
@@ -289,7 +289,7 @@ export function saveSession(): void {
     }
 
     const sessionToSave = getSessionPersistenceSnapshot(session);
-    historyManager.save(sessionToSave);
+    await historyManager.save(sessionToSave);
   } catch (error) {
     logger.error("Error saving session:", error);
   }

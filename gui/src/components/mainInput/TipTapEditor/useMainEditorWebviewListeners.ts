@@ -68,7 +68,6 @@ export function useMainEditorWebviewListeners({
         await dispatch(
           saveCurrentSession({
             openNewSession: false,
-            generateTitle: true,
           }),
         );
       }
@@ -97,7 +96,6 @@ export function useMainEditorWebviewListeners({
       await dispatch(
         saveCurrentSession({
           openNewSession: true,
-          generateTitle: true,
         }),
       );
 

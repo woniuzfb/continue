@@ -87,9 +87,14 @@ function ParallelListeners() {
       const supportsReasoning = modelSupportsReasoning(chatModel);
       const isReasoningDisabled =
         chatModel?.completionOptions?.reasoning === false;
-      const wasReasoningPreviouslyEnabled = chatModel?.title
-        ? reasoningSettings[chatModel.title] !== false
-        : true;
+      // LLM: prefix models default to reasoning disabled unless the user
+      // has explicitly toggled it on for this model.
+      const isLLMPrefix = chatModel?.model?.startsWith("LLM:");
+      const userReasoningPref = chatModel?.title
+        ? reasoningSettings[chatModel.title]
+        : undefined;
+      const wasReasoningPreviouslyEnabled =
+        userReasoningPref !== undefined ? userReasoningPref : !isLLMPrefix;
       dispatch(
         setHasReasoningEnabled(
           supportsReasoning &&

@@ -23,8 +23,11 @@ const StyledPre = styled.pre<{ theme: any }>`
   margin-top: 0;
   margin-bottom: 0;
   border-radius: 0 0 ${defaultBorderRadius} ${defaultBorderRadius} !important;
+  max-width: 100%;
   max-height: 40vh;
-  overflow-y: scroll !important;
+  overflow-x: auto;
+  overflow-y: auto !important;
+  box-sizing: border-box;
 
   ${(props) => generateThemeStyles(props.theme)}
 `;

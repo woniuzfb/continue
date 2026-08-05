@@ -487,6 +487,16 @@ export const PROVIDER_TOOL_SUPPORT: Record<string, (model: string) => boolean> =
     },
   };
 
+// Providers whose served model IDs are arbitrary/self-hosted and therefore
+// won't match the model-name heuristics in `isRecommendedAgentModel`, but
+// which the user has explicitly opted into and should be trusted for agent
+// mode. Matched case-insensitively against the model's provider id.
+const AGENT_CAPABLE_PROVIDERS: readonly string[] = ["local"];
+
+export function isRecommendedAgentProvider(provider: string): boolean {
+  return AGENT_CAPABLE_PROVIDERS.includes(provider.toLowerCase());
+}
+
 export function isRecommendedAgentModel(modelName: string): boolean {
   // AND behavior
   const recs: RegExp[][] = [

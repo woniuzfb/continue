@@ -248,6 +248,18 @@ class FileSystemIde implements IDE {
     });
   }
 
+  showOpenDialog(_options: {
+    selectFiles?: boolean;
+    selectFolders?: boolean;
+    canSelectMany?: boolean;
+    title?: string;
+    defaultUri?: string;
+    filters?: Record<string, string[]>;
+  }): Promise<string[]> {
+    // FileSystemIde has no UI; return empty selection.
+    return Promise.resolve([]);
+  }
+
   getCurrentFile(): Promise<undefined> {
     return Promise.resolve(undefined);
   }

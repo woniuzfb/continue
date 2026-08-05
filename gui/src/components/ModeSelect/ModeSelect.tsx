@@ -5,7 +5,10 @@ import {
   InformationCircleIcon,
 } from "@heroicons/react/24/outline";
 import { MessageModes } from "core";
-import { isRecommendedAgentModel } from "core/llm/toolSupport";
+import {
+  isRecommendedAgentModel,
+  isRecommendedAgentProvider,
+} from "core/llm/toolSupport";
 import { useCallback, useEffect, useMemo } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
@@ -25,7 +28,10 @@ export function ModeSelect() {
     if (!selectedModel) {
       return undefined;
     }
-    return isRecommendedAgentModel(selectedModel.model);
+    return (
+      isRecommendedAgentProvider(selectedModel.provider) ||
+      isRecommendedAgentModel(selectedModel.model)
+    );
   }, [selectedModel]);
 
   const { mainEditor } = useMainEditor();

@@ -141,13 +141,22 @@ export class MCPManagerSingleton {
     );
   }
 
-  async refreshConnection(serverId: string) {
+  async refreshConnection(
+    serverId: string,
+    opts?: { silent?: boolean },
+  ): Promise<void> {
     const connection = this.connections.get(serverId);
     if (!connection) {
       throw new Error(`MCP Connection ${serverId} not found`);
     }
     await connection.connectClient(true, this.abortController.signal);
-    if (this.onConnectionsRefreshed) {
+    // `silent` is used by automatic reconnections (e.g. TTS playback, tool
+    // calls) that only need to restore the transport, NOT to trigger a full
+    // config reload. Triggering reloadConfig from these paths re-runs
+    // rectifySelectedModelsFromGlobalContext, which can silently switch the
+    // user's selected chat model when the model provider is briefly
+    // unavailable during the reconnect.
+    if (!opts?.silent && this.onConnectionsRefreshed) {
       this.onConnectionsRefreshed();
     }
   }

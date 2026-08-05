@@ -196,6 +196,17 @@ export class MessageIde implements IDE {
     return await this.request("readFile", { filepath: fileUri });
   }
 
+  async showOpenDialog(options: {
+    selectFiles?: boolean;
+    selectFolders?: boolean;
+    canSelectMany?: boolean;
+    title?: string;
+    defaultUri?: string;
+    filters?: Record<string, string[]>;
+  }): Promise<string[]> {
+    return await this.request("showOpenDialog", options);
+  }
+
   getOpenFiles(): Promise<string[]> {
     return this.request("getOpenFiles", undefined);
   }

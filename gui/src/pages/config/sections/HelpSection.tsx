@@ -223,7 +223,6 @@ export function HelpSection() {
                   await dispatch(
                     saveCurrentSession({
                       openNewSession: true,
-                      generateTitle: true,
                     }),
                   );
                   dispatch(

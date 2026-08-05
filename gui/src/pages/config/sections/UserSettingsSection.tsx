@@ -53,7 +53,16 @@ export function UserSettingsSection() {
   const codeWrap = config.ui?.codeWrap ?? false;
   const showChatScrollbar = config.ui?.showChatScrollbar ?? false;
   const readResponseTTS = config.experimental?.readResponseTTS ?? false;
+  const readResponseTTSStream =
+    config.experimental?.readResponseTTSStream ?? false;
+  const skipBaseSystemMessage = config.ui?.skipBaseSystemMessage ?? false;
   const displayRawMarkdown = config.ui?.displayRawMarkdown ?? false;
+  const renderInlineLatex = config.ui?.renderInlineLatex ?? false;
+  const disableModelAutoSwitch = config.ui?.disableModelAutoSwitch ?? false;
+  const lazyLoadHistory = config.ui?.lazyLoadHistory ?? false;
+  const lazyLoadHistoryInitialCount =
+    config.ui?.lazyLoadHistoryInitialCount ?? 4;
+  const lazyLoadHistoryPageSize = config.ui?.lazyLoadHistoryPageSize ?? 4;
   const disableSessionTitles = config.disableSessionTitles ?? false;
   const useCurrentFileAsContext =
     config.experimental?.useCurrentFileAsContext ?? false;
@@ -120,10 +129,66 @@ export function UserSettingsSection() {
                 />
                 <UserSetting
                   type="toggle"
+                  title="Lazy Load History"
+                  description="Only load the most recent messages when opening a session; scroll up to load earlier messages on demand. Reduces UI lag for long conversations."
+                  value={lazyLoadHistory}
+                  onChange={(value) => handleUpdate({ lazyLoadHistory: value })}
+                />
+                <UserSetting
+                  type="number"
+                  title="Lazy Load Initial Count"
+                  description="Number of recent messages to load initially when Lazy Load History is enabled."
+                  value={lazyLoadHistoryInitialCount}
+                  min={2}
+                  max={500}
+                  onChange={(value) =>
+                    handleUpdate({ lazyLoadHistoryInitialCount: value })
+                  }
+                  disabled={!lazyLoadHistory}
+                />
+                <UserSetting
+                  type="number"
+                  title="Lazy Load Page Size"
+                  description="Number of earlier messages to load each time you scroll to the top when Lazy Load History is enabled."
+                  value={lazyLoadHistoryPageSize}
+                  min={1}
+                  max={200}
+                  onChange={(value) =>
+                    handleUpdate({ lazyLoadHistoryPageSize: value })
+                  }
+                  disabled={!lazyLoadHistory}
+                />
+                <UserSetting
+                  type="toggle"
+                  title="Render Inline LaTeX"
+                  description="Enable rendering of $...$ inline math as LaTeX formulas. Turn off if dollar signs in your chat output are being incorrectly rendered as math."
+                  value={renderInlineLatex}
+                  onChange={(value) =>
+                    handleUpdate({ renderInlineLatex: value })
+                  }
+                />
+                <UserSetting
+                  type="toggle"
                   title="Text-to-Speech Output"
                   description="Reads LLM responses aloud with TTS."
                   value={readResponseTTS}
-                  onChange={(value) => handleUpdate({ readResponseTTS: value })}
+                  onChange={(value) => {
+                    handleUpdate({ readResponseTTS: value });
+                    // If disabling TTS, also disable streaming
+                    if (!value) {
+                      handleUpdate({ readResponseTTSStream: false });
+                    }
+                  }}
+                />
+                <UserSetting
+                  type="toggle"
+                  title="Stream TTS Output"
+                  description="Streams text to TTS as it arrives, instead of waiting for the full response."
+                  value={readResponseTTSStream}
+                  onChange={(value) =>
+                    handleUpdate({ readResponseTTSStream: value })
+                  }
+                  disabled={!readResponseTTS}
                 />
                 <UserSetting
                   type="toggle"
@@ -136,11 +201,29 @@ export function UserSettingsSection() {
                 />
                 <UserSetting
                   type="toggle"
+                  title="Skip Base System Message"
+                  description="If on, Continue's preset system prompt (e.g. chat/agent/plan mode instructions) will not be sent to the model. User-set system messages and rules are not affected."
+                  value={skipBaseSystemMessage}
+                  onChange={(value) =>
+                    handleUpdate({ skipBaseSystemMessage: value })
+                  }
+                />
+                <UserSetting
+                  type="toggle"
                   title="Format Markdown"
                   description="If off, shows responses as raw text."
                   value={!displayRawMarkdown}
                   onChange={(value) =>
                     handleUpdate({ displayRawMarkdown: !value })
+                  }
+                />
+                <UserSetting
+                  type="toggle"
+                  title="Pin Selected Models"
+                  description="Keep your selected Chat / Autocomplete / Edit / Apply / Embed / Rerank model even when it's temporarily unavailable. Instead of auto-switching to another model, the selection is preserved and you'll get an error when actually using it. The original model auto-recovers once it's available again."
+                  value={disableModelAutoSwitch}
+                  onChange={(value) =>
+                    handleUpdate({ disableModelAutoSwitch: value })
                   }
                 />
               </div>

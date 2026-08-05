@@ -6,16 +6,61 @@ import { IIdeMessenger } from "../../context/IdeMessenger";
 import { selectSelectedChatModel } from "../slices/configSlice";
 import { selectSelectedProfile } from "../slices/profilesSlice";
 import {
+  clearContextMetrics,
+  deleteCachedSession,
   deleteSessionMetadata,
+  getCachedSession,
   newSession,
+  restoreCachedSession,
   setAllSessionMetadata,
+  setCachedSession,
+  setHistoryPagination,
   setIsSessionMetadataLoading,
   updateSessionMetadata,
 } from "../slices/sessionSlice";
-import { ThunkApiType } from "../store";
+import { RootState, ThunkApiType } from "../store";
 import { updateSelectedModelByRole } from "../thunks/updateSelectedModelByRole";
+import { compileChatForContextMetrics } from "./compileChatForContextMetrics";
 
 const MAX_TITLE_LENGTH = 100;
+
+/**
+ * Snapshots the current session state into the LRU cache.
+ * Called before switching to / creating a new session so that switching back
+ * restores the in-memory state (including lazily-loaded full history) without
+ * re-reading from disk.
+ */
+function cacheCurrentSession(state: RootState): void {
+  const session = state.session;
+  if (!session.id) {
+    return;
+  }
+  // 空 session 也缓存：让 new session tab 切回时命中 LRU 走同步路径，
+  // 避免对不存在的 session id 做 IPC 往返（loadPage → 文件不存在 → 返回空）。
+  // 伪空 session（redux-persist 恢复的 {id:A, history:[]}，磁盘有历史）
+  // 不会进入缓存：它只在重启后出现，而启动时 loadSession 的
+  // sessionId===state.session.id 分支会跳过 cacheCurrentSession。
+  const selectedChatModel = selectSelectedChatModel(state);
+  setCachedSession(session.id, {
+    sessionId: session.id,
+    title: session.title,
+    history: session.history,
+    mode: session.mode,
+    chatModelTitle: selectedChatModel?.title,
+    hasReasoningEnabled: session.hasReasoningEnabled,
+    historyTruncated: session.historyTruncated,
+    historyLoadedOffset: session.historyLoadedOffset,
+    historyTotalCount: session.historyTotalCount,
+    hasMoreHistory: session.hasMoreHistory,
+    isPruned: session.isPruned,
+    contextPercentage: session.contextPercentage,
+    contextInputTokens: session.contextInputTokens,
+    contextLength: session.contextLength,
+    contextMetrics: session.contextMetrics,
+    mainEditorDraft: session.mainEditorDraft,
+    symbols: session.symbols,
+  });
+}
 
 // Async session functions live in thunks (because of IDE messaging mostly)
 // see sessionSlice for sync redux session functions
@@ -29,6 +74,48 @@ export async function getSession(
     throw new Error(result.error);
   }
   return result.content;
+}
+
+/**
+ * 分页加载会话：只读取最近 N 条消息，并返回分页元数据 + session 元数据。
+ * 当 lazyLoadHistory 开启时使用。单次 IPC 调用，避免重复读盘。
+ */
+export async function getSessionPage(
+  ideMessenger: IIdeMessenger,
+  id: string,
+  limit: number,
+): Promise<{
+  session: Session;
+  hasMore: boolean;
+  totalCount: number;
+  loadedOffset: number;
+}> {
+  // loadPage 一次性返回 history 切片 + session 元数据（title/mode/.../contextMetrics）
+  const res = await ideMessenger.request("history/loadPage", {
+    id,
+    offset: 0,
+    limit,
+  });
+  if (res.status === "error") {
+    throw new Error(res.error);
+  }
+  const { items, hasMore, total, session: meta } = res.content;
+  const loadedOffset = total - items.length; // 头部未加载条数
+  const session: Session = {
+    sessionId: id,
+    title: meta.title,
+    workspaceDirectory: meta.workspaceDirectory,
+    history: items,
+    mode: meta.mode,
+    chatModelTitle: meta.chatModelTitle,
+    contextMetrics: meta.contextMetrics,
+  };
+  return {
+    session,
+    hasMore,
+    totalCount: total,
+    loadedOffset,
+  };
 }
 
 export const refreshSessionMetadata = createAsyncThunk<
@@ -55,9 +142,12 @@ export const deleteSession = createAsyncThunk<void, string, ThunkApiType>(
   "session/delete",
   async (id, { getState, dispatch, extra }) => {
     dispatch(deleteSessionMetadata(id)); // optimistic
+    deleteCachedSession(id); // remove from LRU cache
     const state = getState();
     if (id === state.session.id) {
-      await dispatch(loadLastSession());
+      // 当前正在查看的会话就是被删除的会话：切到上一个会话。
+      // 传 skipCachingCurrent=id 避免把正在删除的会话重新写回 LRU 缓存
+      await dispatch(loadLastSession({ skipCachingCurrent: id }));
     }
     const result = await extra.ideMessenger.request("history/delete", { id });
     if (result.status === "error") {
@@ -93,22 +183,91 @@ export const loadSession = createAsyncThunk<
   ThunkApiType
 >(
   "session/load",
-  async ({ sessionId, saveCurrentSession: save }, { extra, dispatch }) => {
+  async (
+    { sessionId, saveCurrentSession: save },
+    { extra, dispatch, getState },
+  ) => {
+    // Cache current session before switching (so switching back is instant).
+    // 启动场景跳过：redux-persist 持久化 session.id 但不持久化 history，
+    // 重启后 state = {id:A, history:[]}。若此时 cacheCurrentSession 会把
+    // 伪空 A 写入 LRU，随后 getCachedSession(A) 命中导致跳过磁盘加载，
+    // 历史丢失。启动时 sessionId === state.session.id，非"切换"，无需缓存。
+    if (sessionId !== getState().session.id) {
+      cacheCurrentSession(getState());
+    }
+
     if (save) {
       // save the session in the background
       void dispatch(
         saveCurrentSession({
           openNewSession: false,
-          generateTitle: true,
         }),
       );
     }
-    const session = await getSession(extra.ideMessenger, sessionId);
-    dispatch(newSession(session));
 
-    // Restore selected chat model from session, if present
-    if (session.chatModelTitle) {
-      void dispatch(selectChatModelForProfile(session.chatModelTitle));
+    let chatModelTitle: string | null | undefined;
+    // 标记是否已通过快照/contextMetrics 恢复了指标。
+    // 恢复后若 model 不匹配会再降级到 compile。
+    let metricsRestoredFromSnapshot = false;
+
+    // 1. Try LRU cache first — restores full in-memory state (including
+    //    lazily-loaded full history and context metrics) without disk read.
+    const cached = getCachedSession(sessionId);
+    if (cached) {
+      dispatch(restoreCachedSession(cached));
+      chatModelTitle = cached.chatModelTitle;
+      metricsRestoredFromSnapshot = !!cached.contextMetrics;
+    } else {
+      const lazyLoad = getState().config.config.ui?.lazyLoadHistory;
+      if (lazyLoad) {
+        const limit =
+          getState().config.config.ui?.lazyLoadHistoryInitialCount ?? 4;
+        const { session, hasMore, totalCount, loadedOffset } =
+          await getSessionPage(extra.ideMessenger, sessionId, limit);
+        chatModelTitle = session.chatModelTitle;
+        // 标记为 truncated，save 时会合并保留未加载的头部
+        session.historyTruncated = hasMore;
+        session.historyLoadedOffset = loadedOffset;
+        // newSession 会从 session.contextMetrics 还原 4 个指标字段 + 快照
+        dispatch(newSession(session));
+        dispatch(setHistoryPagination({ hasMore, totalCount }));
+        metricsRestoredFromSnapshot = !!session.contextMetrics;
+      } else {
+        const session = await getSession(extra.ideMessenger, sessionId);
+        chatModelTitle = session.chatModelTitle;
+        dispatch(newSession(session));
+        metricsRestoredFromSnapshot = !!session.contextMetrics;
+      }
+    }
+
+    // Restore selected chat model from session, if present.
+    // Must await so that compileChatForContextMetrics sees the restored model.
+    if (chatModelTitle) {
+      await dispatch(selectChatModelForProfile(chatModelTitle)).unwrap();
+    }
+
+    // 指标恢复路径：
+    // - 有快照 + model 一致 → 直接用快照，跳过 compile
+    // - 有快照但 model 已切 → 快照 stale，清掉重新 compile
+    // - 无快照（旧会话文件） → compile 兜底
+    if (metricsRestoredFromSnapshot) {
+      const restoredModelTitle = selectSelectedChatModel(getState())?.title;
+      if (restoredModelTitle && restoredModelTitle === chatModelTitle) {
+        // 快照与当前 model 一致，直接使用
+      } else {
+        dispatch(clearContextMetrics());
+        try {
+          await dispatch(compileChatForContextMetrics()).unwrap();
+        } catch (e) {
+          console.warn("Post-load compile failed", e);
+        }
+      }
+    } else {
+      try {
+        await dispatch(compileChatForContextMetrics()).unwrap();
+      } catch (e) {
+        console.warn("Post-load compile failed", e);
+      }
     }
   },
 );
@@ -137,37 +296,109 @@ export const selectChatModelForProfile = createAsyncThunk<
   },
 );
 
-export const loadLastSession = createAsyncThunk<void, void, ThunkApiType>(
-  "session/loadLast",
-  async (_, { extra, dispatch, getState }) => {
-    let lastSessionId = getState().session.lastSessionId;
+export const loadLastSession = createAsyncThunk<
+  void,
+  { skipCachingCurrent?: string } | void,
+  ThunkApiType
+>("session/loadLast", async (arg, { extra, dispatch, getState }) => {
+  const skipCachingCurrent = arg?.skipCachingCurrent;
+  const stateBefore = getState();
+  // Cache current session before switching, unless it's the one being deleted.
+  // 当前 history 为空时跳过：避免 redux-persist 恢复的伪空 session
+  // （{id:A, history:[]}，磁盘有历史）被缓存后，切回 A 命中缓存跳过磁盘加载。
+  if (
+    stateBefore.session.history.length > 0 &&
+    (!skipCachingCurrent || skipCachingCurrent !== stateBefore.session.id)
+  ) {
+    cacheCurrentSession(stateBefore);
+  }
 
-    // const lastSessionResult = await extra.ideMessenger.request("history/list", {
-    //   limit: 1,
-    // });
-    // if (lastSessionResult.status === "success") {
-    //   lastSessionId = lastSessionResult.content.at(0)?.sessionId;
-    // }
+  let lastSessionId = getState().session.lastSessionId;
 
-    if (!lastSessionId) {
-      dispatch(newSession());
-      return;
+  if (!lastSessionId) {
+    dispatch(newSession());
+    return;
+  }
+
+  let chatModelTitle: string | null | undefined;
+  // 标记是否已通过快照/contextMetrics 恢复了指标
+  let metricsRestoredFromSnapshot = false;
+
+  // 1. Try LRU cache first
+  const cached = getCachedSession(lastSessionId);
+  if (cached) {
+    dispatch(restoreCachedSession(cached));
+    chatModelTitle = cached.chatModelTitle;
+    metricsRestoredFromSnapshot = !!cached.contextMetrics;
+  } else {
+    const lazyLoad = getState().config.config.ui?.lazyLoadHistory;
+    const limit = getState().config.config.ui?.lazyLoadHistoryInitialCount ?? 4;
+
+    if (lazyLoad) {
+      let pageResult: Awaited<ReturnType<typeof getSessionPage>>;
+      try {
+        pageResult = await getSessionPage(
+          extra.ideMessenger,
+          lastSessionId,
+          limit,
+        );
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        pageResult = await getSessionPage(
+          extra.ideMessenger,
+          lastSessionId,
+          limit,
+        );
+      }
+      const { session, hasMore, totalCount, loadedOffset } = pageResult;
+      chatModelTitle = session.chatModelTitle;
+      session.historyTruncated = hasMore;
+      session.historyLoadedOffset = loadedOffset;
+      // newSession 会从 session.contextMetrics 还原 4 个指标字段 + 快照
+      dispatch(newSession(session));
+      dispatch(setHistoryPagination({ hasMore, totalCount }));
+      metricsRestoredFromSnapshot = !!session.contextMetrics;
+    } else {
+      let session: Session;
+      try {
+        session = await getSession(extra.ideMessenger, lastSessionId);
+      } catch {
+        // retry again after 1 sec
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        session = await getSession(extra.ideMessenger, lastSessionId);
+      }
+      chatModelTitle = session.chatModelTitle;
+      dispatch(newSession(session));
+      metricsRestoredFromSnapshot = !!session.contextMetrics;
     }
+  }
 
-    let session: Session;
+  // Must await so that compileChatForContextMetrics sees the restored model.
+  if (chatModelTitle) {
+    await dispatch(selectChatModelForProfile(chatModelTitle)).unwrap();
+  }
+
+  // 指标恢复路径同 loadSession
+  if (metricsRestoredFromSnapshot) {
+    const restoredModelTitle = selectSelectedChatModel(getState())?.title;
+    if (restoredModelTitle && restoredModelTitle === chatModelTitle) {
+      // 快照与当前 model 一致，直接使用
+    } else {
+      dispatch(clearContextMetrics());
+      try {
+        await dispatch(compileChatForContextMetrics()).unwrap();
+      } catch (e) {
+        console.warn("Post-load compile failed", e);
+      }
+    }
+  } else {
     try {
-      session = await getSession(extra.ideMessenger, lastSessionId);
-    } catch {
-      // retry again after 1 sec
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      session = await getSession(extra.ideMessenger, lastSessionId);
+      await dispatch(compileChatForContextMetrics()).unwrap();
+    } catch (e) {
+      console.warn("Post-load compile failed", e);
     }
-    dispatch(newSession(session));
-    if (session.chatModelTitle) {
-      dispatch(selectChatModelForProfile(session.chatModelTitle));
-    }
-  },
-);
+  }
+});
 
 function getChatTitleFromMessage(message: ChatMessage) {
   const text =
@@ -185,17 +416,25 @@ function getChatTitleFromMessage(message: ChatMessage) {
 
 export const saveCurrentSession = createAsyncThunk<
   void,
-  { openNewSession: boolean; generateTitle: boolean },
+  { openNewSession: boolean },
   ThunkApiType
 >(
   "session/saveCurrent",
-  async ({ openNewSession, generateTitle }, { dispatch, extra, getState }) => {
+  async ({ openNewSession }, { dispatch, extra, getState }) => {
     const session = getState().session; // assign to a variable so that even when current session changes, we have the reference to the old session
     if (session.history.length === 0) {
+      // 空 session 上再次触发 newSession（如连续点 "+" 按钮）：
+      // 跳过 save，但仍需 dispatch newSession 让 UI 生成新 tab，
+      // 否则 currentSessionId 不变，TabBar 不会创建新 tab。
+      if (openNewSession) {
+        dispatch(newSession());
+      }
       return;
     }
 
+    // Cache current session before opening a new one (so user can switch back)
     if (openNewSession) {
+      cacheCurrentSession(getState());
       dispatch(newSession());
     }
 
@@ -205,15 +444,17 @@ export const saveCurrentSession = createAsyncThunk<
     // Now save previous session and update chat title if relevant
     let title = session.title;
     if (title === NEW_SESSION_TITLE) {
+      // 仅在标题仍是默认 "New Session" 时才生成标题，避免每次流式响应结束都调用 LLM。
+      // 已有自定义标题的会话不再重复生成，节省 LLM 调用。
       if (
         !getState().config.config?.disableSessionTitles &&
         selectedChatModel
       ) {
         let assistantResponse = session.history
-          ?.filter((h) => h.message.role === "assistant")[0]
+          ?.find((h) => h.message.role === "assistant")
           ?.message?.content?.toString();
 
-        if (assistantResponse && generateTitle) {
+        if (assistantResponse) {
           try {
             const result = await extra.ideMessenger.request(
               "chatDescriber/describe",
@@ -254,6 +495,11 @@ export const saveCurrentSession = createAsyncThunk<
       history: session.history,
       mode: session.mode,
       chatModelTitle: selectedChatModel?.title ?? null,
+      // 懒加载合并保存：把分页标记传给后端，save 时保留未加载的头部
+      historyTruncated: session.historyTruncated,
+      historyLoadedOffset: session.historyLoadedOffset,
+      // 持久化 context 指标快照，下次加载会话时直接还原
+      contextMetrics: session.contextMetrics,
     };
 
     const result = await dispatch(updateSession(updatedSession));

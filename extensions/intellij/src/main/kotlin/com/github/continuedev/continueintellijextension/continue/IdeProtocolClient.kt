@@ -146,6 +146,15 @@ class IdeProtocolClient(
                         respond(contents)
                     }
 
+                    "showOpenDialog" -> {
+                        val params = gsonService.gson.fromJson(
+                            dataElement.toString(),
+                            ShowOpenDialogParams::class.java
+                        )
+                        val paths = ide.showOpenDialog(params)
+                        respond(paths)
+                    }
+
                     "readRangeInFile" -> {
                         val params = gsonService.gson.fromJson(
                             dataElement.toString(),

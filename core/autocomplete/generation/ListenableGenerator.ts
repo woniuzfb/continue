@@ -37,7 +37,10 @@ export class ListenableGenerator<T> {
       this.onError(e);
     } finally {
       this._isEnded = true;
-      for (const listener of this._listeners) {
+      // Notify all listeners that the stream has ended.
+      // Use a snapshot to avoid concurrent modification issues.
+      const listeners = [...this._listeners];
+      for (const listener of listeners) {
         listener(null as any);
       }
     }
@@ -54,28 +57,35 @@ export class ListenableGenerator<T> {
   }
 
   async *tee(): AsyncGenerator<T> {
+    let resolveCurrent: ((value: any) => void) | undefined;
     try {
       let i = 0;
+      // Drain buffered items first
       while (i < this._buffer.length) {
         yield this._buffer[i++];
       }
+      // Wait for new items
       while (!this._isEnded) {
-        let resolve: (value: any) => void;
         const promise = new Promise<T>((res) => {
-          resolve = res;
-          this._listeners.add(resolve!);
+          resolveCurrent = res;
+          this._listeners.add(resolveCurrent!);
         });
         await promise;
-        this._listeners.delete(resolve!);
+        if (resolveCurrent) {
+          this._listeners.delete(resolveCurrent);
+          resolveCurrent = undefined;
+        }
 
-        // Possible timing caused something to slip in between
-        // timers so we iterate over the buffer
+        // Drain any items that arrived between promise creation and resolution
         while (i < this._buffer.length) {
           yield this._buffer[i++];
         }
       }
     } finally {
-      // this._listeners.delete(resolve!);
+      // Clean up listener if we're still waiting
+      if (resolveCurrent) {
+        this._listeners.delete(resolveCurrent);
+      }
     }
   }
 }

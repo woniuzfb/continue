@@ -1,5 +1,9 @@
 // core/llm/toolSupport.test.ts
-import { PROVIDER_TOOL_SUPPORT, isRecommendedAgentModel } from "./toolSupport";
+import {
+  PROVIDER_TOOL_SUPPORT,
+  isRecommendedAgentModel,
+  isRecommendedAgentProvider,
+} from "./toolSupport";
 
 describe("PROVIDER_TOOL_SUPPORT", () => {
   describe("anthropic", () => {
@@ -532,5 +536,30 @@ describe("isRecommendedAgentModel", () => {
       expect(isRecommendedAgentModel("gemini-pro")).toBe(false);
       expect(isRecommendedAgentModel("claude-sonnet")).toBe(false);
     });
+  });
+});
+
+describe("isRecommendedAgentProvider", () => {
+  it("should return true for the Local provider regardless of casing", () => {
+    expect(isRecommendedAgentProvider("Local")).toBe(true);
+    expect(isRecommendedAgentProvider("local")).toBe(true);
+    expect(isRecommendedAgentProvider("LOCAL")).toBe(true);
+  });
+
+  it("should return false for non-whitelisted providers", () => {
+    expect(isRecommendedAgentProvider("openai")).toBe(false);
+    expect(isRecommendedAgentProvider("anthropic")).toBe(false);
+    expect(isRecommendedAgentProvider("ollama")).toBe(false);
+    expect(isRecommendedAgentProvider("lmstudio")).toBe(false);
+  });
+
+  it("should return false for empty and unknown provider strings", () => {
+    expect(isRecommendedAgentProvider("")).toBe(false);
+    expect(isRecommendedAgentProvider("not-a-provider")).toBe(false);
+  });
+
+  it("should not match on substrings of the provider id", () => {
+    expect(isRecommendedAgentProvider("local-ai")).toBe(false);
+    expect(isRecommendedAgentProvider("mylocal")).toBe(false);
   });
 });

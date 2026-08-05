@@ -15,11 +15,16 @@ import {
   messageHasToolCallId,
 } from "./messages.js";
 
-import { renderChatMessage } from "../util/messageContent.js";
+import {
+  renderChatMessage,
+  replaceFileContentBlocks,
+  stripInlineImageBase64,
+} from "../util/messageContent.js";
 import { AsyncEncoder, LlamaAsyncEncoder } from "./asyncEncoder.js";
 import { DEFAULT_PRUNING_LENGTH } from "./constants.js";
 import { getAdjustedTokenCountFromModel } from "./getAdjustedTokenCount.js";
 import llamaTokenizer from "./llamaTokenizer.js";
+
 interface Encoding {
   encode: Tiktoken["encode"];
   decode: Tiktoken["decode"];
@@ -102,11 +107,19 @@ async function countTokensAsync(
       if (part.type === "imageUrl") {
         return countImageTokens(part);
       }
-      return (await encoding.encode(part.text ?? "")).length;
+      return (
+        await encoding.encode(
+          stripInlineImageBase64(replaceFileContentBlocks(part.text ?? "")),
+        )
+      ).length;
     });
     return (await Promise.all(promises)).reduce((sum, val) => sum + val, 0);
   }
-  return (await encoding.encode(content ?? "")).length;
+  return (
+    await encoding.encode(
+      stripInlineImageBase64(replaceFileContentBlocks(content ?? "")),
+    )
+  ).length;
 }
 
 function countTokens(
@@ -121,12 +134,20 @@ function countTokens(
       return (
         acc +
         (part.type === "text"
-          ? encoding.encode(part.text ?? "", "all", []).length
+          ? encoding.encode(
+              stripInlineImageBase64(replaceFileContentBlocks(part.text ?? "")),
+              "all",
+              [],
+            ).length
           : countImageTokens(part))
       );
     }, 0);
   } else {
-    baseTokens = encoding.encode(content ?? "", "all", []).length;
+    baseTokens = encoding.encode(
+      stripInlineImageBase64(replaceFileContentBlocks(content ?? "")),
+      "all",
+      [],
+    ).length;
   }
   return getAdjustedTokenCountFromModel(baseTokens, modelName);
 }
@@ -547,6 +568,8 @@ function compileChatMessages({
     compiledChatMessages: reassembled,
     didPrune,
     contextPercentage,
+    inputTokens,
+    contextLength,
   };
 }
 

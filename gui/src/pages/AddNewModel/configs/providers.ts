@@ -1358,6 +1358,36 @@ Fund your wallet with USDC on Solana or Base. ClawRouter uses x402 micropayments
     ],
     downloadUrl: "https://github.com/BlockRunAI/ClawRouter",
   },
+  local: {
+    title: "Local",
+    provider: "Local",
+    description: "Local inference using an OpenAI-compatible server",
+    longDescription:
+      "Local provides an OpenAI-compatible API for running models locally. To get started:\n1. Install and start your local OpenAI-compatible server\n2. Once the server is running, you can start using Continue.",
+    icon: "openai.png",
+    tags: [ModelProviderTags.Local, ModelProviderTags.OpenSource],
+    params: {
+      apiBase: "http://localhost:5000/v1/",
+    },
+    packages: [
+      {
+        ...models.AUTODETECT,
+        params: {
+          ...models.AUTODETECT.params,
+          title: "Local",
+        },
+      },
+      ...openSourceModels,
+    ],
+    collectInputFor: [
+      ...completionParamsInputsConfigs,
+      {
+        ...apiBaseInput,
+        defaultValue: "http://localhost:5000/v1/",
+        required: true,
+      },
+    ],
+  },
   nous: {
     title: "Nous Research",
     provider: "nous",

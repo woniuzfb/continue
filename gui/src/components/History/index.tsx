@@ -146,7 +146,7 @@ export function History() {
   return (
     <div
       style={{ fontSize: getFontSize() }}
-      className="flex flex-1 flex-col overflow-auto overflow-x-hidden px-1"
+      className="flex flex-1 flex-col overflow-auto px-1"
     >
       <div className="relative my-2 mt-4 flex justify-center space-x-2">
         <input

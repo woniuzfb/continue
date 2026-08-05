@@ -30,7 +30,6 @@ export const streamThunkWrapper = createAsyncThunk<
         await dispatch(
           saveCurrentSession({
             openNewSession: false,
-            generateTitle: true,
           }),
         );
       }

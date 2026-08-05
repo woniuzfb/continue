@@ -371,7 +371,6 @@ describe("streamResponseThunk", () => {
         type: "session/saveCurrent/pending",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),
@@ -444,7 +443,6 @@ describe("streamResponseThunk", () => {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
-            generateTitle: true,
             openNewSession: false,
           },
           requestId: expect.any(String),

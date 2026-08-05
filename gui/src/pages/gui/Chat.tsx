@@ -21,6 +21,7 @@ import TimelineItem from "../../components/gui/TimelineItem";
 import { NewSessionButton } from "../../components/mainInput/belowMainInput/NewSessionButton";
 import ThinkingBlockPeek from "../../components/mainInput/belowMainInput/ThinkingBlockPeek";
 import ContinueInputBox from "../../components/mainInput/ContinueInputBox";
+import { AttachmentMeta, AttachedFile } from "../../components/mainInput/types";
 import { useOnboardingCard } from "../../components/OnboardingCard";
 import StepContainer from "../../components/StepContainer";
 import { TabBar } from "../../components/TabBar/TabBar";
@@ -46,10 +47,9 @@ import { ToolCallDiv } from "./ToolCallDiv";
 import { useStore } from "react-redux";
 import FeedbackDialog from "../../components/dialogs/FeedbackDialog";
 
-import { DeprecationBanner } from "../../components/DeprecationBanner";
 import { FatalErrorIndicator } from "../../components/config/FatalErrorNotice";
+import { DeprecationBanner } from "../../components/DeprecationBanner";
 import InlineErrorMessage from "../../components/mainInput/InlineErrorMessage";
-import { resolveEditorContent } from "../../components/mainInput/TipTapEditor/utils/resolveEditorContent";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
 import { cancelStream } from "../../redux/thunks/cancelStream";
@@ -71,13 +71,16 @@ function findLatestSummaryIndex(history: ChatHistoryItem[]): number {
 const StepsDiv = styled.div`
   position: relative;
   background-color: transparent;
+  min-width: 0;
 
   & > * {
     position: relative;
+    min-width: 0;
   }
 
   .thread-message {
     margin: 0 0 0 1px;
+    min-width: 0;
   }
 `;
 
@@ -117,6 +120,9 @@ export function Chat() {
   const stepsDivRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
   const history = useAppSelector((state) => state.session.history);
+  const isHistoryLoading = useAppSelector(
+    (state) => state.session.isHistoryLoading,
+  );
   const showChatScrollbar = useAppSelector(
     (state) => state.config.config.ui?.showChatScrollbar,
   );
@@ -163,6 +169,7 @@ export function Chat() {
       modifiers: InputModifiers,
       index?: number,
       editorToClearOnSend?: Editor,
+      attachments?: AttachedFile[],
     ) => {
       const stateSnapshot = reduxStore.getState();
       const latestPendingToolCalls = selectPendingToolCalls(stateSnapshot);
@@ -208,7 +215,9 @@ export function Chat() {
           }),
         );
       } else {
-        void dispatch(streamResponseThunk({ editorState, modifiers, index }));
+        void dispatch(
+          streamResponseThunk({ editorState, modifiers, index, attachments }),
+        );
 
         if (editorToClearOnSend) {
           editorToClearOnSend.commands.clearContent();
@@ -273,6 +282,12 @@ export function Chat() {
         toolCallStates,
       } = item;
 
+      // Attached files are persisted on message.metadata (written at send
+      // time in streamResponseThunk) so already-sent user messages can render
+      // file chips without the file content leaking into editorState.
+      const attachments =
+        (message.metadata?.attachments as AttachmentMeta[] | undefined) ?? [];
+
       // Calculate once for the entire function
       const latestSummaryIndex = findLatestSummaryIndex(history);
       const isBeforeLatestSummary =
@@ -284,6 +299,7 @@ export function Chat() {
             onEnter={(editorState, modifiers) =>
               sendInput(editorState, modifiers, index)
             }
+            attachments={attachments}
             isLastUserInput={isLastUserInput(index)}
             isMainInput={false}
             editorState={editorState ?? item.message.content}
@@ -386,15 +402,23 @@ export function Chat() {
 
       <StepsDiv
         ref={stepsDivRef}
-        className={`pt-[8px] ${showScrollbar ? "thin-scrollbar" : "no-scrollbar"} ${history.length > 0 ? "min-h-0 flex-1 overflow-y-scroll" : "shrink-0"}`}
+        className={`w-full pt-[8px] ${showScrollbar ? "thin-scrollbar" : "no-scrollbar"} ${history.length > 0 ? "min-h-0 flex-1 overflow-y-scroll" : "shrink-0"}`}
       >
         <DeprecationBanner dismissable={true} />
         {highlights}
+        {isHistoryLoading && (
+          <div className="flex justify-center py-2">
+            <div className="text-description animate-pulse text-xs">
+              加载更早的消息…
+            </div>
+          </div>
+        )}
         {history
           .filter((item) => item.message.role !== "system")
           .map((item, index: number) => (
             <div
               key={item.message.id}
+              className="min-w-0"
               style={{
                 minHeight: index === history.length - 1 ? "200px" : 0,
               }}
@@ -415,8 +439,8 @@ export function Chat() {
         <ContinueInputBox
           isMainInput
           isLastUserInput={false}
-          onEnter={(editorState, modifiers, editor) =>
-            sendInput(editorState, modifiers, undefined, editor)
+          onEnter={(editorState, modifiers, editor, attachments) =>
+            sendInput(editorState, modifiers, undefined, editor, attachments)
           }
           inputId={MAIN_EDITOR_INPUT_ID}
         />

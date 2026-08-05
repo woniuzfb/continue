@@ -193,6 +193,8 @@ interface IDE {
 
     suspend fun readFile(filepath: String): String
 
+    suspend fun showOpenDialog(params: ShowOpenDialogParams): List<String>
+
     suspend fun readRangeInFile(filepath: String, range: Range): String
 
     suspend fun showLines(
@@ -312,6 +314,15 @@ data class AcceptOrRejectDiffPayload(
 
 data class ShowFilePayload(
     val filepath: String
+)
+
+data class ShowOpenDialogParams(
+    val selectFiles: Boolean? = null,
+    val selectFolders: Boolean? = null,
+    val canSelectMany: Boolean? = null,
+    val title: String? = null,
+    val defaultUri: String? = null,
+    val filters: Map<String, List<String>>? = null
 )
 
 sealed class FimResult {

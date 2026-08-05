@@ -37,7 +37,7 @@ import { loadConfigContextProviders } from "../loadContextProviders";
 import { getAllDotContinueDefinitionFiles } from "../loadLocalAssistants";
 import { unrollLocalYamlBlocks } from "./loadLocalYamlBlocks";
 import { LocalPlatformClient } from "./LocalPlatformClient";
-import { llmsFromModelConfig } from "./models";
+import { deduplicateModels, llmsFromModelConfig } from "./models";
 import {
   convertYamlMcpConfigToInternalMcpOptions,
   convertYamlRuleToContinueRule,
@@ -191,6 +191,7 @@ export async function configYamlToContinueConfig(options: {
     },
     rules: [],
     requestOptions: { ...unrolledAssistant.requestOptions },
+    experimental: unrolledAssistant.experimental as any,
   };
 
   const config = nonNullifyConfigYaml(unrolledAssistant);
@@ -338,6 +339,39 @@ export async function configYamlToContinueConfig(options: {
       localErrors.push({
         fatal: false,
         message: `Failed to load model:\nName: ${model.name}\nModel: ${model.model}\nProvider: ${model.provider}\n${e instanceof Error ? e.message : e}`,
+      });
+    }
+  }
+
+  // Deduplicate models across roles: explicitly configured models take
+  // priority over autodetected duplicates with the same model name.
+  for (const role of Object.keys(continueConfig.modelsByRole) as ModelRole[]) {
+    continueConfig.modelsByRole[role] = deduplicateModels(
+      continueConfig.modelsByRole[role],
+    );
+  }
+
+  // Remove autodetected models from roles where an explicit config for
+  // the same model restricts it to other roles (e.g. an embedding model
+  // that was picked up by AUTODETECT shouldn't appear in the chat list).
+  const explicitModelRoleMap = new Map<string, Set<ModelRole>>();
+  for (const model of config.models ?? []) {
+    if (model.model !== "AUTODETECT" && model.roles) {
+      explicitModelRoleMap.set(model.model, new Set(model.roles));
+    }
+  }
+  if (explicitModelRoleMap.size > 0) {
+    for (const role of Object.keys(
+      continueConfig.modelsByRole,
+    ) as ModelRole[]) {
+      continueConfig.modelsByRole[role] = continueConfig.modelsByRole[
+        role
+      ].filter((m) => {
+        const explicitRoles = explicitModelRoleMap.get(m.model);
+        if (explicitRoles && m.isFromAutoDetect) {
+          return explicitRoles.has(role);
+        }
+        return true;
       });
     }
   }

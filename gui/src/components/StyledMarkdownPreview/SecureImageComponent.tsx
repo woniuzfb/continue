@@ -84,14 +84,20 @@ interface SecureImageComponentProps {
   className?: string;
 }
 
+// Data URLs (e.g. data:image/png;base64,...) are embedded base64 content.
+// They do not trigger external requests and cannot leak data via query
+// parameters, so they are treated as safe and displayed by default.
+const isDataUrl = (src: string): boolean => /^data:image\//i.test(src);
+
 export const SecureImageComponent: React.FC<SecureImageComponentProps> = ({
   src,
   alt,
   title,
   className,
 }) => {
-  const [showImage, setShowImage] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const safeSrc = src ? isDataUrl(src) : false;
+  const [showImage, setShowImage] = useState(safeSrc);
 
   if (!src) {
     return <span>[Invalid image: no source]</span>;

@@ -17,6 +17,8 @@ export const sharedConfigSchema = z
     // `experimental` in `ContinueConfig`
     useChromiumForDocsCrawling: z.boolean(),
     readResponseTTS: z.boolean(),
+    readResponseTTSStream: z.boolean(),
+    readResponseTTSExcludeThinking: z.boolean(),
     promptPath: z.string(),
     useCurrentFileAsContext: z.boolean(),
     enableExperimentalTools: z.boolean(),
@@ -32,6 +34,12 @@ export const sharedConfigSchema = z
     displayRawMarkdown: z.boolean(),
     showChatScrollbar: z.boolean(),
     continueAfterToolRejection: z.boolean(),
+    skipBaseSystemMessage: z.boolean(),
+    renderInlineLatex: z.boolean(),
+    disableModelAutoSwitch: z.boolean(),
+    lazyLoadHistory: z.boolean(),
+    lazyLoadHistoryInitialCount: z.number(),
+    lazyLoadHistoryPageSize: z.number(),
 
     // `tabAutocompleteOptions` in `ContinueConfig`
     useAutocompleteCache: z.boolean(),
@@ -159,6 +167,30 @@ export function modifyAnyConfigWithSharedConfig<
       sharedConfig.continueAfterToolRejection;
   }
 
+  if (sharedConfig.skipBaseSystemMessage !== undefined) {
+    configCopy.ui.skipBaseSystemMessage = sharedConfig.skipBaseSystemMessage;
+  }
+
+  if (sharedConfig.renderInlineLatex !== undefined) {
+    configCopy.ui.renderInlineLatex = sharedConfig.renderInlineLatex;
+  }
+
+  if (sharedConfig.disableModelAutoSwitch !== undefined) {
+    configCopy.ui.disableModelAutoSwitch = sharedConfig.disableModelAutoSwitch;
+  }
+
+  if (sharedConfig.lazyLoadHistory !== undefined) {
+    configCopy.ui.lazyLoadHistory = sharedConfig.lazyLoadHistory;
+  }
+  if (sharedConfig.lazyLoadHistoryInitialCount !== undefined) {
+    configCopy.ui.lazyLoadHistoryInitialCount =
+      sharedConfig.lazyLoadHistoryInitialCount;
+  }
+  if (sharedConfig.lazyLoadHistoryPageSize !== undefined) {
+    configCopy.ui.lazyLoadHistoryPageSize =
+      sharedConfig.lazyLoadHistoryPageSize;
+  }
+
   configCopy.experimental = {
     ...configCopy.experimental,
   };
@@ -177,6 +209,14 @@ export function modifyAnyConfigWithSharedConfig<
   }
   if (sharedConfig.readResponseTTS !== undefined) {
     configCopy.experimental.readResponseTTS = sharedConfig.readResponseTTS;
+  }
+  if (sharedConfig.readResponseTTSStream !== undefined) {
+    configCopy.experimental.readResponseTTSStream =
+      sharedConfig.readResponseTTSStream;
+  }
+  if (sharedConfig.readResponseTTSExcludeThinking !== undefined) {
+    configCopy.experimental.readResponseTTSExcludeThinking =
+      sharedConfig.readResponseTTSExcludeThinking;
   }
   if (sharedConfig.useCurrentFileAsContext !== undefined) {
     configCopy.experimental.useCurrentFileAsContext =

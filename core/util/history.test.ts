@@ -22,10 +22,10 @@ describe("No sessions have been created", () => {
     expect(sessions).toEqual([]);
   });
 
-  test("Deleting session throws error", () => {
-    expect(() => {
-      historyManager.delete(testSessionId);
-    }).toThrow(`Session file ${testSessionPath} does not exist`);
+  test("Deleting session throws error", async () => {
+    await expect(historyManager.delete(testSessionId)).rejects.toThrow(
+      `Session file ${testSessionPath} does not exist`,
+    );
   });
 
   test("Loading session returns default session", () => {
@@ -40,9 +40,9 @@ describe("No sessions have been created", () => {
 });
 
 describe("Full session lifecycle", () => {
-  test("Creating and listing a session", () => {
+  test("Creating and listing a session", async () => {
     // save and list
-    historyManager.save(testSession);
+    await historyManager.save(testSession);
     const sessions = historyManager.list({});
     const sessionExists = sessions.some(
       (session) => session?.sessionId === testSession.sessionId,
@@ -55,17 +55,17 @@ describe("Full session lifecycle", () => {
     expect(retrievedSession).toEqual(testSession);
   });
 
-  test("Saving session with new title updates session", () => {
+  test("Saving session with new title updates session", async () => {
     const modifiedSession = { ...testSession };
     modifiedSession.title = `Edited: ${testSession.title}`;
-    historyManager.save(modifiedSession);
+    await historyManager.save(modifiedSession);
     const session = historyManager.load(testSession.sessionId);
 
     expect(session.title).toBe(modifiedSession.title);
   });
 
-  test("Deleting session", () => {
-    historyManager.delete(testSession.sessionId);
+  test("Deleting session", async () => {
+    await historyManager.delete(testSession.sessionId);
     const sessions = historyManager.list({});
     const sessionWasDeleted = sessions.every(
       (session) => session?.sessionId !== testSession.sessionId,
@@ -75,27 +75,27 @@ describe("Full session lifecycle", () => {
 });
 
 describe("Workspace directory filtering", () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     historyManager.clearAll();
-    historyManager.save({
+    await historyManager.save({
       history: [],
       title: "Project A session 1",
       workspaceDirectory: "/home/user/project-a",
       sessionId: "ws-a-1",
     });
-    historyManager.save({
+    await historyManager.save({
       history: [],
       title: "Project B session 1",
       workspaceDirectory: "/home/user/project-b",
       sessionId: "ws-b-1",
     });
-    historyManager.save({
+    await historyManager.save({
       history: [],
       title: "Project A session 2",
       workspaceDirectory: "/home/user/project-a",
       sessionId: "ws-a-2",
     });
-    historyManager.save({
+    await historyManager.save({
       history: [],
       title: "No workspace",
       workspaceDirectory: "",
@@ -156,9 +156,9 @@ describe("Workspace directory filtering", () => {
 });
 
 describe("Many sessions created", () => {
-  test("Create 100 sessions and list all", () => {
+  test("Create 100 sessions and list all", async () => {
     for (let i = 0; i < 100; i++) {
-      historyManager.save({
+      await historyManager.save({
         history: [],
         title: `${i}`,
         workspaceDirectory: "workspaceDir",
@@ -211,11 +211,11 @@ describe("Many sessions created", () => {
     expect(sessionIds.every(isSessionIdInList)).toBe(true);
   });
 
-  test("Delete all sessions", () => {
+  test("Delete all sessions", async () => {
     let sessions = historyManager.list({});
 
     for (let session of sessions) {
-      historyManager.delete(session.sessionId);
+      await historyManager.delete(session.sessionId);
     }
     sessions = historyManager.list({});
     expect(sessions.length).toBe(0);

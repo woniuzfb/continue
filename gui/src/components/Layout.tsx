@@ -17,23 +17,20 @@ import { ROUTES } from "../util/navigation";
 import { FatalErrorIndicator } from "./config/FatalErrorNotice";
 import TextDialog from "./dialogs";
 import { useMainEditor } from "./mainInput/TipTapEditor";
-import {
-  isNewUserOnboarding,
-  OnboardingCard,
-  useOnboardingCard,
-} from "./OnboardingCard";
+import { isNewUserOnboarding, useOnboardingCard } from "./OnboardingCard";
 import OSRContextMenu from "./OSRContextMenu";
 
 const LayoutTopDiv = styled(CustomScrollbarDiv)`
   height: 100%;
   position: relative;
-  overflow-x: hidden;
+  overflow-x: auto;
 `;
 
 const GridDiv = styled.div`
   display: grid;
   grid-template-rows: 1fr auto;
   height: 100vh;
+  min-width: 0;
   overflow-x: visible;
 `;
 
@@ -60,10 +57,12 @@ const Layout = () => {
       if (isInEdit) {
         await dispatch(exitEdit({}));
       } else {
-        await dispatch(
+        // fire-and-forget：saveCurrentSession 内部 cacheCurrentSession +
+        // dispatch(newSession()) 同步执行让 UI 立即响应，LLM 标题生成和
+        // 写盘在后台进行。不 await 避免 listener 回调阻塞。
+        void dispatch(
           saveCurrentSession({
             openNewSession: true,
-            generateTitle: true,
           }),
         );
       }
@@ -91,10 +90,10 @@ const Layout = () => {
           }),
         );
       } else {
-        await dispatch(
+        // fire-and-forget：同 newSession listener
+        void dispatch(
           saveCurrentSession({
             openNewSession: true,
-            generateTitle: true,
           }),
         );
       }
@@ -203,6 +202,7 @@ const Layout = () => {
             style={{
               scrollbarGutter: "stable both-edges",
               minHeight: "100%",
+              minWidth: 0,
               display: "grid",
               gridTemplateRows: "1fr auto",
             }}

@@ -1,6 +1,11 @@
+import { Editor } from "@tiptap/core";
+import Document from "@tiptap/extension-document";
+import Paragraph from "@tiptap/extension-paragraph";
+import Text from "@tiptap/extension-text";
 import { JSONContent } from "@tiptap/react";
 import { ContextItemWithId } from "core";
 import { expect, test, vi } from "vitest";
+import { parseClipboardText } from "./editorConfig";
 import { processEditorContent } from "./processEditorContent";
 
 describe("processEditorContent", () => {
@@ -532,5 +537,235 @@ describe("processEditorContent", () => {
     );
 
     warnSpy.mockRestore();
+  });
+});
+
+describe("paste with empty lines", () => {
+  // 构建一个 minimal TipTap editor 用于测试 parseClipboardText
+  function createTestEditor() {
+    const editor = new Editor({
+      extensions: [Document, Paragraph, Text],
+      content: "",
+    });
+    return editor;
+  }
+
+  test("ProseMirror default split would lose empty lines", () => {
+    // 验证 ProseMirror 默认的 split 逻辑合并连续换行, 空行丢失
+    const text = "第一行\n\n第三行";
+    const defaultSplit = text.split(/(?:\r\n?|\n)+/);
+    expect(defaultSplit).toEqual(["第一行", "第三行"]);
+  });
+
+  test("parseClipboardText preserves empty lines as empty paragraphs", () => {
+    const editor = createTestEditor();
+    const view = editor.view;
+    const $context = view.state.doc.resolve(0);
+
+    const text = "第一行\n\n第三行";
+    const slice = parseClipboardText(text, $context, view);
+    const json = slice.content.toJSON();
+
+    // 应该产生 3 个段落: [第一行, 空段落, 第三行]
+    expect(json).toEqual([
+      { type: "paragraph", content: [{ type: "text", text: "第一行" }] },
+      { type: "paragraph" },
+      { type: "paragraph", content: [{ type: "text", text: "第三行" }] },
+    ]);
+
+    editor.destroy();
+  });
+
+  test("parseClipboardText + processEditorContent preserves empty lines end-to-end", () => {
+    const editor = createTestEditor();
+    const view = editor.view;
+    const $context = view.state.doc.resolve(0);
+
+    // 模拟从 browser.md 复制的含空行文本
+    const clipboardText =
+      "我想重构脚本来统一处理\n最好能区分3种不同的客户端状态\n\n目标是:\n\n1. 根据 BROWSER_MODEL_METADATA";
+
+    // 1. 粘贴: parseClipboardText 产生 Slice
+    const slice = parseClipboardText(clipboardText, $context, view);
+
+    // 2. 将 Slice 插入 editor
+    view.dispatch(view.state.tr.replaceSelection(slice));
+
+    // 3. 获取 editor JSON
+    const editorState = editor.getJSON();
+
+    // 4. 调用 processEditorContent
+    const result = processEditorContent(editorState);
+
+    // 5. 验证输出包含空行 (\n\n)
+    expect(result.parts).toHaveLength(1);
+    expect(result.parts[0]).toEqual({
+      type: "text",
+      text:
+        "我想重构脚本来统一处理\n" +
+        "最好能区分3种不同的客户端状态\n" +
+        "\n" +
+        "目标是:\n" +
+        "\n" +
+        "1. 根据 BROWSER_MODEL_METADATA",
+    });
+
+    editor.destroy();
+  });
+
+  test("multiple consecutive empty lines are preserved", () => {
+    const editor = createTestEditor();
+    const view = editor.view;
+    const $context = view.state.doc.resolve(0);
+
+    // 3 个连续空行
+    const text = "A\n\n\n\nD";
+    const slice = parseClipboardText(text, $context, view);
+    const json = slice.content.toJSON();
+
+    // 应该产生 5 个段落: [A, 空, 空, 空, D]
+    expect(json).toEqual([
+      { type: "paragraph", content: [{ type: "text", text: "A" }] },
+      { type: "paragraph" },
+      { type: "paragraph" },
+      { type: "paragraph" },
+      { type: "paragraph", content: [{ type: "text", text: "D" }] },
+    ]);
+
+    // 插入并处理
+    view.dispatch(view.state.tr.replaceSelection(slice));
+    const result = processEditorContent(editor.getJSON());
+
+    // A\n\n\n\nD (4 个 \n 分隔 5 行, 其中 3 行为空)
+    expect(result.parts[0]).toEqual({
+      type: "text",
+      text: "A\n\n\n\nD",
+    });
+
+    editor.destroy();
+  });
+
+  test("clipboardTextSerializer with \\n separator preserves empty lines", () => {
+    // 验证覆盖后的 clipboardTextSerializer (用 \n 作段落分隔符):
+    // <p>A</p><p></p><p>B</p> (1 个空行) 序列化为 "A\n\nB" (仍是 1 个空行)
+    // 对比 ProseMirror 默认的 \n\n 分隔符会产生 "A\n\n\n\nB" (3 个空行, 翻倍)
+    const editor = createTestEditor();
+    const view = editor.view;
+
+    // 插入 "A\n\nB" (1 个空行 = 3 个段落)
+    const slice = parseClipboardText("A\n\nB", view.state.doc.resolve(0), view);
+    view.dispatch(view.state.tr.replaceSelection(slice));
+
+    // 选中整个文档
+    const { state } = view;
+    const TextSelection = require("@tiptap/pm/state").TextSelection;
+    view.dispatch(
+      state.tr.setSelection(
+        new TextSelection(
+          state.doc.resolve(0),
+          state.doc.resolve(state.doc.content.size),
+        ),
+      ),
+    );
+
+    // 模拟 clipboardTextSerializer: textBetween(0, size, "\n")
+    const content = view.state.selection.content().content;
+    const text = content.textBetween(0, content.size, "\n");
+
+    // \n 分隔符: <p>A</p><p></p><p>B</p> → "A\n\nB" (1 个空行, 与外部源一致)
+    expect(text).toBe("A\n\nB");
+
+    editor.destroy();
+  });
+
+  test("internal copy-paste round trip preserves empty lines (no tripling)", () => {
+    // 端到端验证: 从 TipTap 复制 "A\n\nB" (1 空行) 再粘贴回来, 空行不应翻倍。
+    // 修复方案: clipboardTextSerializer 用 \n 分隔, handlePaste 用 parseClipboardText
+    // 按 \n 分割, 两者约定一致, 无需检测来源。
+    const editor = createTestEditor();
+    const view = editor.view;
+
+    // 1. 插入初始内容 "A\n\nB" (1 个空行)
+    const slice = parseClipboardText("A\n\nB", view.state.doc.resolve(0), view);
+    view.dispatch(view.state.tr.replaceSelection(slice));
+
+    // 2. 全选并用 clipboardTextSerializer (\n 分隔) 生成 text/plain
+    const { state } = view;
+    const TextSelection = require("@tiptap/pm/state").TextSelection;
+    view.dispatch(
+      state.tr.setSelection(
+        new TextSelection(
+          state.doc.resolve(0),
+          state.doc.resolve(state.doc.content.size),
+        ),
+      ),
+    );
+    const content = view.state.selection.content().content;
+    const copiedText = content.textBetween(0, content.size, "\n");
+
+    // 3. 验证: text/plain 是 "A\n\nB" (1 个空行), 不是 "A\n\n\n\nB" (3 个空行)
+    expect(copiedText).toBe("A\n\nB");
+
+    // 4. 模拟粘贴: handlePaste 读取 text/plain, 用 parseClipboardText 解析
+    view.dispatch(view.state.tr.deleteSelection());
+    const pastedSlice = parseClipboardText(
+      copiedText,
+      view.state.selection.$from,
+      view,
+    );
+    view.dispatch(view.state.tr.replaceSelection(pastedSlice));
+
+    // 5. 验证结果: 仍然只有 1 个空行, 没有翻倍
+    const result = processEditorContent(editor.getJSON());
+    expect(result.parts[0]).toEqual({
+      type: "text",
+      text: "A\n\nB",
+    });
+
+    editor.destroy();
+  });
+
+  test("multiple round trips do not amplify empty lines", () => {
+    // 验证多次复制粘贴不会累积空行 (之前的 bug: 1→3→7→15)
+    const editor = createTestEditor();
+    const view = editor.view;
+    const TextSelection = require("@tiptap/pm/state").TextSelection;
+
+    // 初始: 1 个空行
+    let slice = parseClipboardText("A\n\nB", view.state.doc.resolve(0), view);
+    view.dispatch(view.state.tr.replaceSelection(slice));
+
+    // 模拟 3 次复制粘贴循环
+    for (let i = 0; i < 3; i++) {
+      // 全选
+      view.dispatch(
+        view.state.tr.setSelection(
+          new TextSelection(
+            view.state.doc.resolve(0),
+            view.state.doc.resolve(view.state.doc.content.size),
+          ),
+        ),
+      );
+      // 复制 (clipboardTextSerializer 用 \n)
+      const content = view.state.selection.content().content;
+      const copiedText = content.textBetween(0, content.size, "\n");
+      // 粘贴 (parseClipboardText 按 \n 分割)
+      view.dispatch(view.state.tr.deleteSelection());
+      const pastedSlice = parseClipboardText(
+        copiedText,
+        view.state.selection.$from,
+        view,
+      );
+      view.dispatch(view.state.tr.replaceSelection(pastedSlice));
+    }
+
+    // 3 次循环后仍然是 1 个空行
+    const result = processEditorContent(editor.getJSON());
+    expect(result.parts[0]).toEqual({
+      type: "text",
+      text: "A\n\nB",
+    });
+
+    editor.destroy();
   });
 });

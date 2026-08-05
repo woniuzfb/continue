@@ -35,6 +35,19 @@ export type ToIdeFromWebviewOrCoreProtocol = {
   fileExists: [{ filepath: string }, boolean];
   readFile: [{ filepath: string }, string];
   getProblems: [{ filepath: string }, Problem[]];
+  // Opens the IDE's native file picker and returns selected absolute paths.
+  // `selectFolders` flips the dialog into folder-selection mode.
+  showOpenDialog: [
+    {
+      selectFiles?: boolean;
+      selectFolders?: boolean;
+      canSelectMany?: boolean;
+      title?: string;
+      defaultUri?: string;
+      filters?: Record<string, string[]>;
+    },
+    string[],
+  ];
   getOpenFiles: [undefined, string[]];
   getCurrentFile: [
     undefined,

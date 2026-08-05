@@ -179,3 +179,12 @@ keys
 .copy-status
 .copy-log
 
+.workbuddy/
+
+*_Report.md
+
+*_Review.md
+
+bugs/
+
+patches/

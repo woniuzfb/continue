@@ -1,7 +1,10 @@
 import {
   AtSymbolIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   LightBulbIcon as LightBulbIconOutline,
   PhotoIcon,
+  PlusIcon,
 } from "@heroicons/react/24/outline";
 import { LightBulbIcon as LightBulbIconSolid } from "@heroicons/react/24/solid";
 import { InputModifiers } from "core";
@@ -30,6 +33,7 @@ export interface ToolbarOptions {
   hideUseCodebase?: boolean;
   hideImageUpload?: boolean;
   hideAddContext?: boolean;
+  hideUploadFile?: boolean;
   enterText?: string;
   hideSelectModel?: boolean;
 }
@@ -37,6 +41,7 @@ export interface ToolbarOptions {
 interface InputToolbarProps {
   onEnter?: (modifiers: InputModifiers) => void;
   onAddContextItem?: () => void;
+  onUploadFile?: () => void;
   onClick?: () => void;
   onImageFileSelected?: (file: File) => void;
   hidden?: boolean;
@@ -44,6 +49,12 @@ interface InputToolbarProps {
   toolbarOptions?: ToolbarOptions;
   disabled?: boolean;
   isMainInput?: boolean;
+  /** Extra content rendered inline at the end of the left toolbar button group. */
+  leftExtra?: React.ReactNode;
+  /** Whether the editor content area is collapsed to a minimal height. */
+  isEditorCollapsed?: boolean;
+  /** Toggle the collapsed state of the editor content area. */
+  onToggleCollapse?: () => void;
 }
 
 function InputToolbar(props: InputToolbarProps) {
@@ -135,6 +146,13 @@ function InputToolbar(props: InputToolbarProps) {
                 </HoverItem>
               </ToolTip>
             )}
+            {props.toolbarOptions?.hideUploadFile || (
+              <ToolTip place="top" content="Upload File">
+                <HoverItem onClick={props.onUploadFile}>
+                  <PlusIcon className="h-3 w-3 hover:brightness-125" />
+                </HoverItem>
+              </ToolTip>
+            )}
             {supportsReasoning && (
               <HoverItem
                 onClick={() => {
@@ -166,6 +184,7 @@ function InputToolbar(props: InputToolbarProps) {
               </HoverItem>
             )}
           </div>
+          {props.leftExtra}
         </div>
 
         <div
@@ -174,6 +193,27 @@ function InputToolbar(props: InputToolbarProps) {
             fontSize: tinyFont,
           }}
         >
+          {props.isMainInput && props.onToggleCollapse && (
+            <ToolTip
+              place="top"
+              content={
+                props.isEditorCollapsed ? "Expand editor" : "Collapse editor"
+              }
+            >
+              <HoverItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onToggleCollapse?.();
+                }}
+              >
+                {props.isEditorCollapsed ? (
+                  <ChevronUpIcon className="h-3 w-3 hover:brightness-125" />
+                ) : (
+                  <ChevronDownIcon className="h-3 w-3 hover:brightness-125" />
+                )}
+              </HoverItem>
+            </ToolTip>
+          )}
           {!isInEdit && <ContextStatus />}
           {!props.toolbarOptions?.hideUseCodebase && !isInEdit && (
             <div className="hidden transition-colors duration-200 hover:underline md:flex">
@@ -256,6 +296,7 @@ function shallowToolbarOptionsEqual(a?: ToolbarOptions, b?: ToolbarOptions) {
   return (
     a.hideAddContext === b.hideAddContext &&
     a.hideImageUpload === b.hideImageUpload &&
+    a.hideUploadFile === b.hideUploadFile &&
     a.hideUseCodebase === b.hideUseCodebase &&
     a.hideSelectModel === b.hideSelectModel &&
     a.enterText === b.enterText
@@ -269,5 +310,8 @@ export default memo(
     prev.disabled === next.disabled &&
     prev.isMainInput === next.isMainInput &&
     prev.activeKey === next.activeKey &&
+    prev.leftExtra === next.leftExtra &&
+    prev.isEditorCollapsed === next.isEditorCollapsed &&
+    prev.onToggleCollapse === next.onToggleCollapse &&
     shallowToolbarOptionsEqual(prev.toolbarOptions, next.toolbarOptions),
 );

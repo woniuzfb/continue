@@ -90,11 +90,27 @@ async function callToolFromUri(
         throw new Error(`Invalid MCP tool URI: ${uri}`);
       }
       const [mcpId, toolName] = decoded;
-      const client = MCPManagerSingleton.getInstance().getConnection(mcpId);
+      const manager = MCPManagerSingleton.getInstance();
+      const client = manager.getConnection(mcpId);
 
       if (!client) {
         throw new Error("MCP connection not found");
       }
+
+      // Ensure MCP server is connected; try reload once if not.
+      // silent: avoid triggering reloadConfig, which would re-run
+      // rectifySelectedModelsFromGlobalContext and potentially switch
+      // the user's selected chat model mid-conversation.
+      if (client.status === "not-connected" || client.status === "error") {
+        try {
+          await manager.refreshConnection(mcpId, { silent: true });
+        } catch (reconnectError) {
+          throw new Error(
+            `Failed to reconnect to MCP server "${client.options.name}": ${reconnectError instanceof Error ? reconnectError.message : String(reconnectError)}`,
+          );
+        }
+      }
+
       const coercedArgs = coerceArgsToSchema(
         args,
         extras.tool?.function?.parameters,

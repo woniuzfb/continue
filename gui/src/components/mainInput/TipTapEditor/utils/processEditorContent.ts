@@ -68,13 +68,11 @@ export function processEditorContent(editorState: JSONContent) {
 
         contextRequests.push(...ctxItems);
 
-        if (text) {
-          // Merge with previous text part if possible
-          if (parts[parts.length - 1]?.type === "text") {
-            (parts[parts.length - 1] as TextMessagePart).text += "\n" + text;
-          } else {
-            parts.push({ type: "text", text });
-          }
+        // 空段落也要贡献 \n 以保留空行,但避免在开头或图片后产生空文本 part
+        if (parts[parts.length - 1]?.type === "text") {
+          (parts[parts.length - 1] as TextMessagePart).text += "\n" + text;
+        } else if (text) {
+          parts.push({ type: "text", text });
         }
         break;
       case CodeBlock.name:

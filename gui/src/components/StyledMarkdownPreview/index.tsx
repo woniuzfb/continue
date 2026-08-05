@@ -66,11 +66,12 @@ const StyledMarkdown = styled.div<{
     background-color: ${vscEditorBackground};
     border-radius: ${defaultBorderRadius};
 
-    max-width: calc(100vw - 24px);
-    overflow-x: scroll;
+    max-width: 100%;
+    overflow-x: auto;
     overflow-y: hidden;
 
     padding: 8px;
+    box-sizing: border-box;
   }
 
   code {
@@ -222,7 +223,24 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
   const pastFileInfoRef = useUpdatingRef(pastFileInfo);
   const itemIndexRef = useUpdatingRef(props.itemIndex);
 
+  const uiConfig = useAppSelector(selectUIConfig);
+  const renderInlineLatex = uiConfig?.renderInlineLatex ?? false;
+  const codeWrapState = uiConfig?.codeWrap ? "pre-wrap" : "pre";
+
   const codeblockStreamIds = useRef<string[]>([]);
+
+  // When inline LaTeX is disabled, replace single $ delimiters with
+  // fullwidth dollar signs (＄). They look identical but remark-math
+  // won't parse them, so the text is displayed as-is without KaTeX.
+  const preprocessedSource = useMemo(() => {
+    let source = fixDoubleDollarNewLineLatex(
+      patchNestedMarkdown(props.source ?? ""),
+    );
+    if (!renderInlineLatex) {
+      source = source.replace(/(?<!\$)\$(.+?)\$(?!\$)/g, "＄$1＄");
+    }
+    return source;
+  }, [props.source, renderInlineLatex]);
 
   const [reactContent, setMarkdownSource] = useRemark({
     remarkPlugins: [
@@ -230,7 +248,7 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
       [
         remarkMath,
         {
-          singleDollarTextMath: false,
+          singleDollarTextMath: true,
         },
       ],
       () => (tree: any) => {
@@ -372,14 +390,8 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
   });
 
   useEffect(() => {
-    setMarkdownSource(
-      // some patches to source markdown are applied here:
-      fixDoubleDollarNewLineLatex(patchNestedMarkdown(props.source ?? "")),
-    );
-  }, [props.source, allSymbols]);
-
-  const uiConfig = useAppSelector(selectUIConfig);
-  const codeWrapState = uiConfig?.codeWrap ? "pre-wrap" : "pre";
+    setMarkdownSource(preprocessedSource);
+  }, [preprocessedSource]);
 
   return (
     <StyledMarkdown

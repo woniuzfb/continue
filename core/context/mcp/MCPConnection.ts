@@ -123,17 +123,39 @@ class MCPConnection {
     if (this.status === "disabled") {
       return;
     }
-    if (!forceRefresh) {
-      // Already connected
-      if (this.status === "connected") {
-        return;
-      }
+    // Connection is already in progress; wait for it to complete.
+    // After waiting, if another caller already connected, we're done —
+    // even if forceRefresh was requested, we don't re-destroy it.
+    if (this.connectionPromise) {
+      await this.connectionPromise;
+    }
+    if (this.status === "connected") {
+      return;
+    }
 
-      // Connection is already in progress; wait for it to complete
-      if (this.connectionPromise) {
-        await this.connectionPromise;
-        return;
+    // When force-refreshing, replace client and transport entirely.
+    // The MCP SDK Client cannot reconnect after close() fails (e.g. SSE
+    // server crashed), so we must create a fresh Client instance.
+    if (forceRefresh) {
+      try {
+        await this.client.close();
+      } catch {
+        // Ignore errors from closing an already-closed client
       }
+      try {
+        await this.transport.close();
+      } catch {
+        // Ignore errors from closing an already-closed transport
+      }
+      this.client = new Client(
+        {
+          name: "continue-client",
+          version: "1.0.0",
+        },
+        {
+          capabilities: {},
+        },
+      );
     }
 
     this.status = "connecting";
@@ -356,6 +378,12 @@ Org-level secrets can only be used for MCP by Background Agents (https://docs.co
                 }
               }
 
+              this.transport.onclose = () => {
+                this.status = "not-connected";
+              };
+              this.transport.onerror = () => {
+                this.status = "error";
+              };
               this.status = "connected";
             })(),
           ]);
