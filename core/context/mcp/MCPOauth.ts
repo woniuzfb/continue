@@ -11,7 +11,6 @@ import {
 import { IDE } from "../..";
 
 import http from "http";
-import url from "url";
 import { v4 as uuidv4 } from "uuid";
 import { GlobalContext, GlobalContextType } from "../../util/GlobalContext";
 
@@ -37,13 +36,16 @@ const createServerForOAuth = () =>
         throw new Error("no url found");
       }
 
-      const parsedUrl = url.parse(req.url, true);
-      if (!parsedUrl.query["code"]) {
+      // WHATWG URL API (url.parse is deprecated: DEP0169). req.url is a
+      // path+query string here (e.g. "/callback?code=abc&state=xyz"); the
+      // base is only used to make it absolute and is never sent anywhere.
+      const parsedUrl = new URL(req.url, "http://localhost");
+      const code = parsedUrl.searchParams.get("code");
+      if (!code) {
         throw new Error("no query params found");
       }
 
-      const code = parsedUrl.query["code"] as string;
-      const state = parsedUrl.query["state"] as string | undefined;
+      const state = parsedUrl.searchParams.get("state") ?? undefined;
 
       void handleMCPOauthCode(code, state);
 
