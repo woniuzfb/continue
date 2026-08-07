@@ -605,4 +605,49 @@ describe("mergeUnrolledAssistants", () => {
       "Simple rule 2", // From base (only non-duplicate left)
     ]);
   });
+
+  it("should merge experimental key-by-key with incoming overriding base", () => {
+    const base: AssistantUnrolled = {
+      name: "Base Assistant",
+      version: "1.0.0",
+      experimental: {
+        readResponseTTS: true,
+        useCurrentFileAsContext: false,
+      },
+    };
+
+    const incoming: AssistantUnrolled = {
+      name: "Incoming Assistant",
+      version: "1.1.0",
+      experimental: {
+        // Overrides base key
+        readResponseTTS: false,
+        // New key from incoming — must NOT be dropped by base's block
+        lazyLoadHistory: true,
+      },
+    };
+
+    const result = mergeUnrolledAssistants(base, incoming);
+
+    expect(result.experimental).toEqual({
+      readResponseTTS: false, // incoming wins
+      useCurrentFileAsContext: false, // preserved from base
+      lazyLoadHistory: true, // new from incoming
+    });
+  });
+
+  it("should keep experimental from base when incoming has none", () => {
+    const base: AssistantUnrolled = {
+      name: "Base Assistant",
+      version: "1.0.0",
+      experimental: { readResponseTTS: true },
+    };
+    const incoming: AssistantUnrolled = {
+      name: "Incoming Assistant",
+      version: "1.1.0",
+    };
+
+    const result = mergeUnrolledAssistants(base, incoming);
+    expect(result.experimental).toEqual({ readResponseTTS: true });
+  });
 });

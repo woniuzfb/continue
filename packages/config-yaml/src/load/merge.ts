@@ -31,6 +31,13 @@ export function mergeUnrolledAssistants(
     ...incoming,
     ...current,
     env: { ...current.env, ...incoming.env },
+    // Like env, `experimental` is a map of independent flags, so merge it
+    // key-by-key (incoming keys win, base keys are preserved) instead of
+    // letting the scalar spread drop the incoming block entirely.
+    experimental: {
+      ...current.experimental,
+      ...incoming.experimental,
+    },
     requestOptions: mergeConfigYamlRequestOptions(
       current.requestOptions,
       incoming.requestOptions,
