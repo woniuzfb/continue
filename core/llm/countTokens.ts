@@ -238,6 +238,31 @@ function countChatMessageTokens(
 }
 
 /**
+ * Sum the FULL message token counts (content + wrappers, via
+ * countChatMessageTokens) of `tool`-role messages whose count exceeds
+ * `minTokens`. Shared by compileChatMessages (pruning budget / metrics) and
+ * BaseLLM._countToolOutputTokens (recorded prompt token usage) so both sides
+ * agree on exactly which tool outputs are treated as free and by how much.
+ */
+export function countLargeToolOutputTokens(
+  messages: ChatMessage[],
+  modelName: string,
+  minTokens: number,
+): number {
+  let total = 0;
+  for (const msg of messages) {
+    if (msg.role !== "tool") {
+      continue;
+    }
+    const tokens = countChatMessageTokens(modelName, msg);
+    if (tokens > minTokens) {
+      total += tokens;
+    }
+  }
+  return total;
+}
+
+/**
  * Extracts and validates the tool call sequence from the end of a message array.
  * Tool sequences consist of: [assistant_with_tool_calls, tool_response_1, tool_response_2, ...]
  * or just a single user message.
@@ -447,6 +472,7 @@ function compileChatMessages({
   supportsImages,
   tools,
   excludeToolOutputsFromTokenCount,
+  excludeToolOutputsFromTokenCountMinTokens,
 }: {
   modelName: string;
   msgs: ChatMessage[];
@@ -464,17 +490,33 @@ function compileChatMessages({
    * cache tool outputs), so large read_file/MCP results don't evict history.
    */
   excludeToolOutputsFromTokenCount?: boolean;
+  /**
+   * Minimum token count for a single `tool`-role message to be treated as free
+   * (0) when `excludeToolOutputsFromTokenCount` is true. Tool outputs smaller
+   * than this threshold are counted normally, so only large tool outputs (e.g.
+   * big `read_file` results) are excluded. Defaults to 6000.
+   */
+  excludeToolOutputsFromTokenCountMinTokens?: number;
 }): CompiledMessagesResult {
   let didPrune = false;
 
   // Count a message toward the token budget/metrics, treating tool outputs as
-  // free when the caller opted in. Wrapper tokens (base/extra/toolCallId) are
-  // also dropped for tool messages here; they are negligible next to the tool
-  // output payload and keeping the rule "a tool message costs 0" simple.
-  const countMsgForBudget = (msg: ChatMessage): number =>
-    excludeToolOutputsFromTokenCount && msg.role === "tool"
-      ? 0
-      : countChatMessageTokens(modelName, msg);
+  // free when the caller opted in AND the single-message token count exceeds
+  // the configured threshold. Wrapper tokens (base/extra/toolCallId) are also
+  // dropped for excluded tool messages; they are negligible next to the tool
+  // output payload and keeping the rule "a large tool message costs 0" simple.
+  const minTokens = excludeToolOutputsFromTokenCountMinTokens ?? 6000;
+  const countMsgForBudget = (msg: ChatMessage): number => {
+    const tokens = countChatMessageTokens(modelName, msg);
+    if (
+      excludeToolOutputsFromTokenCount &&
+      msg.role === "tool" &&
+      tokens > minTokens
+    ) {
+      return 0;
+    }
+    return tokens;
+  };
 
   let msgsCopy: ChatMessage[] = msgs.map((m) => ({ ...m }));
 

@@ -56,6 +56,7 @@ import {
 } from "./constants.js";
 import {
   compileChatMessages,
+  countLargeToolOutputTokens,
   countTokens,
   pruneRawPromptFromTop,
 } from "./countTokens.js";
@@ -204,6 +205,14 @@ export abstract class BaseLLM implements ILLM {
    */
   excludeToolOutputsFromTokenCount?: boolean;
 
+  /**
+   * Minimum token count for a single `tool`-role message to be excluded from
+   * token-usage accounting when `excludeToolOutputsFromTokenCount` is true.
+   * Tool outputs smaller than this threshold are counted normally. Defaults to
+   * 6000.
+   */
+  excludeToolOutputsFromTokenCountMinTokens?: number;
+
   lastRequestId: string | undefined;
 
   private _llmOptions: LLMOptions;
@@ -309,6 +318,8 @@ export abstract class BaseLLM implements ILLM {
     this.toolOverrides = options.toolOverrides;
     this.excludeToolOutputsFromTokenCount =
       options.excludeToolOutputsFromTokenCount;
+    this.excludeToolOutputsFromTokenCountMinTokens =
+      options.excludeToolOutputsFromTokenCountMinTokens;
   }
 
   get contextLength() {
@@ -449,24 +460,25 @@ export abstract class BaseLLM implements ILLM {
   }
 
   /**
-   * Sum the token counts of all `tool`-role messages in the given list.
-   * Used to optionally exclude tool-call outputs (e.g. MCP `read_file`
-   * results) from the recorded prompt token usage.
+   * Sum the token counts of `tool`-role messages in the given list whose
+   * content exceeds `minTokens`, used to optionally exclude (large) tool-call
+   * outputs (e.g. MCP `read_file` results) from the recorded prompt token
+   * usage. Tool outputs at or below `minTokens` are counted normally.
    */
-  private _countToolOutputTokens(messages: ChatMessage[]): number {
-    let total = 0;
-    for (const msg of messages) {
-      if (msg.role === "tool" && msg.content) {
-        // `content` may be a string or a MessagePart[]; normalize to string
-        // before counting so we never pass a non-string to the tokenizer.
-        const content =
-          typeof msg.content === "string"
-            ? msg.content
-            : renderChatMessage(msg);
-        total += this.countTokens(content);
-      }
-    }
-    return total;
+  private _countToolOutputTokens(
+    messages: ChatMessage[],
+    minTokens: number = 6000,
+    // Same tokenizer key as the compileChatMessages call for this request,
+    // so the threshold decision and excluded amount are exactly consistent
+    // with the pruning budget.
+    modelName: string = this.model,
+  ): number {
+    // Delegate to the shared helper used by compileChatMessages so a tool
+    // message is "free" iff its FULL message token count (content + wrappers)
+    // exceeds minTokens. Counting only content here would disagree with the
+    // pruning budget for outputs in the [minTokens - wrappers, minTokens]
+    // band.
+    return countLargeToolOutputTokens(messages, modelName, minTokens);
   }
 
   private async parseError(resp: any): Promise<Error> {
@@ -1028,6 +1040,8 @@ export abstract class BaseLLM implements ILLM {
       supportsImages: this.supportsImages(),
       tools: options.tools,
       excludeToolOutputsFromTokenCount: this.excludeToolOutputsFromTokenCount,
+      excludeToolOutputsFromTokenCountMinTokens:
+        this.excludeToolOutputsFromTokenCountMinTokens,
     });
   }
 
@@ -1209,6 +1223,8 @@ export abstract class BaseLLM implements ILLM {
         supportsImages: this.supportsImages(),
         tools: optionsWithOverrides.tools,
         excludeToolOutputsFromTokenCount: this.excludeToolOutputsFromTokenCount,
+        excludeToolOutputsFromTokenCountMinTokens:
+          this.excludeToolOutputsFromTokenCountMinTokens,
       });
 
       messages = compiledChatMessages;
@@ -1224,7 +1240,11 @@ export abstract class BaseLLM implements ILLM {
     // the recorded prompt token usage. The outputs are still sent to the model
     // — only the logged/displayed token consumption is adjusted.
     const tokensToExclude = this.excludeToolOutputsFromTokenCount
-      ? this._countToolOutputTokens(messages)
+      ? this._countToolOutputTokens(
+          messages,
+          this.excludeToolOutputsFromTokenCountMinTokens ?? 6000,
+          completionOptions.model,
+        )
       : 0;
 
     if (logEnabled) {

@@ -204,6 +204,13 @@ const baseModelFields = {
    * where you only care about the "real" conversation cost.
    */
   excludeToolOutputsFromTokenCount: z.boolean().optional(),
+  /**
+   * Minimum token count for a single `tool`-role message to be excluded from
+   * token-usage accounting when `excludeToolOutputsFromTokenCount` is true.
+   * Tool outputs smaller than this threshold are counted normally. Defaults to
+   * 6000. Only takes effect when `excludeToolOutputsFromTokenCount` is true.
+   */
+  excludeToolOutputsFromTokenCountMinTokens: z.number().optional(),
 };
 
 export const modelSchema = z.object({

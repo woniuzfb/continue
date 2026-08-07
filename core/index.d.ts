@@ -739,6 +739,16 @@ export interface LLMOptions {
    */
   excludeToolOutputsFromTokenCount?: boolean;
 
+  /**
+   * Minimum token count for a single `tool`-role message to be excluded from
+   * token-usage accounting when `excludeToolOutputsFromTokenCount` is true.
+   * Tool outputs smaller than this threshold are counted normally, so only
+   * large tool outputs (e.g. big `read_file` results) are treated as free.
+   * Defaults to 6000. Only takes effect when `excludeToolOutputsFromTokenCount`
+   * is true.
+   */
+  excludeToolOutputsFromTokenCountMinTokens?: number;
+
   /** Tool overrides for this model */
   toolOverrides?: ToolOverride[];
 }
@@ -1297,6 +1307,14 @@ export interface ModelDescription {
    * counted toward the recorded `promptTokens`.
    */
   excludeToolOutputsFromTokenCount?: boolean;
+
+  /**
+   * Minimum token count for a single `tool`-role message to be excluded from
+   * token-usage accounting when `excludeToolOutputsFromTokenCount` is true.
+   * Tool outputs smaller than this threshold are counted normally. Defaults to
+   * 6000. Only takes effect when `excludeToolOutputsFromTokenCount` is true.
+   */
+  excludeToolOutputsFromTokenCountMinTokens?: number;
 
   /** Tool overrides for this model */
   toolOverrides?: ToolOverride[];
