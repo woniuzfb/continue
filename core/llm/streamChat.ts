@@ -52,6 +52,15 @@ const ttsQueues = new Map<
 >();
 const ttsQueueRunning = new Map<string, boolean>();
 
+// System TTS never rejects the caller: playback errors are logged and
+// swallowed, so a failing `say`/`espeak` can never wedge a queue or produce
+// an unhandled rejection from the fire-and-forget call sites.
+function safeSystemTTS(text: string): Promise<void> {
+  return TTS.read(text).catch((e) => {
+    console.warn(`TTS playback error: ${e}`);
+  });
+}
+
 async function processTTSQueue(
   mcpId: string,
   manager: ReturnType<typeof MCPManagerSingleton.getInstance>,
@@ -59,68 +68,80 @@ async function processTTSQueue(
   if (ttsQueueRunning.get(mcpId)) return;
   ttsQueueRunning.set(mcpId, true);
 
-  const queue = ttsQueues.get(mcpId);
-  while (queue && queue.length > 0) {
-    const item = queue[0];
-
-    const connection = manager.getConnection(mcpId);
-    if (!connection) {
-      // Connection gone — dequeue everything
-      while (queue.length > 0) {
-        const skipped = queue.shift()!;
-        skipped.resolve();
-      }
-      break;
-    }
-
-    const doCall = async () =>
-      connection.client.callTool(
-        { name: item.toolName, arguments: { text: item.text } },
-        CallToolResultSchema,
-        { timeout: connection.options.timeout },
-      );
-
-    let ok = false;
-    // First attempt
-    try {
-      await doCall();
-      ok = true;
-    } catch {
-      // Call failed — try reconnecting once and retry.
-      // silent: avoid triggering reloadConfig, which would re-run
-      // rectifySelectedModelsFromGlobalContext and potentially switch
-      // the user's selected chat model.
+  try {
+    const queue = ttsQueues.get(mcpId);
+    while (queue && queue.length > 0) {
+      const item = queue[0];
       try {
-        await manager.refreshConnection(mcpId, { silent: true });
-      } catch {
-        // Reconnect itself failed
-      }
-      if (!ok) {
+        const connection = manager.getConnection(mcpId);
+        if (!connection) {
+          // Connection gone — dequeue everything
+          while (queue.length > 0) {
+            const skipped = queue.shift()!;
+            skipped.resolve();
+          }
+          break;
+        }
+
+        const doCall = async () =>
+          connection.client.callTool(
+            { name: item.toolName, arguments: { text: item.text } },
+            CallToolResultSchema,
+            { timeout: connection.options.timeout },
+          );
+
+        let ok = false;
+        // First attempt
         try {
           await doCall();
           ok = true;
         } catch {
-          // Retry also failed
+          // Call failed — try reconnecting once and retry.
+          // silent: avoid triggering reloadConfig, which would re-run
+          // rectifySelectedModelsFromGlobalContext and potentially switch
+          // the user's selected chat model.
+          try {
+            await manager.refreshConnection(mcpId, { silent: true });
+          } catch {
+            // Reconnect itself failed
+          }
+          try {
+            await doCall();
+            ok = true;
+          } catch {
+            // Retry also failed
+          }
         }
+
+        if (!ok) {
+          console.warn(
+            `MCP TTS server "${mcpId}" unavailable, falling back to system TTS`,
+          );
+          await safeSystemTTS(item.text);
+        }
+      } catch (e) {
+        // A single failed item must never wedge the queue: fall back to
+        // system TTS, resolve the item, and keep draining.
+        console.warn(`MCP TTS item failed for "${mcpId}":`, e);
+        try {
+          await safeSystemTTS(item.text);
+        } catch {
+          // Even the system TTS fallback failed — drop the item so the
+          // queue moves on instead of hanging forever.
+        }
+      } finally {
+        item.resolve();
+        queue.shift();
       }
     }
-
-    if (!ok) {
-      console.warn(
-        `MCP TTS server "${mcpId}" unavailable, falling back to system TTS`,
-      );
-      await TTS.read(item.text);
+  } finally {
+    ttsQueueRunning.set(mcpId, false);
+    const queue = ttsQueues.get(mcpId);
+    // If items arrived during the drain (between last shift() and clearing
+    // the flag), restart draining so nothing is left unspoken.
+    if (queue && queue.length > 0) {
+      void processTTSQueue(mcpId, manager);
     }
-
-    item.resolve();
-    queue.shift();
-  }
-
-  ttsQueueRunning.set(mcpId, false);
-  // If items arrived during the drain (between last shift() and clearing the
-  // flag), restart draining so nothing is left unspoken.
-  if (queue && queue.length > 0) {
-    void processTTSQueue(mcpId, manager);
   }
 }
 
@@ -138,7 +159,7 @@ async function readWithMCPTTS(
     console.warn(
       `MCP TTS server "${mcpId}" not found, falling back to system TTS`,
     );
-    await TTS.read(text);
+    await safeSystemTTS(text);
     return;
   }
 
@@ -323,7 +344,7 @@ export async function* llmStreamChat(
                   ttsServer.toolName,
                 );
               } else {
-                void TTS.read(sentenceToRead);
+                void safeSystemTTS(sentenceToRead);
               }
             }
           }
@@ -355,7 +376,7 @@ export async function* llmStreamChat(
               ttsServer.toolName,
             );
           } else {
-            void TTS.read(remainingText);
+            void safeSystemTTS(remainingText);
           }
         }
       }
@@ -383,7 +404,7 @@ export async function* llmStreamChat(
             ttsServer.toolName,
           );
         } else {
-          void TTS.read(completionText);
+          void safeSystemTTS(completionText);
         }
       }
 

@@ -70,10 +70,10 @@ export class TTS {
         return;
     }
 
-    void TTS.messenger.request("setTTSActive", true);
+    void TTS.messenger.request("setTTSActive", true).catch(() => {});
 
     TTS.handle?.once("exit", () => {
-      void TTS.messenger.request("setTTSActive", false);
+      void TTS.messenger.request("setTTSActive", false).catch(() => {});
     });
   }
 
