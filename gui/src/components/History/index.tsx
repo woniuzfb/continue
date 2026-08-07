@@ -34,6 +34,11 @@ export function History() {
   const ideMessenger = useContext(IdeMessengerContext);
 
   const [searchTerm, setSearchTerm] = useState("");
+  // sessionId -> snippet for sessions matched by CONTENT (not title)
+  const [contentMatches, setContentMatches] = useState<Record<string, string>>(
+    {},
+  );
+  const [isContentSearching, setIsContentSearching] = useState(false);
 
   const minisearch = useRef<MiniSearch>(
     new MiniSearch({
@@ -63,6 +68,38 @@ export function History() {
       console.log("error adding sessions to minisearch", e);
     }
   }, [allSessionMetadata]);
+
+  // Debounced full-text search over session CONTENT (core-side; session
+  // files are only readable there). Title matches stay instant via MiniSearch;
+  // content matches are merged into the list below with a snippet.
+  useEffect(() => {
+    const term = searchTerm.trim();
+    if (term.length < 2) {
+      setContentMatches({});
+      setIsContentSearching(false);
+      return;
+    }
+    setIsContentSearching(true);
+    const handle = setTimeout(async () => {
+      try {
+        const res = await ideMessenger.request("history/searchContent", {
+          query: term,
+        });
+        if (res.status === "success") {
+          setContentMatches(
+            Object.fromEntries(
+              res.content.map((r) => [r.sessionId, r.snippet]),
+            ),
+          );
+        }
+      } catch (e) {
+        console.error("Error searching session content", e);
+      } finally {
+        setIsContentSearching(false);
+      }
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [searchTerm, ideMessenger]);
 
   const platform = useMemo(() => getPlatform(), []);
 
@@ -106,14 +143,20 @@ export function History() {
 
     return allSessionMetadata
       .filter((session) => {
-        return searchTerm === "" || sessionIds.includes(session.sessionId);
+        if (searchTerm === "") {
+          return true;
+        }
+        return (
+          sessionIds.includes(session.sessionId) ||
+          contentMatches[session.sessionId] !== undefined
+        );
       })
       .sort(
         (a, b) =>
           parseDate(b.dateCreated).getTime() -
           parseDate(a.dateCreated).getTime(),
       );
-  }, [allSessionMetadata, searchTerm, minisearch]);
+  }, [allSessionMetadata, searchTerm, minisearch, contentMatches]);
 
   const sessionGroups = useMemo(() => {
     return groupSessionsByDate(filteredAndSortedSessions);
@@ -175,6 +218,8 @@ export function History() {
           <div className="m-3 text-center">
             {isSessionMetadataLoading ? (
               "Loading Sessions..."
+            ) : isContentSearching ? (
+              "Searching session content..."
             ) : (
               <>
                 No past sessions found. To start a new session, either click the
@@ -201,6 +246,7 @@ export function History() {
                     key={session.sessionId}
                     sessionMetadata={session}
                     index={sessionIndex}
+                    snippet={contentMatches[session.sessionId]}
                   />
                 ))}
               </Fragment>

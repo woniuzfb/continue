@@ -61,6 +61,12 @@ export interface ListHistoryOptions {
   workspaceDirectory?: string;
 }
 
+export interface HistorySearchResult {
+  sessionId: string;
+  title: string;
+  snippet: string;
+}
+
 export interface LoadPageHistoryRequest {
   id: string;
   // 从末尾算起的偏移：0 = 最新一轮，N = 跳过最新 N 条之后开始
@@ -94,6 +100,7 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   "history/delete": [{ id: string }, void];
   "history/load": [{ id: string }, Session];
   "history/loadPage": [LoadPageHistoryRequest, LoadPageHistoryResponse];
+  "history/searchContent": [{ query: string }, HistorySearchResult[]];
   "history/save": [Session, void];
   "history/share": [{ id: string; outputDir?: string }, void];
   "history/clear": [undefined, void];

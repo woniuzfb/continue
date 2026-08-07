@@ -22,6 +22,7 @@ import { createNewPromptFileV2 } from "./promptFiles/createNewPromptFile";
 import { callTool } from "./tools/callTool";
 import { ChatDescriber } from "./util/chatDescriber";
 import { compactConversation } from "./util/conversationCompaction";
+import { searchSessionContent } from "./util/historySearch";
 import { GlobalContext } from "./util/GlobalContext";
 import historyManager from "./util/history";
 import { editConfigFile, migrateV1DevDataFiles } from "./util/paths";
@@ -321,6 +322,10 @@ export class Core {
     on("history/loadPage", (msg) => {
       const { id, offset, limit } = msg.data;
       return historyManager.loadPage(id, offset, limit);
+    });
+
+    on("history/searchContent", (msg) => {
+      return searchSessionContent(msg.data.query);
     });
 
     on("history/save", async (msg) => {

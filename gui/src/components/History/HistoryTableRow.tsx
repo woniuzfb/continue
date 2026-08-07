@@ -26,9 +26,12 @@ const shareSessionSupported = isShareSessionSupported();
 export function HistoryTableRow({
   sessionMetadata,
   index,
+  snippet,
 }: {
   sessionMetadata: BaseSessionMetadata;
   index: number;
+  /** Match snippet from full-text content search (undefined = title match). */
+  snippet?: string;
 }) {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
@@ -145,6 +148,12 @@ export function HistoryTableRow({
                 })}
               </span> */}
         </div>
+
+        {snippet && (
+          <div className="text-description-muted line-clamp-2 break-all text-xs italic">
+            {snippet}
+          </div>
+        )}
       </td>
 
       {hovered && !editing && (
