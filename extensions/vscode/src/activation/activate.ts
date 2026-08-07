@@ -41,27 +41,33 @@ export async function activateExtension(context: vscode.ExtensionContext) {
   // Register config.yaml schema by removing old entries and adding new one (uri.fsPath changes with each version)
   const yamlMatcher = ".continue/**/*.yaml";
   const yamlConfig = vscode.workspace.getConfiguration("yaml");
-  const yamlSchemas = yamlConfig.get<object>("schemas", {});
 
-  const newPath = vscode.Uri.joinPath(
-    context.extension.extensionUri,
-    "config-yaml-schema.json",
-  ).toString();
+  // The `yaml` configuration namespace only exists when the Red Hat YAML
+  // extension is installed. Skip the write entirely when it is missing —
+  // otherwise every startup logs a scary (but handled) error to the
+  // Extension Host output for a purely cosmetic downgrade (no YAML schema
+  // validation).
+  const yamlExtension = vscode.extensions.getExtension("redhat.vscode-yaml");
+  if (yamlExtension) {
+    const yamlSchemas = yamlConfig.get<object>("schemas", {});
 
-  try {
-    await yamlConfig.update(
-      "schemas",
-      {
-        ...yamlSchemas,
-        [newPath]: [yamlMatcher],
-      },
-      vscode.ConfigurationTarget.Global,
-    );
-  } catch (error) {
-    console.error(
-      "Failed to register Continue config.yaml schema, most likely, YAML extension is not installed",
-      error,
-    );
+    const newPath = vscode.Uri.joinPath(
+      context.extension.extensionUri,
+      "config-yaml-schema.json",
+    ).toString();
+
+    try {
+      await yamlConfig.update(
+        "schemas",
+        {
+          ...yamlSchemas,
+          [newPath]: [yamlMatcher],
+        },
+        vscode.ConfigurationTarget.Global,
+      );
+    } catch (error) {
+      console.error("Failed to register Continue config.yaml schema", error);
+    }
   }
 
   const api = new VsCodeContinueApi(vscodeExtension);
