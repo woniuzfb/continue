@@ -12,6 +12,7 @@ import { useEditor } from "@tiptap/react";
 import { InputModifiers } from "core";
 import { modelSupportsImages } from "core/llm/autodetect";
 import { useRef } from "react";
+import { shouldUsePlainTextPaste } from "./pastePolicy";
 import { IIdeMessenger } from "../../../../context/IdeMessenger";
 import { useSubmenuContextProviders } from "../../../../context/SubmenuContextProviders";
 import { useInputHistory } from "../../../../hooks/useInputHistory";
@@ -428,15 +429,14 @@ export function createEditorConfig(options: {
       handlePaste: (view, event) => {
         const cd = event.clipboardData;
         if (!cd) return false;
-        // 有图片文件时让 Image 扩展的 paste 插件处理
-        const items = Array.from(cd.items || []);
-        if (
-          items.some((i) => i.kind === "file" && i.type.startsWith("image/"))
-        ) {
+        // Only take over the paste when the clipboard is plain text (or code
+        // wrapped in spans/divs). Genuinely rich HTML (links, bold, lists,
+        // tables, images) is left to ProseMirror's default handling so
+        // formatting survives — previously every text paste was flattened.
+        if (!shouldUsePlainTextPaste(cd)) {
           return false;
         }
         const text = cd.getData("text/plain");
-        if (!text) return false;
         const slice = parseClipboardText(
           text,
           view.state.selection.$from,
