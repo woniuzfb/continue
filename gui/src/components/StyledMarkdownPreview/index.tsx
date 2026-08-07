@@ -30,6 +30,7 @@ import { SyntaxHighlightedPre } from "./SyntaxHighlightedPre";
 import { isSymbolNotRif, matchCodeToSymbolOrFile } from "./utils";
 import { fixDoubleDollarNewLineLatex } from "./utils/fixDoubleDollarLatex";
 import { patchNestedMarkdown } from "./utils/patchNestedMarkdown";
+import { replaceSingleDollarOutsideCode } from "./utils/replaceSingleDollarOutsideCode";
 import { remarkTables } from "./utils/remarkTables";
 
 const StyledMarkdown = styled.div<{
@@ -232,12 +233,15 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
   // When inline LaTeX is disabled, replace single $ delimiters with
   // fullwidth dollar signs (＄). They look identical but remark-math
   // won't parse them, so the text is displayed as-is without KaTeX.
+  // The replacement skips code spans/fences: remark-math never parses math
+  // inside code nodes, so `$` in code must stay verbatim (replacing them
+  // corrupted displayed code, e.g. `echo $1 $2`).
   const preprocessedSource = useMemo(() => {
     let source = fixDoubleDollarNewLineLatex(
       patchNestedMarkdown(props.source ?? ""),
     );
     if (!renderInlineLatex) {
-      source = source.replace(/(?<!\$)\$(.+?)\$(?!\$)/g, "＄$1＄");
+      source = replaceSingleDollarOutsideCode(source);
     }
     return source;
   }, [props.source, renderInlineLatex]);
