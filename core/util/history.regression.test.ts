@@ -130,4 +130,61 @@ describe("HistoryManager truncated-history save (regression)", () => {
       .filter((f) => f.includes(`${sessionId}`) && f.includes(".tmp-"));
     expect(leftovers).toEqual([]);
   });
+
+  it("loadPage clamps offset beyond total instead of returning corrupt slices", async () => {
+    const sessionId = uuidv4();
+    await historyManager.save({
+      sessionId,
+      title: "page test",
+      workspaceDirectory: "ws",
+      history: [msg("user", "u0"), msg("assistant", "a0"), msg("user", "u1")],
+    });
+
+    // offset > total: a negative `end` would make slice() count from the end
+    // and return the WRONG items; it must return an empty page instead.
+    const beyond = historyManager.loadPage(sessionId, 10, 4);
+    expect(beyond.items).toHaveLength(0);
+    expect(beyond.hasMore).toBe(false);
+    expect(beyond.total).toBe(3);
+
+    // offset === total: also empty
+    const atEnd = historyManager.loadPage(sessionId, 3, 4);
+    expect(atEnd.items).toHaveLength(0);
+    expect(atEnd.hasMore).toBe(false);
+
+    // Normal page from the end still works
+    const page = historyManager.loadPage(sessionId, 0, 2);
+    expect(page.items.map((i) => i.message.content)).toEqual(["a0", "u1"]);
+    expect(page.hasMore).toBe(true);
+    expect(page.total).toBe(3);
+  });
+
+  it("delete waits for an in-flight save (per-session lock) instead of orphaning the file", async () => {
+    const sessionId = uuidv4();
+    await historyManager.save({
+      sessionId,
+      title: "lock test",
+      workspaceDirectory: "ws",
+      history: [msg("user", "u0")],
+    });
+
+    // Simulate an in-flight save holding the per-session lock.
+    const sessionFile = getSessionFilePath(sessionId);
+    const lockDir = `${sessionFile}.lock`;
+    fs.mkdirSync(lockDir);
+
+    const deletePromise = historyManager.delete(sessionId);
+    // Give the lock retry loop time to run while the lock is held.
+    await new Promise((r) => setTimeout(r, 150));
+    // The session file must still exist — delete is blocked on the lock.
+    expect(fs.existsSync(sessionFile)).toBe(true);
+
+    // The in-flight save finishes and releases the lock.
+    fs.rmdirSync(lockDir);
+    await deletePromise;
+
+    expect(fs.existsSync(sessionFile)).toBe(false);
+    const sessions = historyManager.list({});
+    expect(sessions.some((s) => s.sessionId === sessionId)).toBe(false);
+  });
 });

@@ -157,35 +157,44 @@ export class HistoryManager {
   }
 
   async delete(sessionId: string): Promise<void> {
-    // Delete a session
+    // 与 save() 一样先拿 per-session 锁：否则一个进行中的 save（持有锁、
+    // 正在原子 rename）可能与这里的 unlink 竞争，导致 save 的 rename 在
+    // unlink 之后重建文件 —— 留下“sessions.json 已无条目但文件还在”的孤儿。
+    // 锁顺序与 save() 一致（per-session → 全局），无死锁。
     const sessionFile = getSessionFilePath(sessionId);
-    if (!fs.existsSync(sessionFile)) {
-      throw new Error(`Session file ${sessionFile} does not exist`);
-    }
-    fs.unlinkSync(sessionFile);
-
-    // Read and update the sessions list（用全局锁串行化，避免与其它进程的
-    // save/delete 并发读改写 sessions.json 时互相覆盖元数据）。
-    const sessionsListFile = getSessionsListPath();
-    const listLock = await acquireSessionsListLock();
+    const lockDir = await acquireSessionLock(sessionFile);
     try {
-      const sessionsListRaw = fs.readFileSync(sessionsListFile, "utf-8");
-      let sessionsList =
-        safeParseArray<BaseSessionMetadata>(
-          sessionsListRaw,
-          "Error parsing sessions.json",
-        ) ?? [];
+      // Delete a session
+      if (!fs.existsSync(sessionFile)) {
+        throw new Error(`Session file ${sessionFile} does not exist`);
+      }
+      fs.unlinkSync(sessionFile);
 
-      sessionsList = sessionsList.filter(
-        (session) => session.sessionId !== sessionId,
-      );
+      // Read and update the sessions list（用全局锁串行化，避免与其它进程的
+      // save/delete 并发读改写 sessions.json 时互相覆盖元数据）。
+      const sessionsListFile = getSessionsListPath();
+      const listLock = await acquireSessionsListLock();
+      try {
+        const sessionsListRaw = fs.readFileSync(sessionsListFile, "utf-8");
+        let sessionsList =
+          safeParseArray<BaseSessionMetadata>(
+            sessionsListRaw,
+            "Error parsing sessions.json",
+          ) ?? [];
 
-      fs.writeFileSync(
-        sessionsListFile,
-        JSON.stringify(sessionsList, undefined, 2),
-      );
+        sessionsList = sessionsList.filter(
+          (session) => session.sessionId !== sessionId,
+        );
+
+        fs.writeFileSync(
+          sessionsListFile,
+          JSON.stringify(sessionsList, undefined, 2),
+        );
+      } finally {
+        await releaseSessionsListLock(listLock);
+      }
     } finally {
-      await releaseSessionsListLock(listLock);
+      await releaseSessionLock(lockDir);
     }
   }
 
@@ -238,9 +247,15 @@ export class HistoryManager {
   } {
     const session = this.load(sessionId);
     const total = session.history.length;
+    // Clamp offset/limit: a negative `end` would make slice() count from the
+    // end of the array and return the WRONG items (e.g. offset > total).
+    // Defensive — the GUI guards with hasMore, but callers should not be
+    // able to corrupt a page load.
+    const safeOffset = Math.min(Math.max(0, offset), total);
+    const safeLimit = Math.max(0, limit);
     // 从末尾算起：取 [total - offset - limit, total - offset)
-    const end = total - offset; // 不包含
-    const start = Math.max(0, end - limit); // 包含
+    const end = total - safeOffset; // 不包含
+    const start = Math.max(0, end - safeLimit); // 包含
     const items = session.history.slice(start, end);
     const hasMore = start > 0;
     return {
