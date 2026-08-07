@@ -125,12 +125,21 @@ class MCPConnection {
     }
     // Connection is already in progress; wait for it to complete.
     // After waiting, if another caller already connected, we're done —
-    // even if forceRefresh was requested, we don't re-destroy it.
+    // even a forceRefresh caller doesn't destroy a connection that another
+    // caller just established while we were waiting.
     if (this.connectionPromise) {
       await this.connectionPromise;
-    }
-    if (this.status === "connected") {
-      return;
+      if (this.status === "connected") {
+        return;
+      }
+    } else if (this.status === "connected") {
+      // Healthy and idle. A non-force caller is done here, but a
+      // forceRefresh (user-initiated Reload / re-auth) must actually
+      // rebuild the connection — otherwise the Reload button and
+      // removeAuthentication silently no-op on healthy servers.
+      if (!forceRefresh) {
+        return;
+      }
     }
 
     // When force-refreshing, replace client and transport entirely.
