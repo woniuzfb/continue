@@ -36,14 +36,15 @@ vi.mock("../../../llm/countTokens", () => {
 });
 
 // Snippet selection – configurable via constant return value
+let snippetsOverride: any[] = [];
 vi.mock("../filtering", () => ({
-  getSnippets: () => [],
+  getSnippets: () => snippetsOverride,
 }));
 
-// Snippet formatting
-const FORMATTED_SNIPPETS = "[FORMATTED_SNIPPETS]";
+// Snippet formatting – configurable via constant return value
+let formattedSnippetsOverride = "[FORMATTED_SNIPPETS]";
 vi.mock("../formatting", () => ({
-  formatSnippets: () => FORMATTED_SNIPPETS,
+  formatSnippets: () => formattedSnippetsOverride,
 }));
 
 // Stop tokens helper – we expose a variable so each test can override it
@@ -130,6 +131,8 @@ afterEach(() => {
   compileFnOverride = undefined;
   completionOptionsOverride = undefined;
   stopTokenReturn = ["<STOP>"];
+  snippetsOverride = [];
+  formattedSnippetsOverride = "[FORMATTED_SNIPPETS]";
   vi.restoreAllMocks();
 });
 
@@ -210,7 +213,9 @@ describe("compilePrefixSuffix vs snippet formatting", () => {
       helper,
     });
 
-    expect(compiledPrefix.startsWith(`${FORMATTED_SNIPPETS}\n`)).toBe(true);
+    expect(compiledPrefix.startsWith(`${formattedSnippetsOverride}\n`)).toBe(
+      true,
+    );
   });
 });
 
@@ -253,6 +258,38 @@ describe("renderPromptWithTokenLimit parity & pruning", () => {
     });
 
     expect(compiledPrefix.length).toBeLessThan(120);
+  });
+
+  it("regression: large snippets cannot push the final prompt over the limit", () => {
+    // 1 char = 1 token in this test setup. The upfront estimate only counts
+    // raw prefix/suffix + a fixed 50-token overhead, so a 100-token formatted
+    // snippet is invisible to it. Without the post-build fallback, the final
+    // prompt would exceed the limit (contextLength 120 - maxTokens 10 = 110).
+    const bigSnippetText = "S".repeat(100);
+    formattedSnippetsOverride = bigSnippetText;
+    snippetsOverride = [{ content: bigSnippetText }];
+
+    const helper = makeHelper({}); // raw prefix/suffix: 13 + 13 tokens
+
+    const llmStub = {
+      contextLength: 120,
+      completionOptions: { maxTokens: 10 },
+      model: "test-model",
+    } as any;
+
+    const { prompt, prefix: compiledPrefix } = renderPromptWithTokenLimit({
+      snippetPayload: emptySnippetPayload,
+      workspaceDirs: ["file:///workspace"],
+      helper,
+      llm: llmStub,
+    });
+
+    // Final rendered prompt must never exceed the limit
+    expect(prompt.length).toBeLessThanOrEqual(110);
+    // Snippet content is preserved (only prefix/suffix get pruned)
+    expect(compiledPrefix.includes(bigSnippetText)).toBe(true);
+    // And the raw prefix was actually pruned to make room
+    expect(compiledPrefix.includes("PRUNED_PREFIX")).toBe(false);
   });
 });
 

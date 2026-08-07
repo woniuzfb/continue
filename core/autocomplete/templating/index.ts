@@ -255,7 +255,12 @@ export function renderPromptWithTokenLimit({
     const suffixTokenCount = countTokens(suffix, helper.modelName);
     const totalContextTokens = prefixTokenCount + suffixTokenCount;
 
-    // Rough overhead estimate for template wrappers and snippets (typically 10-50 tokens)
+    // Rough overhead estimate for template wrappers (typically 10-50 tokens).
+    // This is intentionally conservative (most FIM templates add only ~5-20
+    // tokens): an over-estimate only prunes a few extra lines, while an
+    // under-estimate is caught by the post-build fallback below. Note this
+    // estimate does NOT include snippet content — that is also handled by the
+    // post-build fallback.
     const templateOverhead = 50;
     const estimatedTotal = totalContextTokens + templateOverhead;
 
@@ -277,7 +282,7 @@ export function renderPromptWithTokenLimit({
   }
 
   // Build the prompt once
-  const {
+  let {
     prompt,
     prefix: compiledPrefix,
     suffix: compiledSuffix,
@@ -291,6 +296,54 @@ export function renderPromptWithTokenLimit({
     workspaceDirs,
     reponame,
   );
+
+  // Hard guarantee fallback: the upfront estimate above only counts the raw
+  // prefix/suffix plus a rough template overhead — it cannot see the
+  // formatted snippet content (which can be large, and which string templates
+  // / compilePrefixSuffix embed into the prefix). So re-check the RENDERED
+  // prompt; if it still exceeds the limit, prune prefix/suffix proportionally
+  // and rebuild. This only costs an extra build when the estimate was wrong.
+  if (llm) {
+    const prune = pruneLength(llm, prompt);
+    if (prune > 0) {
+      const prefixTokenCount = countTokens(prefix, helper.modelName);
+      const suffixTokenCount = countTokens(suffix, helper.modelName);
+      const totalContextTokens = prefixTokenCount + suffixTokenCount;
+      if (totalContextTokens > 0) {
+        const tokensToDrop = prune;
+        const dropPrefix = Math.ceil(
+          tokensToDrop * (prefixTokenCount / totalContextTokens),
+        );
+        const dropSuffix = Math.ceil(tokensToDrop - dropPrefix);
+        const allowedPrefixTokens = Math.max(0, prefixTokenCount - dropPrefix);
+        const allowedSuffixTokens = Math.max(0, suffixTokenCount - dropSuffix);
+        prefix = pruneLinesFromTop(
+          prefix,
+          allowedPrefixTokens,
+          helper.modelName,
+        );
+        suffix = pruneLinesFromBottom(
+          suffix,
+          allowedSuffixTokens,
+          helper.modelName,
+        );
+      }
+      ({
+        prompt,
+        prefix: compiledPrefix,
+        suffix: compiledSuffix,
+      } = buildPrompt(
+        template,
+        compilePrefixSuffix,
+        prefix,
+        suffix,
+        helper,
+        snippets,
+        workspaceDirs,
+        reponame,
+      ));
+    }
+  }
 
   const stopTokens = getStopTokens(
     completionOptions,
