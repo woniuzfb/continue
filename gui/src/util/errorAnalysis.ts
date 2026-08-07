@@ -175,3 +175,107 @@ export function analyzeError(
     customErrorMessage,
   };
 }
+
+/**
+ * HTTP status codes that are plausibly transient (server-side / gateway
+ * blips) and worth a retry. 429/529 are deliberately excluded — they are
+ * handled by the existing silent overloaded-retry path.
+ */
+const TRANSIENT_STATUS_CODES = new Set([408, 500, 502, 503, 504]);
+
+/**
+ * Error message fragments that indicate a transient transport/network/SSE
+ * failure (socket errors, undici fetch failures, SSE streams that died
+ * mid-flight). When these occur the request may succeed on a retry.
+ */
+const TRANSIENT_MESSAGE_PATTERNS = [
+  "socket hang up",
+  "econnreset",
+  "econnrefused",
+  "epipe",
+  "eaddrinuse",
+  "etimedout",
+  "esockettimedout",
+  "eai_again",
+  "fetch failed",
+  "network error",
+  "network connection",
+  "connection reset",
+  "connection closed",
+  "connection terminated",
+  "connection lost",
+  "unexpected end of input",
+  "premature close",
+  "premature termination",
+  "chunked encoding",
+  "terminated",
+  "und_err",
+  "stream error",
+  "read econnreset",
+  "socket closed",
+  "timed out",
+  "timeout",
+];
+
+/**
+ * Errors that must NEVER be auto/user-retried: user-initiated aborts and
+ * permanent request/config errors.
+ */
+const PERMANENT_ERROR_PATTERNS = [
+  "abort",
+  "cancel",
+  "overloaded",
+  "529",
+  "rate limit",
+  "429",
+  "401",
+  "403",
+  "404",
+  "422",
+  "invalid api key",
+  "unauthorized",
+  "forbidden",
+  "not found",
+  "insufficient",
+  "quota",
+  "content_filter",
+  "content filter",
+  "context length",
+  "maximum context",
+  "invalid request",
+];
+
+/**
+ * Classify a stream error as potentially recoverable (transient network /
+ * socket / SSE / server-side failure) vs permanent. Used to offer the user a
+ * "keep waiting and retry" path instead of immediately giving up.
+ *
+ * @param statusCode optional HTTP status code (e.g. from analyzeError)
+ */
+export function isTransientStreamError(
+  error: unknown,
+  statusCode?: number,
+): boolean {
+  if (statusCode && TRANSIENT_STATUS_CODES.has(statusCode)) {
+    return true;
+  }
+  // fetch/undici errors may carry a response object directly
+  const responseStatus = (error as any)?.response?.status;
+  if (
+    typeof responseStatus === "number" &&
+    TRANSIENT_STATUS_CODES.has(responseStatus)
+  ) {
+    return true;
+  }
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const message = String((error as any)?.message ?? "").toLowerCase();
+  if (!message) {
+    return false;
+  }
+  if (PERMANENT_ERROR_PATTERNS.some((p) => message.includes(p))) {
+    return false;
+  }
+  return TRANSIENT_MESSAGE_PATTERNS.some((p) => message.includes(p));
+}

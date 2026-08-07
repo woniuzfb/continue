@@ -21,9 +21,12 @@ import { analyzeError } from "../../util/errorAnalysis";
 
 interface StreamErrorProps {
   error: unknown;
+  /** Hide the "Resubmit last message" button (used by the retryable variant,
+   * which offers its own Retry/Disconnect actions). */
+  hideResubmit?: boolean;
 }
 
-const StreamErrorDialog = ({ error }: StreamErrorProps) => {
+const StreamErrorDialog = ({ error, hideResubmit }: StreamErrorProps) => {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
   const selectedModel = useAppSelector(selectSelectedChatModel);
@@ -125,7 +128,7 @@ const StreamErrorDialog = ({ error }: StreamErrorProps) => {
           {selectedModel?.title || "the model"}.
         </p>
         <p className="m-0 p-0">Please try to submit your message again.</p>
-        <div className="mt-3">{resubmitButton}</div>
+        {!hideResubmit && <div className="mt-3">{resubmitButton}</div>}
       </div>
     </div>
   );
