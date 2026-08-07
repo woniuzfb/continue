@@ -55,6 +55,8 @@ export function UserSettingsSection() {
   const readResponseTTS = config.experimental?.readResponseTTS ?? false;
   const readResponseTTSStream =
     config.experimental?.readResponseTTSStream ?? false;
+  const readResponseTTSExcludeThinking =
+    config.experimental?.readResponseTTSExcludeThinking ?? false;
   const skipBaseSystemMessage = config.ui?.skipBaseSystemMessage ?? false;
   const displayRawMarkdown = config.ui?.displayRawMarkdown ?? false;
   const renderInlineLatex = config.ui?.renderInlineLatex ?? false;
@@ -187,6 +189,16 @@ export function UserSettingsSection() {
                   value={readResponseTTSStream}
                   onChange={(value) =>
                     handleUpdate({ readResponseTTSStream: value })
+                  }
+                  disabled={!readResponseTTS}
+                />
+                <UserSetting
+                  type="toggle"
+                  title="Exclude Thinking from TTS"
+                  description="Skips thinking/reasoning content when reading responses aloud."
+                  value={readResponseTTSExcludeThinking}
+                  onChange={(value) =>
+                    handleUpdate({ readResponseTTSExcludeThinking: value })
                   }
                   disabled={!readResponseTTS}
                 />

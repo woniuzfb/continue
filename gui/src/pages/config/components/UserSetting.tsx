@@ -224,7 +224,9 @@ export function UserSetting(props: UserSettingProps) {
   }
 
   return (
-    <div className="flex items-start justify-start gap-4">
+    <div
+      className={`flex items-start justify-start gap-4 ${disabled ? "cursor-not-allowed opacity-50" : ""}`}
+    >
       <div className="flex flex-1 flex-col">
         <span className="text-sm font-medium">{title}</span>
         <div className="mt-0.5 text-xs text-gray-500">{description}</div>
