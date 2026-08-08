@@ -1,14 +1,19 @@
 import { createAsyncThunk, unwrapResult } from "@reduxjs/toolkit";
-import { LLMFullCompletionOptions, ModelDescription } from "core";
+import { ChatMessage, LLMFullCompletionOptions, ModelDescription } from "core";
 import { getRuleId } from "core/llm/rules/getSystemMessageWithRules";
 import { ToCoreProtocol } from "core/protocol";
 import { BUILT_IN_GROUP_NAME } from "core/tools/builtIn";
+import { copyOf } from "core/util";
 import { selectActiveTools } from "../selectors/selectActiveTools";
 import { selectSelectedChatModel } from "../slices/configSlice";
 import {
   abortStream,
   addPromptCompletionPair,
+  applyStreamUpdatesToHistory,
+  CachedSession,
   errorToolCall,
+  getCachedSession,
+  registerStreamAborter,
   setActive,
   setAppliedRulesAtIndex,
   setContextInputTokens,
@@ -18,11 +23,14 @@ import {
   setInactive,
   setInlineErrorMessage,
   setIsPruned,
+  setCachedSession,
   setToolGenerated,
   streamUpdate,
+  unregisterStreamAborter,
 } from "../slices/sessionSlice";
 import { ThunkApiType } from "../store";
 import { constructMessages } from "../util/constructMessages";
+import { cacheCurrentSession } from "./session";
 
 import { modelSupportsNativeTools } from "core/llm/toolSupport";
 import { applyToolOverrides } from "core/tools/applyToolOverrides";
@@ -241,6 +249,28 @@ export const streamNormalInput = createAsyncThunk<
 
     const start = Date.now();
     const streamAborter = state.session.streamAborter;
+    // 快照流所属会话：切 tab 后流转入后台继续，更新写入该会话的缓存副本
+    const streamSessionId = state.session.id;
+    // 保证切走时该会话一定在 LRU 缓存里（后台更新/保存都依赖缓存副本）
+    cacheCurrentSession(getState());
+    registerStreamAborter(streamAborter);
+
+    // 后台续流工作副本：切走会话后 chunk 写入这里。切换瞬间 loadSession/
+    // saveCurrentSession 会重新快照缓存（引用变化），检测到变化才重新克隆，
+    // 避免更新写进已被替换的旧对象而丢失。
+    let bgCache: CachedSession | undefined;
+    const routeToCachedSession = (messages: ChatMessage[]) => {
+      const current = getCachedSession(streamSessionId);
+      if (!current) {
+        return;
+      }
+      if (bgCache !== current) {
+        bgCache = copyOf(current);
+        setCachedSession(streamSessionId, bgCache!);
+      }
+      applyStreamUpdatesToHistory(bgCache!, messages);
+    };
+
     try {
       let gen = extra.ideMessenger.llmStreamChat(
         {
@@ -262,18 +292,33 @@ export const streamNormalInput = createAsyncThunk<
 
       let next = await gen.next();
       while (!next.done) {
-        if (!getState().session.isStreaming) {
+        if (streamAborter.signal.aborted) {
+          // 用户主动取消（abortStream 会 abort 所有注册中的流）
+          break;
+        }
+
+        const streamState = getState().session;
+        if (streamState.id === streamSessionId && !streamState.isStreaming) {
+          // 活动会话的流被显式停止（setInactive）——保持原有 abort 行为。
+          // 切走后的会话（后台续流）不受影响。
           dispatch(abortStream());
           break;
         }
 
-        dispatch(streamUpdate(next.value));
+        if (streamState.id === streamSessionId) {
+          dispatch(streamUpdate(next.value));
+        } else {
+          // 已切到其他会话：流在后台继续，更新写入该会话的缓存副本
+          routeToCachedSession(next.value);
+        }
         next = await gen.next();
       }
 
       // Attach prompt log and end thinking for reasoning models
       if (next.done && next.value) {
-        dispatch(addPromptCompletionPair([next.value]));
+        if (getState().session.id === streamSessionId) {
+          dispatch(addPromptCompletionPair([next.value]));
+        }
 
         try {
           extra.ideMessenger.post("devdata/log", {
@@ -330,7 +375,17 @@ export const streamNormalInput = createAsyncThunk<
     // Tool call sequence:
     // 1. Mark generating tool calls as generated
     const state1 = getState();
-    if (streamAborter.signal.aborted || !state1.session.isStreaming) {
+    if (streamAborter.signal.aborted) {
+      unregisterStreamAborter(streamAborter);
+      return;
+    }
+    if (state1.session.id !== streamSessionId || !state1.session.isStreaming) {
+      // 会话已切走：跳过工具执行，标记缓存会话结束（后台流完成）
+      const cached = getCachedSession(streamSessionId);
+      if (cached) {
+        setCachedSession(streamSessionId, { ...cached, isStreaming: false });
+      }
+      unregisterStreamAborter(streamAborter);
       return;
     }
     const originalToolCalls = selectCurrentToolCalls(state1);
@@ -349,6 +404,7 @@ export const streamNormalInput = createAsyncThunk<
     // 2. Pre-process args to catch invalid args before checking policies
     const state2 = getState();
     if (streamAborter.signal.aborted || !state2.session.isStreaming) {
+      unregisterStreamAborter(streamAborter);
       return;
     }
     const generatedCalls2 = selectPendingToolCalls(state2);
@@ -357,6 +413,7 @@ export const streamNormalInput = createAsyncThunk<
     // 3. Security check: evaluate updated policies based on args
     const state3 = getState();
     if (streamAborter.signal.aborted || !state3.session.isStreaming) {
+      unregisterStreamAborter(streamAborter);
       return;
     }
     const generatedCalls3 = selectPendingToolCalls(state3);
@@ -388,6 +445,7 @@ export const streamNormalInput = createAsyncThunk<
       if (builtInReadonlyAutoApproved.length > 0) {
         const state4 = getState();
         if (streamAborter.signal.aborted || !state4.session.isStreaming) {
+          unregisterStreamAborter(streamAborter);
           return;
         }
         await Promise.all(
@@ -411,6 +469,7 @@ export const streamNormalInput = createAsyncThunk<
       const state4 = getState();
       const generatedCalls4 = selectPendingToolCalls(state4);
       if (streamAborter.signal.aborted || !state4.session.isStreaming) {
+        unregisterStreamAborter(streamAborter);
         return;
       }
       if (generatedCalls4.length > 0) {

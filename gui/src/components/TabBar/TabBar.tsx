@@ -156,19 +156,20 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
   }, [currentSessionId, currentSessionTitle]);
 
   const handleNewTab = async () => {
-    // 必须在 dispatch(newSession()) 之前发起 save：saveCurrentSession 内部第一行
-    // 同步读取 getState().session，newSession 后会读到空 history 而跳过保存。
-    // 用 void fire-and-forget：同步部分（getState、find、updateSessionMetadata）
-    // 微秒级完成，异步部分（IPC、LLM 标题生成）在后台执行不阻塞 UI。
+    // openNewSession: true 时 saveCurrentSession 内部会先 cacheCurrentSession
+    // （把当前会话快照进 LRU 缓存，含正在流的中间内容）再 dispatch(newSession())
+    // —— 后台续流依赖这个快照，切走前的 chunk 才不会丢。
+    // 同步部分（getState、cache、newSession）微秒级完成，异步部分（IPC、
+    // LLM 标题生成）在后台执行不阻塞 UI。
     if (hasHistory) {
       void dispatch(
         saveCurrentSession({
-          openNewSession: false,
+          openNewSession: true,
         }),
       );
+    } else {
+      dispatch(newSession());
     }
-
-    dispatch(newSession());
 
     dispatch(
       addTab({

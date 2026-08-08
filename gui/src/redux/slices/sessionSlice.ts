@@ -224,6 +224,8 @@ export type CachedSession = {
   mode: MessageModes;
   chatModelTitle?: string | null;
   hasReasoningEnabled?: boolean;
+  // 缓存时该会话是否正在流式响应（切回时恢复 Stop 按钮状态）
+  isStreaming?: boolean;
   // Lazy-load pagination state
   historyTruncated?: boolean;
   historyLoadedOffset?: number;
@@ -275,6 +277,21 @@ export function deleteCachedSession(sessionId: string): void {
   sessionCacheMap.delete(sessionId);
 }
 
+/**
+ * 正在进行的流式请求的 AbortController 注册表。
+ * 切换会话不再 abort 旧流的 controller（旧流转入后台继续跑）；
+ * 只有用户主动取消（abortStream / cancelStream）时才统一 abort 所有在跑流。
+ */
+const activeStreamAborters = new Set<AbortController>();
+
+export function registerStreamAborter(aborter: AbortController): void {
+  activeStreamAborters.add(aborter);
+}
+
+export function unregisterStreamAborter(aborter: AbortController): void {
+  activeStreamAborters.delete(aborter);
+}
+
 type SessionState = {
   lastSessionId?: string;
   isSessionMetadataLoading: boolean;
@@ -314,6 +331,205 @@ type SessionState = {
   hasMoreHistory?: boolean; // 是否还有更早的消息可加载
   isHistoryLoading?: boolean; // 是否正在加载更多历史
 };
+
+/**
+ * streamUpdate 的目标对象：既能是 session slice 的 state（正常流），
+ * 也能是 LRU 缓存里的 CachedSession（后台续流时，流所属会话已切走）。
+ */
+export type StreamUpdateTarget = {
+  history: ChatHistoryItemWithMessageId[];
+  isPruned?: boolean;
+  contextPercentage?: number;
+  contextInputTokens?: number;
+  contextLength?: number;
+};
+
+/**
+ * 纯函数版 streamUpdate：把流式消息合并进目标 history。
+ * 从原 reducer 提取，保证正常流与后台续流走同一套合并逻辑。
+ */
+export function applyStreamUpdatesToHistory(
+  target: StreamUpdateTarget,
+  messages: ChatMessage[],
+): void {
+  if (!target.history.length) {
+    return;
+  }
+  for (const message of messages) {
+    // Handle metadata-only messages (yielded by BaseLLM.streamChat when
+    // the backend compiles non-precompiled messages). These carry context
+    // pruning info so the frontend doesn't need a separate compile request.
+    if (
+      message.role === "assistant" &&
+      message.content === "" &&
+      "metadata" in message &&
+      message.metadata &&
+      ("didPrune" in message.metadata ||
+        "contextPercentage" in message.metadata)
+    ) {
+      target.isPruned = !!(message.metadata as any).didPrune;
+      target.contextPercentage =
+        (message.metadata as any).contextPercentage ?? 0;
+      target.contextInputTokens = (message.metadata as any).contextInputTokens;
+      target.contextLength = (message.metadata as any).contextLength;
+      continue;
+    }
+
+    let lastItem = target.history[target.history.length - 1];
+    let lastMessage = lastItem.message;
+
+    if (message.role === "thinking" && message.redactedThinking) {
+      target.history.push({
+        message: {
+          role: "thinking",
+          content: "internal reasoning is hidden due to safety reasons",
+          redactedThinking: message.redactedThinking,
+          id: uuidv4(),
+        },
+        contextItems: [],
+      });
+      continue;
+    }
+
+    const messageContent = message.content ? renderChatMessage(message) : "";
+
+    // OpenAI-compatible models in agent mode sometimes send
+    // all of their data in one message, so we handle that case early.
+    if (messageContent && message.role !== "tool") {
+      const thinkMatches = messageContent.match(
+        /<think>([\s\S]*)<\/think>([\s\S]*)/,
+      );
+      if (thinkMatches) {
+        // The order that they seem to consistently use is:
+        //
+        // <think>Thinking text</think>
+        // Text to show to the user
+
+        lastItem.reasoning = {
+          text: thinkMatches[1].trim(),
+          startAt: Date.now(),
+          endAt: Date.now(),
+          active: false,
+        };
+
+        // This is the chat message that we should show to the user.
+        // We always need to push this even if it is empty,
+        // because we cannot attach tool calls to a Thinking message.
+        // That would break `messageHasToolCallId`.
+        target.history.push({
+          message: {
+            role: "assistant",
+            content: thinkMatches[2].trim(),
+            id: uuidv4(),
+          },
+          contextItems: [],
+        });
+        lastItem = target.history[target.history.length - 1];
+        lastMessage = lastItem.message;
+
+        handleToolCallsInMessage(message, lastItem);
+
+        return;
+      }
+    }
+
+    // The remainder of this function handles streaming messages
+    if (
+      lastMessage.role !== message.role ||
+      message.role === "tool" // Tool messages should always create new messages
+    ) {
+      // Create a new message
+      const historyItem: ChatHistoryItemWithMessageId = {
+        message: {
+          ...message,
+          content: "", // Start with empty content, let accumulation logic handle it
+          id: uuidv4(),
+        },
+        contextItems: [],
+      };
+      target.history.push(historyItem);
+      lastItem = target.history[target.history.length - 1];
+      lastMessage = lastItem.message;
+    }
+
+    // Add to the existing message
+    if (messageContent) {
+      if (messageContent.includes("<think>") && message.role !== "tool") {
+        lastItem.reasoning = {
+          startAt: Date.now(),
+          active: true,
+          text: messageContent.replace("<think>", "").trim(),
+        };
+      } else if (
+        lastItem.reasoning?.active &&
+        messageContent.includes("</think>")
+      ) {
+        const [reasoningEnd, answerStart] = messageContent.split("</think>");
+        lastItem.reasoning.text += reasoningEnd.trimEnd();
+        lastItem.reasoning.active = false;
+        lastItem.reasoning.endAt = Date.now();
+        lastMessage.content += answerStart.trimStart();
+      } else if (lastItem.reasoning?.active) {
+        if (
+          lastItem.reasoning.text.length > 0 ||
+          messageContent.trim().length > 0
+        ) {
+          lastItem.reasoning.text += messageContent;
+        }
+      } else {
+        // Note this only works because new message above
+        // was already rendered from parts to string
+        if (
+          lastMessage.content.length > 0 ||
+          messageContent.trim().length > 0
+        ) {
+          lastMessage.content += messageContent;
+        }
+      }
+    } else if (message.role === "thinking" && message.signature) {
+      if (lastMessage.role === "thinking") {
+        lastMessage.signature = message.signature;
+      }
+    } else if (
+      message.role === "assistant" &&
+      message.toolCalls?.length &&
+      lastMessage.role === "assistant"
+    ) {
+      handleStreamingToolCallUpdates(message, lastItem);
+    }
+
+    // Attach Responses API output item id to the current assistant message if present
+    // fromResponsesChunk sets message.metadata.responsesOutputItemId when it sees output_item.added for messages
+    if (
+      message.role === "assistant" &&
+      lastMessage.role === "assistant" &&
+      message.metadata?.responsesOutputItemId
+    ) {
+      lastMessage.metadata = lastMessage.metadata || {};
+      // Accumulate fc_ IDs for parallel tool calls (OpenAI Responses API)
+      if (!lastMessage.metadata.responsesOutputItemIds) {
+        lastMessage.metadata.responsesOutputItemIds = [];
+      }
+      (lastMessage.metadata.responsesOutputItemIds as string[]).push(
+        message.metadata.responsesOutputItemId as string,
+      );
+      // Also keep singular for backwards compatibility
+      lastMessage.metadata.responsesOutputItemId = message.metadata
+        .responsesOutputItemId as string;
+    }
+
+    if (
+      message.role === "thinking" &&
+      message.reasoning_details &&
+      lastMessage.role === "thinking"
+    ) {
+      lastMessage.reasoning_details = mergeReasoningDetails(
+        lastMessage.reasoning_details,
+        message.reasoning_details,
+      );
+    }
+  }
+}
 
 export const INITIAL_SESSION_STATE: SessionState = {
   isSessionMetadataLoading: false,
@@ -623,196 +839,25 @@ export const sessionSlice = createSlice({
       state.isStreaming = false;
     },
     abortStream: (state) => {
+      // 取消所有仍在跑的流（包括切到其他会话后在后台继续的），
+      // 再重置当前会话的 controller。
+      for (const aborter of activeStreamAborters) {
+        aborter.abort();
+      }
+      activeStreamAborters.clear();
       state.streamAborter.abort();
       state.streamAborter = new AbortController();
     },
     streamUpdate: (state, action: PayloadAction<ChatMessage[]>) => {
-      if (state.history.length) {
-        for (const message of action.payload) {
-          // Handle metadata-only messages (yielded by BaseLLM.streamChat when
-          // the backend compiles non-precompiled messages). These carry context
-          // pruning info so the frontend doesn't need a separate compile request.
-          if (
-            message.role === "assistant" &&
-            message.content === "" &&
-            "metadata" in message &&
-            message.metadata &&
-            ("didPrune" in message.metadata ||
-              "contextPercentage" in message.metadata)
-          ) {
-            state.isPruned = !!(message.metadata as any).didPrune;
-            state.contextPercentage =
-              (message.metadata as any).contextPercentage ?? 0;
-            state.contextInputTokens = (
-              message.metadata as any
-            ).contextInputTokens;
-            state.contextLength = (message.metadata as any).contextLength;
-            continue;
-          }
-
-          let lastItem = state.history[state.history.length - 1];
-          let lastMessage = lastItem.message;
-
-          if (message.role === "thinking" && message.redactedThinking) {
-            state.history.push({
-              message: {
-                role: "thinking",
-                content: "internal reasoning is hidden due to safety reasons",
-                redactedThinking: message.redactedThinking,
-                id: uuidv4(),
-              },
-              contextItems: [],
-            });
-            continue;
-          }
-
-          const messageContent = message.content
-            ? renderChatMessage(message)
-            : "";
-
-          // OpenAI-compatible models in agent mode sometimes send
-          // all of their data in one message, so we handle that case early.
-          if (messageContent && message.role !== "tool") {
-            const thinkMatches = messageContent.match(
-              /<think>([\s\S]*)<\/think>([\s\S]*)/,
-            );
-            if (thinkMatches) {
-              // The order that they seem to consistently use is:
-              //
-              // <think>Thinking text</think>
-              // Text to show to the user
-
-              lastItem.reasoning = {
-                text: thinkMatches[1].trim(),
-                startAt: Date.now(),
-                endAt: Date.now(),
-                active: false,
-              };
-
-              // This is the chat message that we should show to the user.
-              // We always need to push this even if it is empty,
-              // because we cannot attach tool calls to a Thinking message.
-              // That would break `messageHasToolCallId`.
-              state.history.push({
-                message: {
-                  role: "assistant",
-                  content: thinkMatches[2].trim(),
-                  id: uuidv4(),
-                },
-                contextItems: [],
-              });
-              lastItem = state.history[state.history.length - 1];
-              lastMessage = lastItem.message;
-
-              handleToolCallsInMessage(message, lastItem);
-
-              return;
-            }
-          }
-
-          // The remainder of this function handles streaming messages
-          if (
-            lastMessage.role !== message.role ||
-            message.role === "tool" // Tool messages should always create new messages
-          ) {
-            // Create a new message
-            const historyItem: ChatHistoryItemWithMessageId = {
-              message: {
-                ...message,
-                content: "", // Start with empty content, let accumulation logic handle it
-                id: uuidv4(),
-              },
-              contextItems: [],
-            };
-            state.history.push(historyItem);
-            lastItem = state.history[state.history.length - 1];
-            lastMessage = lastItem.message;
-          }
-
-          // Add to the existing message
-          if (messageContent) {
-            if (messageContent.includes("<think>") && message.role !== "tool") {
-              lastItem.reasoning = {
-                startAt: Date.now(),
-                active: true,
-                text: messageContent.replace("<think>", "").trim(),
-              };
-            } else if (
-              lastItem.reasoning?.active &&
-              messageContent.includes("</think>")
-            ) {
-              const [reasoningEnd, answerStart] =
-                messageContent.split("</think>");
-              lastItem.reasoning.text += reasoningEnd.trimEnd();
-              lastItem.reasoning.active = false;
-              lastItem.reasoning.endAt = Date.now();
-              lastMessage.content += answerStart.trimStart();
-            } else if (lastItem.reasoning?.active) {
-              if (
-                lastItem.reasoning.text.length > 0 ||
-                messageContent.trim().length > 0
-              ) {
-                lastItem.reasoning.text += messageContent;
-              }
-            } else {
-              // Note this only works because new message above
-              // was already rendered from parts to string
-              if (
-                lastMessage.content.length > 0 ||
-                messageContent.trim().length > 0
-              ) {
-                lastMessage.content += messageContent;
-              }
-            }
-          } else if (message.role === "thinking" && message.signature) {
-            if (lastMessage.role === "thinking") {
-              lastMessage.signature = message.signature;
-            }
-          } else if (
-            message.role === "assistant" &&
-            message.toolCalls?.length &&
-            lastMessage.role === "assistant"
-          ) {
-            handleStreamingToolCallUpdates(message, lastItem);
-          }
-
-          // Attach Responses API output item id to the current assistant message if present
-          // fromResponsesChunk sets message.metadata.responsesOutputItemId when it sees output_item.added for messages
-          if (
-            message.role === "assistant" &&
-            lastMessage.role === "assistant" &&
-            message.metadata?.responsesOutputItemId
-          ) {
-            lastMessage.metadata = lastMessage.metadata || {};
-            // Accumulate fc_ IDs for parallel tool calls (OpenAI Responses API)
-            if (!lastMessage.metadata.responsesOutputItemIds) {
-              lastMessage.metadata.responsesOutputItemIds = [];
-            }
-            (lastMessage.metadata.responsesOutputItemIds as string[]).push(
-              message.metadata.responsesOutputItemId as string,
-            );
-            // Also keep singular for backwards compatibility
-            lastMessage.metadata.responsesOutputItemId = message.metadata
-              .responsesOutputItemId as string;
-          }
-
-          if (
-            message.role === "thinking" &&
-            message.reasoning_details &&
-            lastMessage.role === "thinking"
-          ) {
-            lastMessage.reasoning_details = mergeReasoningDetails(
-              lastMessage.reasoning_details,
-              message.reasoning_details,
-            );
-          }
-        }
-      }
+      // 提取为纯函数，供“后台续流”（流所属会话已切走）时把更新
+      // 写入该会话的 LRU 缓存副本。
+      applyStreamUpdatesToHistory(state, action.payload);
     },
     newSession: (state, { payload }: PayloadAction<Session | undefined>) => {
       state.lastSessionId = state.id;
 
-      state.streamAborter.abort();
+      // 注意：这里不再 abort 旧 controller。切换/新建会话时，旧会话在跑的流
+      // 转入后台继续（更新写入它的 LRU 缓存副本），由用户主动取消时统一 abort。
       state.streamAborter = new AbortController();
 
       state.isStreaming = false;
@@ -868,10 +913,13 @@ export const sessionSlice = createSlice({
     ) => {
       state.lastSessionId = state.id;
 
-      state.streamAborter.abort();
+      // 不再 abort 旧 controller：切 tab 时旧流转入后台继续，
+      // 只有用户主动取消才统一 abort（见 abortStream）。
       state.streamAborter = new AbortController();
 
-      state.isStreaming = false;
+      // 恢复该会话缓存时的 streaming 状态：切回一个正在后台跑的会话时，
+      // Stop 按钮仍可见；普通会话为 false。
+      state.isStreaming = payload.isStreaming ?? false;
       state.inlineErrorMessage = undefined;
       state.compactionLoading = {};
       state.codeBlockApplyStates = { states: [], curIndex: 0 };

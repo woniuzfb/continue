@@ -3,7 +3,16 @@ import { renderChatMessage } from "core/util/messageContent";
 import { v4 as uuidv4 } from "uuid";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addToolCallDeltaToState } from "../../util/toolCallState";
-import { ChatHistoryItemWithMessageId, sessionSlice } from "./sessionSlice";
+import {
+  abortStream,
+  applyStreamUpdatesToHistory,
+  ChatHistoryItemWithMessageId,
+  newSession,
+  registerStreamAborter,
+  restoreCachedSession,
+  sessionSlice,
+  unregisterStreamAborter,
+} from "./sessionSlice";
 
 // Mock dependencies
 vi.mock("uuid");
@@ -503,5 +512,114 @@ describe("sessionSlice streamUpdate", () => {
       expect(newState.history[1].message.role).toBe("assistant");
       expect(newState.history[1].toolCallStates).toHaveLength(1);
     });
+  });
+});
+
+describe("background streaming (session switch)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    let callCount = 0;
+    mockUuidv4.mockImplementation(() => `bg-uuid-${++callCount}`);
+    mockRenderChatMessage.mockImplementation((message: ChatMessage) => {
+      if (typeof message.content === "string") {
+        return message.content;
+      }
+      return "";
+    });
+  });
+
+  const createState = () => ({
+    lastSessionId: undefined,
+    allSessionMetadata: [],
+    history: [
+      {
+        message: { role: "user" as const, content: "Hello", id: "u1" },
+        contextItems: [],
+      },
+    ] as ChatHistoryItemWithMessageId[],
+    isStreaming: false,
+    title: "A",
+    id: "session-a",
+    streamAborter: new AbortController(),
+    symbols: {},
+    mode: "agent" as const,
+    isInEdit: false,
+    codeBlockApplyStates: { states: [], curIndex: 0 },
+    newestToolbarPreviewForInput: {},
+    isSessionMetadataLoading: false,
+    compactionLoading: {},
+  });
+
+  it("applyStreamUpdatesToHistory merges chunks into a plain target (cached session)", () => {
+    const target = {
+      history: [
+        {
+          message: { role: "user" as const, content: "Hello", id: "u1" },
+          contextItems: [],
+        },
+      ] as ChatHistoryItemWithMessageId[],
+    };
+    applyStreamUpdatesToHistory(target, [
+      { role: "assistant" as const, content: "First" },
+    ]);
+    applyStreamUpdatesToHistory(target, [
+      { role: "assistant" as const, content: "Second" },
+    ]);
+    expect(target.history).toHaveLength(2);
+    expect(target.history[1].message.content).toBe("FirstSecond");
+  });
+
+  it("newSession does NOT abort the previous session's streamAborter", () => {
+    const state = createState();
+    const oldAborter = state.streamAborter;
+    const newState = sessionSlice.reducer(state, newSession());
+    expect(newState.streamAborter).not.toBe(oldAborter);
+    expect(oldAborter.signal.aborted).toBe(false);
+  });
+
+  it("restoreCachedSession does NOT abort the previous session's streamAborter", () => {
+    const state = createState();
+    const oldAborter = state.streamAborter;
+    const cached = {
+      sessionId: "session-b",
+      title: "B",
+      history: [],
+      mode: "agent" as const,
+      symbols: {},
+    };
+    const newState = sessionSlice.reducer(state, restoreCachedSession(cached));
+    expect(newState.streamAborter).not.toBe(oldAborter);
+    expect(oldAborter.signal.aborted).toBe(false);
+    expect(newState.isStreaming).toBe(false);
+  });
+
+  it("restoreCachedSession restores isStreaming from the cached snapshot", () => {
+    const state = createState();
+    const cached = {
+      sessionId: "session-b",
+      title: "B",
+      history: [],
+      mode: "agent" as const,
+      symbols: {},
+      isStreaming: true,
+    };
+    const newState = sessionSlice.reducer(state, restoreCachedSession(cached));
+    expect(newState.isStreaming).toBe(true);
+  });
+
+  it("abortStream aborts all registered stream aborters", () => {
+    const state = createState();
+    const aborter1 = new AbortController();
+    const aborter2 = new AbortController();
+    registerStreamAborter(aborter1);
+    registerStreamAborter(aborter2);
+    try {
+      sessionSlice.reducer(state, abortStream());
+      expect(aborter1.signal.aborted).toBe(true);
+      expect(aborter2.signal.aborted).toBe(true);
+    } finally {
+      unregisterStreamAborter(aborter1);
+      unregisterStreamAborter(aborter2);
+    }
   });
 });

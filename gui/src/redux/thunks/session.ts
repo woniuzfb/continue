@@ -33,7 +33,7 @@ const MAX_TITLE_LENGTH = 100;
  * restores the in-memory state (including lazily-loaded full history) without
  * re-reading from disk.
  */
-function cacheCurrentSession(state: RootState): void {
+export function cacheCurrentSession(state: RootState): void {
   const session = state.session;
   if (!session.id) {
     return;
@@ -51,6 +51,7 @@ function cacheCurrentSession(state: RootState): void {
     mode: session.mode,
     chatModelTitle: selectedChatModel?.title,
     hasReasoningEnabled: session.hasReasoningEnabled,
+    isStreaming: session.isStreaming,
     historyTruncated: session.historyTruncated,
     historyLoadedOffset: session.historyLoadedOffset,
     historyTotalCount: session.historyTotalCount,
@@ -173,6 +174,76 @@ export const updateSession = createAsyncThunk<void, Session, ThunkApiType>(
     await dispatch(refreshSessionMetadata({}));
   },
 );
+
+/**
+ * 保存“后台续流”的会话：流所属会话已在流期间被切走，此时
+ * getState().session 是别的会话，完整内容在 LRU 缓存副本里。
+ * 标题逻辑与 saveCurrentSession 保持一致（LLM 生成 + 文本回退）。
+ */
+export const saveSessionFromCache = createAsyncThunk<
+  void,
+  string,
+  ThunkApiType
+>("session/saveFromCache", async (sessionId, { dispatch, extra, getState }) => {
+  const cached = getCachedSession(sessionId);
+  if (!cached) {
+    return;
+  }
+
+  const selectedChatModel = selectSelectedChatModel(getState());
+  let title = cached.title;
+  if (
+    title === NEW_SESSION_TITLE &&
+    !getState().config.config?.disableSessionTitles &&
+    selectedChatModel
+  ) {
+    const assistantResponse = cached.history
+      ?.find((h) => h.message.role === "assistant")
+      ?.message?.content?.toString();
+    if (assistantResponse) {
+      try {
+        const result = await extra.ideMessenger.request(
+          "chatDescriber/describe",
+          {
+            text: assistantResponse,
+          },
+        );
+        if (result.status === "success" && result.content) {
+          title = result.content;
+        }
+      } catch (e) {
+        console.error("Error generating chat title", e);
+      }
+    }
+  }
+  if (title === NEW_SESSION_TITLE) {
+    const first = cached.history[0];
+    title = first ? getChatTitleFromMessage(first.message) : NEW_SESSION_TITLE;
+  }
+  if (!title.length) {
+    title = NEW_SESSION_TITLE;
+  }
+
+  // 同步缓存里的标题与 streaming 结束标记
+  setCachedSession(sessionId, {
+    ...cached,
+    title,
+    isStreaming: false,
+  });
+
+  const session: Session = {
+    sessionId,
+    title,
+    workspaceDirectory: window.workspacePaths?.[0] || "",
+    history: cached.history,
+    mode: cached.mode,
+    chatModelTitle: cached.chatModelTitle ?? null,
+    historyTruncated: cached.historyTruncated,
+    historyLoadedOffset: cached.historyLoadedOffset,
+    contextMetrics: cached.contextMetrics,
+  };
+  unwrapResult(await dispatch(updateSession(session)));
+});
 
 /*
  this is only used for the custom focusContinueSessionId command at the moment

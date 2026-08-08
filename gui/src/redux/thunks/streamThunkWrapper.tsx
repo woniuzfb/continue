@@ -8,7 +8,7 @@ import { selectSelectedChatModel } from "../slices/configSlice";
 import { setDialogMessage, setShowDialog } from "../slices/uiSlice";
 import { ThunkApiType } from "../store";
 import { cancelStream } from "./cancelStream";
-import { saveCurrentSession } from "./session";
+import { saveCurrentSession, saveSessionFromCache } from "./session";
 
 const OVERLOADED_RETRIES = 3;
 const OVERLOADED_DELAY_MS = 2000;
@@ -27,16 +27,23 @@ export const streamThunkWrapper = createAsyncThunk<
   () => Promise<void>,
   ThunkApiType
 >("chat/streamWrapper", async (runStream, { dispatch, getState }) => {
+  // 快照流所属会话：若流期间用户切走了会话，结束时保存的是该会话
+  // 缓存副本里的完整内容（saveSessionFromCache），而不是当前活动会话。
+  const streamSessionId = getState().session.id;
   for (let attempt = 0; attempt <= OVERLOADED_RETRIES; attempt++) {
     try {
       await runStream();
       const state = getState();
       if (!state.session.isInEdit) {
-        await dispatch(
-          saveCurrentSession({
-            openNewSession: false,
-          }),
-        );
+        if (state.session.id === streamSessionId) {
+          await dispatch(
+            saveCurrentSession({
+              openNewSession: false,
+            }),
+          );
+        } else {
+          await dispatch(saveSessionFromCache(streamSessionId));
+        }
       }
       return;
     } catch (e) {
