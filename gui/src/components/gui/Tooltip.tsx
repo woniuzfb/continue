@@ -15,6 +15,11 @@ const TooltipStyles: CSSProperties = {
   zIndex: 1000,
   maxWidth: "80vw",
   textAlign: "center",
+  // react-tooltip 默认 width: max-content：超长无空格内容（如下载链接）会把
+  // tooltip 撑到 80vw 宽且文本无法换行，溢出视口产生横向滚动条，
+  // 导致聊天区在悬停时抖动。强制断行把内容限制在 maxWidth 内。
+  wordBreak: "break-all",
+  overflowWrap: "anywhere",
 };
 
 export function ToolTip({

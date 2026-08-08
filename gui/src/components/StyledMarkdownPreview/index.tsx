@@ -303,9 +303,16 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
     rehypeReactOptions: {
       components: {
         a: ({ ...aProps }) => {
+          const href = aProps.href ?? "";
+          // 超长链接（如带签名/大文件的下载链接）在 tooltip 里全部展示会
+          // 撑爆聊天区：中间截断，只展示首尾，点击仍打开完整 URL。
+          const tooltipHref =
+            href.length > 120
+              ? `${href.slice(0, 80)}...${href.slice(-40)}`
+              : href;
           return (
-            <ToolTip place="top" className="m-0 p-0" content={aProps.href}>
-              <a href={aProps.href} target="_blank" className="hover:underline">
+            <ToolTip place="top" className="m-0 p-0" content={tooltipHref}>
+              <a href={href} target="_blank" className="hover:underline">
                 {aProps.children}
               </a>
             </ToolTip>
