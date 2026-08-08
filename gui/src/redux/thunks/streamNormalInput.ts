@@ -90,6 +90,26 @@ export const streamNormalInput = createAsyncThunk<
       console.error(message, JSON.stringify(getState(), null, 2));
       throw new Error(message);
     }
+
+    // Ensure MCP servers are connected before building the tool list, so
+    // tools from servers that were briefly down at config-load time are
+    // included in this request (they only enter config.tools when the server
+    // is "connected" at config load). Only servers the GUI already knows are
+    // unhealthy trigger the IPC round trip — healthy ones add zero latency,
+    // and the test state (empty statuses) skips it entirely. Bounded
+    // server-side; failure to reconnect never blocks sending.
+    const mcpStatuses = getState().config.config.mcpServerStatuses ?? [];
+    const hasUnhealthyMcp = mcpStatuses.some(
+      (s) => s.status !== "connected" && s.status !== "disabled",
+    );
+    if (hasUnhealthyMcp) {
+      try {
+        await extra.ideMessenger.request("mcp/ensureConnections", undefined);
+      } catch (e) {
+        console.warn("Failed to ensure MCP connections before sending", e);
+      }
+    }
+
     const state = getState();
     const selectedChatModel = selectSelectedChatModel(state);
 

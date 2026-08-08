@@ -183,6 +183,39 @@ export class MCPManagerSingleton {
     ]);
   }
 
+  /**
+   * Bring unhealthy connections back before a message is sent, so tools from
+   * servers that were briefly down get included in the request. Only touches
+   * connections that are not currently connected; bounded by `timeoutMs` so a
+   * dead server can never block sending. Returns true when at least one
+   * connection transitioned to connected (the caller should reload the config
+   * to pick up the refreshed tool list).
+   */
+  async ensureConnections(timeoutMs: number = 4000): Promise<boolean> {
+    const unhealthy = Array.from(this.connections.values()).filter(
+      (c) => c.status !== "connected" && c.status !== "disabled",
+    );
+    if (unhealthy.length === 0) {
+      return false;
+    }
+
+    const wasConnected = new Map(
+      unhealthy.map((c) => [c.options.id, c.status === "connected"]),
+    );
+    await Promise.race([
+      Promise.allSettled(
+        unhealthy.map((c) =>
+          c.connectClient(false, this.abortController.signal),
+        ),
+      ),
+      new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
+
+    return unhealthy.some(
+      (c) => c.status === "connected" && !wasConnected.get(c.options.id),
+    );
+  }
+
   getStatuses(): (MCPServerStatus & { client: Client })[] {
     return Array.from(this.connections.values()).map((connection) => ({
       ...connection.getStatus(),

@@ -194,6 +194,9 @@ export type ToCoreFromIdeOrWebviewProtocol = {
     },
     void,
   ];
+  // Reconnect unhealthy MCP servers before a message is sent; returns true if
+  // any connection changed state (config/tools may have been reloaded).
+  "mcp/ensureConnections": [undefined, boolean];
   "context/getSymbolsForFiles": [{ uris: string[] }, FileSymbolMap];
   "context/loadSubmenuItems": [{ title: string }, ContextSubmenuItem[]];
   "autocomplete/complete": [AutocompleteInput, string[]];

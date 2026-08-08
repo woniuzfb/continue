@@ -178,6 +178,64 @@ describe("MCPManagerSingleton", () => {
     });
   });
 
+  describe("ensureConnections", () => {
+    it("returns false immediately when everything is healthy", async () => {
+      manager.createConnection("test-id", testOptions);
+      const changed = await manager.ensureConnections(50);
+      expect(changed).toBe(false);
+    });
+
+    it("reconnects unhealthy connections and reports change", async () => {
+      const connection = manager.createConnection(
+        "test-id",
+        testOptions,
+      ) as TestMCPConnection;
+      // Server is down at request time
+      (connection as any).status = "error";
+      connection.connectClient = vi.fn().mockImplementation(async () => {
+        (connection as any).status = "connected";
+      });
+
+      const changed = await manager.ensureConnections(1000);
+      expect(connection.connectClient).toHaveBeenCalledWith(
+        false,
+        expect.any(AbortSignal),
+      );
+      expect(changed).toBe(true);
+    });
+
+    it("does not report change if reconnect still fails", async () => {
+      const connection = manager.createConnection(
+        "test-id",
+        testOptions,
+      ) as TestMCPConnection;
+      (connection as any).status = "not-connected";
+      connection.connectClient = vi.fn().mockImplementation(async () => {
+        (connection as any).status = "error"; // still failing
+      });
+
+      const changed = await manager.ensureConnections(1000);
+      expect(changed).toBe(false);
+    });
+
+    it("returns after the timeout even if a connection hangs", async () => {
+      const connection = manager.createConnection(
+        "test-id",
+        testOptions,
+      ) as TestMCPConnection;
+      (connection as any).status = "not-connected";
+      connection.connectClient = vi.fn(
+        () => new Promise<void>(() => {}), // never resolves
+      ) as any;
+
+      const start = Date.now();
+      const changed = await manager.ensureConnections(100);
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(2000);
+      expect(changed).toBe(false); // still not connected
+    });
+  });
+
   describe("getStatuses", () => {
     it("should return statuses for all connections", () => {
       const connection = manager.createConnection(

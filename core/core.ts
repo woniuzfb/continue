@@ -485,6 +485,19 @@ export class Core {
       const { id, enabled } = msg.data;
       await MCPManagerSingleton.getInstance().setEnabled(id, enabled);
     });
+    on("mcp/ensureConnections", async () => {
+      const changed =
+        await MCPManagerSingleton.getInstance().ensureConnections();
+      if (changed) {
+        // Reload config so the freshly connected servers' tools are included
+        // in the browser-serialized config (config.tools) before the GUI
+        // builds the request.
+        await this.configHandler.reloadConfig(
+          "MCP connections ensured before message",
+        );
+      }
+      return changed;
+    });
     on("mcp/getPrompt", async (msg) => {
       const { serverName, promptName, args } = msg.data;
       const prompt = await MCPManagerSingleton.getInstance().getPrompt(
