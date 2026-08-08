@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 import { Input } from "..";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
+import { setPendingSessionAction } from "../../redux/slices/tabsSlice";
 import { exitEdit } from "../../redux/thunks/edit";
 import {
   deleteSession,
@@ -43,6 +44,7 @@ export function HistoryTableRow({
     sessionMetadata.title,
   );
   const currentSessionId = useAppSelector((state) => state.session.id);
+  const isStreaming = useAppSelector((state) => state.session.isStreaming);
 
   useEffect(() => {
     setSessionTitleEditValue(sessionMetadata.title);
@@ -89,12 +91,23 @@ export function HistoryTableRow({
       onClick={async () => {
         await dispatch(exitEdit({}));
         if (sessionMetadata.sessionId !== currentSessionId) {
-          await dispatch(
-            loadSession({
-              sessionId: sessionMetadata.sessionId,
-              saveCurrentSession: true,
-            }),
-          );
+          if (isStreaming) {
+            // 流式响应进行中：延迟到流结束后再加载，避免中断当前响应
+            dispatch(
+              setPendingSessionAction({
+                type: "load",
+                sessionId: sessionMetadata.sessionId,
+                saveCurrentSession: true,
+              }),
+            );
+          } else {
+            await dispatch(
+              loadSession({
+                sessionId: sessionMetadata.sessionId,
+                saveCurrentSession: true,
+              }),
+            );
+          }
         }
         navigate("/");
       }}
