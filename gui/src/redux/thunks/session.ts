@@ -1,7 +1,10 @@
 import { createAsyncThunk, unwrapResult } from "@reduxjs/toolkit";
 import { BaseSessionMetadata, ChatMessage, Session } from "core";
 import { NEW_SESSION_TITLE } from "core/util/constants";
-import { renderChatMessage } from "core/util/messageContent";
+import {
+  renderChatMessage,
+  replaceFileContentBlocks,
+} from "core/util/messageContent";
 import { IIdeMessenger } from "../../context/IdeMessenger";
 import { selectSelectedChatModel } from "../slices/configSlice";
 import { selectSelectedProfile } from "../slices/profilesSlice";
@@ -401,11 +404,22 @@ export const loadLastSession = createAsyncThunk<
 });
 
 function getChatTitleFromMessage(message: ChatMessage) {
-  const text =
-    renderChatMessage(message)
-      .split("\n")
-      .filter((l) => l.trim() !== "")
-      .slice(-1)[0] || "";
+  // Replace <file_content>...</file_content> attachment blocks with a
+  // [file: path] marker BEFORE picking the last line. Without this, a session
+  // whose first message attaches files would get a title of "</file_content>"
+  // (the last non-empty line of the raw attachment block).
+  const lines = replaceFileContentBlocks(renderChatMessage(message))
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "");
+
+  // Skip the attachment boilerplate and file markers; if the message was ONLY
+  // a file attachment, fall back to the file marker itself so the title is
+  // still meaningful.
+  const textLines = lines.filter(
+    (l) => l !== "Files attached by the user:" && !l.startsWith("[file:"),
+  );
+  const text = textLines.at(-1) ?? lines.at(-1) ?? "";
 
   // Truncate
   if (text.length > MAX_TITLE_LENGTH) {
