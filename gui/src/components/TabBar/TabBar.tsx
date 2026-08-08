@@ -9,7 +9,6 @@ import {
   handleSessionChange,
   removeTab,
   setActiveTab,
-  setPendingSessionAction,
   setTabs,
 } from "../../redux/slices/tabsSlice";
 import { AppDispatch, RootState } from "../../redux/store";
@@ -137,9 +136,6 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
   const hasHistory = useSelector(
     (state: RootState) => state.session.history.length > 0,
   );
-  const isStreaming = useSelector(
-    (state: RootState) => state.session.isStreaming,
-  );
   const tabs = useSelector((state: RootState) => state.tabs.tabs);
 
   // Simple UUID generator for our needs
@@ -164,9 +160,7 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
     // 同步读取 getState().session，newSession 后会读到空 history 而跳过保存。
     // 用 void fire-and-forget：同步部分（getState、find、updateSessionMetadata）
     // 微秒级完成，异步部分（IPC、LLM 标题生成）在后台执行不阻塞 UI。
-    // 流式响应进行中时跳过 save（避免把半成品写到磁盘），并把 newSession 延迟
-    // 到流结束后执行，避免切换/新建会话中断当前响应。
-    if (hasHistory && !isStreaming) {
+    if (hasHistory) {
       void dispatch(
         saveCurrentSession({
           openNewSession: false,
@@ -174,11 +168,7 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
       );
     }
 
-    if (isStreaming) {
-      dispatch(setPendingSessionAction({ type: "new" }));
-    } else {
-      dispatch(newSession());
-    }
+    dispatch(newSession());
 
     dispatch(
       addTab({
@@ -206,32 +196,14 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
     // 完成才能看到 tab 切换，造成明显卡顿。
     const shouldSave = hasHistory;
     dispatch(setActiveTab(id));
-
-    // 空 tab（尚未绑定 session）或当前 tab：没有会话需要切换，直接返回，
-    // 不影响进行中的流式响应。
-    if (!targetTab.sessionId || targetTab.sessionId === currentSessionId) {
-      return;
-    }
-
-    if (isStreaming) {
-      // 流式响应进行中：记录待切换的会话，等流结束后再加载，
-      // 避免切 tab 中断当前响应。
-      dispatch(
-        setPendingSessionAction({
-          type: "load",
+    if (targetTab.sessionId) {
+      void dispatch(
+        loadSession({
           sessionId: targetTab.sessionId,
           saveCurrentSession: shouldSave,
         }),
       );
-      return;
     }
-
-    void dispatch(
-      loadSession({
-        sessionId: targetTab.sessionId,
-        saveCurrentSession: shouldSave,
-      }),
-    );
   };
 
   const handleTabClose = async (id: string) => {

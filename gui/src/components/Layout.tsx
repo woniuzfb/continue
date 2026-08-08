@@ -9,7 +9,6 @@ import { LocalStorageProvider } from "../context/LocalStorage";
 import { useWebviewListener } from "../hooks/useWebviewListener";
 import { useAppDispatch, useAppSelector } from "../redux/hooks";
 import { setCodeToEdit } from "../redux/slices/editState";
-import { setPendingSessionAction } from "../redux/slices/tabsSlice";
 import { setShowDialog } from "../redux/slices/uiSlice";
 import { enterEdit, exitEdit } from "../redux/thunks/edit";
 import { saveCurrentSession } from "../redux/thunks/session";
@@ -47,7 +46,6 @@ const Layout = () => {
 
   const showDialog = useAppSelector((state) => state.ui.showDialog);
   const isInEdit = useAppSelector((store) => store.session.isInEdit);
-  const isStreaming = useAppSelector((store) => store.session.isStreaming);
   const isHome =
     location.pathname === ROUTES.HOME ||
     location.pathname === ROUTES.HOME_INDEX;
@@ -58,9 +56,6 @@ const Layout = () => {
       navigate(ROUTES.HOME);
       if (isInEdit) {
         await dispatch(exitEdit({}));
-      } else if (isStreaming) {
-        // 流式响应进行中：延迟 newSession 到流结束后，避免中断当前响应
-        dispatch(setPendingSessionAction({ type: "new" }));
       } else {
         // fire-and-forget：saveCurrentSession 内部 cacheCurrentSession +
         // dispatch(newSession()) 同步执行让 UI 立即响应，LLM 标题生成和
@@ -72,7 +67,7 @@ const Layout = () => {
         );
       }
     },
-    [isInEdit, isStreaming],
+    [isInEdit],
   );
 
   useWebviewListener(
@@ -94,9 +89,6 @@ const Layout = () => {
             openNewSession: true,
           }),
         );
-      } else if (isStreaming) {
-        // 流式响应进行中：延迟 newSession 到流结束后，避免中断当前响应
-        dispatch(setPendingSessionAction({ type: "new" }));
       } else {
         // fire-and-forget：同 newSession listener
         void dispatch(
@@ -106,7 +98,7 @@ const Layout = () => {
         );
       }
     },
-    [isHome, isInEdit, isStreaming],
+    [isHome, isInEdit],
     isHome,
   );
 

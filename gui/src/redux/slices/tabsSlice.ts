@@ -7,18 +7,8 @@ export interface Tab {
   sessionId?: string;
 }
 
-/**
- * A session switch that was requested while a stream was in flight. The actual
- * switch (loadSession / newSession) is deferred until the stream finishes so
- * that switching tabs mid-response does not abort the stream.
- */
-export type PendingSessionAction =
-  | { type: "load"; sessionId: string; saveCurrentSession: boolean }
-  | { type: "new" };
-
 interface TabsState {
   tabs: Tab[];
-  pendingSessionAction?: PendingSessionAction;
 }
 
 export const INITIAL_TABS_STATE: TabsState = {
@@ -29,7 +19,6 @@ export const INITIAL_TABS_STATE: TabsState = {
       isActive: true,
     },
   ],
-  pendingSessionAction: undefined,
 };
 
 export const tabsSlice = createSlice({
@@ -64,15 +53,6 @@ export const tabsSlice = createSlice({
         ...tab,
         isActive: tab.id === action.payload,
       }));
-    },
-    setPendingSessionAction: (
-      state,
-      action: PayloadAction<PendingSessionAction>,
-    ) => {
-      state.pendingSessionAction = action.payload;
-    },
-    clearPendingSessionAction: (state) => {
-      state.pendingSessionAction = undefined;
     },
     handleSessionChange: (
       state,
@@ -155,8 +135,6 @@ export const {
   removeTab,
   setActiveTab,
   handleSessionChange,
-  setPendingSessionAction,
-  clearPendingSessionAction,
 } = tabsSlice.actions;
 
 export default tabsSlice.reducer;
