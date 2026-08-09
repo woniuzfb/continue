@@ -27,7 +27,7 @@ import { loadLastSession, saveCurrentSession } from "./session";
 import { streamThunkWrapper } from "./streamThunkWrapper";
 
 export const streamEditThunk = createAsyncThunk<
-  void,
+  boolean,
   {
     editorState: JSONContent;
     codeToEdit: SetCodeToEditPayload[];
@@ -36,7 +36,7 @@ export const streamEditThunk = createAsyncThunk<
 >(
   "edit/streamResponse",
   async ({ editorState, codeToEdit }, { dispatch, extra, getState }) => {
-    await dispatch(
+    const succeeded = await dispatch(
       streamThunkWrapper(async () => {
         dispatch(setActive());
 
@@ -69,7 +69,8 @@ export const streamEditThunk = createAsyncThunk<
           throw new Error(response.error);
         }
       }),
-    );
+    ).unwrap();
+    return succeeded;
   },
 );
 

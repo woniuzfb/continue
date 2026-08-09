@@ -27,7 +27,7 @@ interface ContinueInputBoxProps {
     modifiers: InputModifiers,
     editor: Editor,
     attachments?: AttachedFile[],
-  ) => void;
+  ) => void | Promise<boolean>;
   editorState?: JSONContent;
   contextItems?: ContextItemWithId[];
   appliedRules?: RuleMetadata[];

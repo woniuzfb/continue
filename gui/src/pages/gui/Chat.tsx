@@ -164,13 +164,13 @@ export function Chat() {
   );
 
   const sendInput = useCallback(
-    (
+    async (
       editorState: JSONContent,
       modifiers: InputModifiers,
       index?: number,
       editorToClearOnSend?: Editor,
       attachments?: AttachedFile[],
-    ) => {
+    ): Promise<boolean> => {
       const stateSnapshot = reduxStore.getState();
       const latestPendingToolCalls = selectPendingToolCalls(stateSnapshot);
       const latestPendingApplyStates = selectDoneApplyStates(stateSnapshot);
@@ -200,40 +200,46 @@ export function Chat() {
         : selectedModelByRole.chat;
 
       if (!model) {
-        return;
+        return false;
       }
 
       if (isCurrentlyInEdit && codeToEditSnapshot.length === 0) {
-        return;
+        return false;
       }
 
       if (isCurrentlyInEdit) {
-        void dispatch(
+        return await dispatch(
           streamEditThunk({
             editorState,
             codeToEdit: codeToEditSnapshot,
           }),
-        );
+        ).unwrap();
       } else {
-        void dispatch(
+        const sendPromise = dispatch(
           streamResponseThunk({ editorState, modifiers, index, attachments }),
         );
 
+        // Clear the editor immediately (optimistically), same as before the
+        // send-success reporting was introduced. Only the await below (used to
+        // decide whether to restore attached files on failure) waits for the
+        // stream to finish.
         if (editorToClearOnSend) {
           editorToClearOnSend.commands.clearContent();
         }
-      }
 
-      // Increment localstorage counter for popup
-      const currentCount = getLocalStorage("mainTextEntryCounter");
-      if (currentCount) {
-        setLocalStorage("mainTextEntryCounter", currentCount + 1);
-        if (currentCount === 300) {
-          dispatch(setDialogMessage(<FeedbackDialog />));
-          dispatch(setShowDialog(true));
+        // Increment localstorage counter for popup
+        const currentCount = getLocalStorage("mainTextEntryCounter");
+        if (currentCount) {
+          setLocalStorage("mainTextEntryCounter", currentCount + 1);
+          if (currentCount === 300) {
+            dispatch(setDialogMessage(<FeedbackDialog />));
+            dispatch(setShowDialog(true));
+          }
+        } else {
+          setLocalStorage("mainTextEntryCounter", 1);
         }
-      } else {
-        setLocalStorage("mainTextEntryCounter", 1);
+
+        return await sendPromise.unwrap();
       }
     },
     [dispatch, ideMessenger, reduxStore],

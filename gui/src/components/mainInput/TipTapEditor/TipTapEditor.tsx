@@ -36,7 +36,7 @@ export interface TipTapEditorProps {
     modifiers: InputModifiers,
     editor: Editor,
     attachments?: AttachedFile[],
-  ) => void;
+  ) => void | Promise<boolean>;
   editorState?: JSONContent;
   toolbarOptions?: ToolbarOptions;
   placeholder?: string;
@@ -174,8 +174,12 @@ function TipTapEditorInner(props: TipTapEditorProps) {
   // into message.content downstream (in streamResponseThunk) and the file
   // metadata is stored on message.metadata for the UI to render chips.
   // We read through attachedFilesRef so the closure captured by the editor's
-  // Enter keybinding always sees the latest value, then clear the state.
-  const wrappedOnEnter: typeof props.onEnter = (
+  // Enter keybinding always sees the latest value. The chips are cleared
+  // optimistically (same as the editor text), but if the send fails (error
+  // interrupt, handled by streamThunkWrapper which reports success via a
+  // boolean), the previously selected files are restored so the user does not
+  // have to pick them again.
+  const wrappedOnEnter: typeof props.onEnter = async (
     editorState,
     modifiers,
     editor,
@@ -183,10 +187,16 @@ function TipTapEditorInner(props: TipTapEditorProps) {
     const files = attachedFilesRef.current;
     if (files.length > 0) {
       setAttachedFiles([]);
-      props.onEnter(editorState, modifiers, editor, files);
-    } else {
-      props.onEnter(editorState, modifiers, editor);
+      const result = await props.onEnter(editorState, modifiers, editor, files);
+      if (result === false) {
+        // Send was interrupted by an error: bring the files back. If the user
+        // already picked new files while the send was in flight, keep those.
+        setAttachedFiles((prev) => (prev.length === 0 ? files : prev));
+      }
+      return result === false ? false : true;
     }
+    const result = await props.onEnter(editorState, modifiers, editor);
+    return result === false ? false : true;
   };
 
   const { editor, onEnter } = createEditorConfig({

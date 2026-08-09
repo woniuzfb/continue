@@ -23,7 +23,7 @@ function isOverloadedErrorMessage(message?: string): boolean {
 }
 
 export const streamThunkWrapper = createAsyncThunk<
-  void,
+  boolean,
   () => Promise<void>,
   ThunkApiType
 >("chat/streamWrapper", async (runStream, { dispatch, getState }) => {
@@ -45,7 +45,8 @@ export const streamThunkWrapper = createAsyncThunk<
           await dispatch(saveSessionFromCache(streamSessionId));
         }
       }
-      return;
+      // 流成功完成。调用方（如发送入口）据此在失败时保留用户已选的文件。
+      return true;
     } catch (e) {
       // Get the selected model from the state for error analysis
       const state = getState();
@@ -81,7 +82,7 @@ export const streamThunkWrapper = createAsyncThunk<
           await dispatch(cancelStream());
           continue;
         }
-        return; // user chose to disconnect
+        return false; // user chose to disconnect
       }
 
       // 3. Permanent errors (or retries exhausted): show the regular error
@@ -90,7 +91,8 @@ export const streamThunkWrapper = createAsyncThunk<
       dispatch(setDialogMessage(<StreamErrorDialog error={e} />));
       dispatch(setShowDialog(true));
 
-      return;
+      return false;
     }
   }
+  return false;
 });

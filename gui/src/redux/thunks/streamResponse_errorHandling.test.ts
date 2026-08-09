@@ -172,7 +172,7 @@ describe("streamResponseThunk", () => {
           requestId: expect.any(String),
           requestStatus: "fulfilled",
         },
-        payload: undefined,
+        payload: false,
       },
       {
         type: "chat/streamResponse/fulfilled",
@@ -184,7 +184,7 @@ describe("streamResponseThunk", () => {
           requestId: expect.any(String),
           requestStatus: "fulfilled",
         },
-        payload: undefined,
+        payload: false,
       },
     ]);
 
@@ -457,7 +457,7 @@ describe("streamResponseThunk", () => {
           requestId: expect.any(String),
           requestStatus: "fulfilled",
         },
-        payload: undefined,
+        payload: true,
       },
       {
         type: "chat/streamResponse/fulfilled",
@@ -469,7 +469,7 @@ describe("streamResponseThunk", () => {
           requestId: expect.any(String),
           requestStatus: "fulfilled",
         },
-        payload: undefined,
+        payload: true,
       },
     ]);
 
@@ -758,7 +758,7 @@ describe("streamResponseThunk", () => {
           requestId: expect.any(String),
           requestStatus: "fulfilled",
         },
-        payload: undefined,
+        payload: false,
       },
       {
         type: "chat/streamResponse/fulfilled",
@@ -770,7 +770,7 @@ describe("streamResponseThunk", () => {
           requestId: expect.any(String),
           requestStatus: "fulfilled",
         },
-        payload: undefined,
+        payload: false,
       },
     ]);
 

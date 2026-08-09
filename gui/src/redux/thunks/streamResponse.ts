@@ -34,7 +34,7 @@ function buildAttachedFilesText(files: AttachedFile[]): string {
 }
 
 export const streamResponseThunk = createAsyncThunk<
-  void,
+  boolean,
   {
     editorState: JSONContent;
     modifiers: InputModifiers;
@@ -48,7 +48,10 @@ export const streamResponseThunk = createAsyncThunk<
     { editorState, modifiers, index, attachments },
     { dispatch, extra, getState },
   ) => {
-    await dispatch(
+    // streamThunkWrapper 会吞掉错误并弹错误对话框，因此这里用它的返回值
+    // 判断发送是否真正成功：调用方（发送入口）在失败时需要保留用户已选
+    // 的文件，避免错误中断后文件被清空。
+    const succeeded = await dispatch(
       streamThunkWrapper(async () => {
         // 懒加载状态下，无论新消息还是 retry/edit，都必须先加载完整 history，
         // 否则 LLM 只收到部分上下文。retry/edit 传入的 index 是基于当前
@@ -164,6 +167,7 @@ export const streamResponseThunk = createAsyncThunk<
           ),
         );
       }),
-    );
+    ).unwrap();
+    return succeeded;
   },
 );
