@@ -576,7 +576,7 @@ function TipTapEditorInner(props: TipTapEditorProps) {
             props.isMainInput
               ? isEditorCollapsed
                 ? "max-h-[36px] overflow-hidden"
-                : "max-h-[80vh] overflow-y-scroll"
+                : "max-h-[calc(100vh-140px)] overflow-y-scroll"
               : "overflow-y-scroll"
           }`}
           spellCheck={false}
@@ -586,7 +586,9 @@ function TipTapEditorInner(props: TipTapEditorProps) {
           }}
         />
         {attachedFiles.length > 1 && (
-          <div className="-mb-2 mt-1 flex flex-wrap gap-1">
+          // Single row, horizontal scroll: chips must never grow vertically,
+          // otherwise the send toolbar below gets pushed off screen.
+          <div className="-mb-2 mt-1 flex max-h-[32px] flex-nowrap gap-1 overflow-x-auto">
             {attachedFiles.map((file, idx) => (
               <AttachedFileChip
                 key={`${file.path}-${idx}`}
