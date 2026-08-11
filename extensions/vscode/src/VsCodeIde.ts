@@ -408,6 +408,16 @@ class VsCodeIde implements IDE {
     }
   }
 
+  async readBinaryBase64(fileUri: string): Promise<string> {
+    try {
+      const uri = vscode.Uri.parse(fileUri);
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      return Buffer.from(bytes).toString("base64");
+    } catch (e) {
+      return "";
+    }
+  }
+
   async showOpenDialog(options: {
     selectFiles?: boolean;
     selectFolders?: boolean;

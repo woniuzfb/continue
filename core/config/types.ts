@@ -705,6 +705,8 @@ declare global {
 
     readFile(filepath: string): Promise<string>;
 
+    readBinaryBase64(filepath: string): Promise<string>;
+
     readRangeInFile(filepath: string, range: Range): Promise<string>;
 
     showLines(

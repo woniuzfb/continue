@@ -19,6 +19,12 @@ import { selectSelectedChatModel } from "../../../redux/slices/configSlice";
 import { setMainEditorDraft } from "../../../redux/slices/sessionSlice";
 import InputToolbar, { ToolbarOptions } from "../InputToolbar";
 import { ComboBoxItem, AttachedFile } from "../types";
+import {
+  isBinaryContent,
+  isBinaryFileName,
+  packBinaryToChunks,
+  pad3,
+} from "../util/binaryAttachments";
 import { DragOverlay } from "./components/DragOverlay";
 import { InputBoxDiv } from "./components/StyledComponents";
 import { useMainEditor } from "./MainEditorProvider";
@@ -26,6 +32,33 @@ import "./TipTapEditor.css";
 import { createEditorConfig, getPlaceholderText } from "./utils/editorConfig";
 import { handleImageFile } from "./utils/imageUtils";
 import { useEditorEventHandlers } from "./utils/keyHandlers";
+
+/** Cap for packing a single binary attachment (~112 MB of raw data). Larger
+ * files would freeze the webview; fall back to the legacy text attach. */
+const MAX_PACK_B64_CHARS = 150_000_000;
+
+/** Resolves with `fallback` when `promise` does not settle within `ms`.
+ * Prevents protocol requests from hanging forever (e.g. a stale IDE
+ * extension that does not handle a newly added message type). */
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
 
 export interface TipTapEditorProps {
   availableContextProviders: ContextProviderDescription[];
@@ -390,22 +423,75 @@ function TipTapEditorInner(props: TipTapEditorProps) {
           return;
         }
         Promise.all(
-          paths.map(async (path) => {
+          paths.map(async (path): Promise<AttachedFile[]> => {
             const name = path.split(/[/\\]/).pop() ?? path;
             // readFile uses vscode.Uri.parse which expects a URI string
             // (e.g. "file:///path/to/file"), but showOpenDialog returns
             // fsPath (e.g. "/path/to/file"). Convert to URI so readFile
             // doesn't silently return "" via its catch block.
             const fileUri = path.startsWith("file:") ? path : `file://${path}`;
-            const content = await ideMessenger.ide.readFile(fileUri);
-            return { name, path, content } satisfies AttachedFile;
+            let content = "";
+            try {
+              content = await ideMessenger.ide.readFile(fileUri);
+            } catch (e) {
+              console.error("Failed to read uploaded file", e);
+            }
+            try {
+              // Binary/archive files can't be inlined as UTF-8 text (mangled
+              // by the text decode, truncated by the IDE). Pack them instead:
+              // tar.gz -> base64 -> chunks + sha256 manifest (pack_b64_split.sh
+              // approach), attached through the normal flow. The chunks are
+              // pure-ASCII base64, so they survive text-ified channels intact
+              // and can be verified/rejoined via the manifest.
+              if (isBinaryFileName(name) || isBinaryContent(content)) {
+                // The IDE extension may not know readBinaryBase64 yet (stale
+                // build): the protocol request would otherwise hang forever.
+                // Time out and fall back to the legacy text attach.
+                const rawBase64 = await withTimeout(
+                  ideMessenger.ide.readBinaryBase64(fileUri),
+                  4000,
+                  "",
+                );
+                if (rawBase64 && rawBase64.length <= MAX_PACK_B64_CHARS) {
+                  const { chunks, manifest } = await packBinaryToChunks({
+                    name,
+                    path,
+                    rawBase64,
+                  });
+                  return [
+                    ...chunks.map((chunk, i) => ({
+                      name: `${name}.b64.${pad3(i)}`,
+                      path: `${path}.b64.${pad3(i)}`,
+                      content: chunk,
+                    })),
+                    {
+                      name: `${name}.b64.manifest.txt`,
+                      path: `${path}.b64.manifest.txt`,
+                      content: manifest,
+                    },
+                  ];
+                }
+                if (rawBase64.length > MAX_PACK_B64_CHARS) {
+                  console.warn(
+                    `Skipped binary packing for ${name}: payload too large (${rawBase64.length} b64 chars)`,
+                  );
+                } else {
+                  console.warn(
+                    `readBinaryBase64 unavailable for ${name}; attaching as text`,
+                  );
+                }
+              }
+            } catch (e) {
+              console.error("Binary packing failed, attaching as text", e);
+            }
+            return [{ name, path, content } satisfies AttachedFile];
           }),
         )
-          .then((newFiles) => {
-            setAttachedFiles((prev) => [...prev, ...newFiles]);
+          .then((fileGroups) => {
+            setAttachedFiles((prev) => [...prev, ...fileGroups.flat()]);
           })
           .catch((e) => {
-            console.error("Failed to read uploaded file", e);
+            console.error("Failed to process uploaded files", e);
           });
       });
   }, [ideMessenger]);

@@ -193,6 +193,8 @@ interface IDE {
 
     suspend fun readFile(filepath: String): String
 
+    suspend fun readBinaryBase64(filepath: String): String
+
     suspend fun showOpenDialog(params: ShowOpenDialogParams): List<String>
 
     suspend fun readRangeInFile(filepath: String, range: Range): String

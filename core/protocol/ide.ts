@@ -34,6 +34,9 @@ export type ToIdeFromWebviewOrCoreProtocol = {
   saveFile: [{ filepath: string }, void];
   fileExists: [{ filepath: string }, boolean];
   readFile: [{ filepath: string }, string];
+  // Raw bytes as base64 (no UTF-8 decoding / truncation / size cap), used for
+  // packing binary attachments. Implementations return "" when unreadable.
+  readBinaryBase64: [{ filepath: string }, string];
   getProblems: [{ filepath: string }, Problem[]];
   // Opens the IDE's native file picker and returns selected absolute paths.
   // `selectFolders` flips the dialog into folder-selection mode.

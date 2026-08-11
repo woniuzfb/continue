@@ -351,6 +351,9 @@ class IntelliJIDE(
     override suspend fun readFile(filepath: String): String =
         fileUtils.readFile(filepath)
 
+    override suspend fun readBinaryBase64(filepath: String): String =
+        fileUtils.readBinaryBase64(filepath)
+
     override suspend fun showOpenDialog(params: ShowOpenDialogParams): List<String> =
         withContext(Dispatchers.EDT) {
             val descriptor = FileChooserDescriptorFactory

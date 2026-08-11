@@ -196,6 +196,10 @@ export class MessageIde implements IDE {
     return await this.request("readFile", { filepath: fileUri });
   }
 
+  async readBinaryBase64(fileUri: string): Promise<string> {
+    return await this.request("readBinaryBase64", { filepath: fileUri });
+  }
+
   async showOpenDialog(options: {
     selectFiles?: boolean;
     selectFolders?: boolean;

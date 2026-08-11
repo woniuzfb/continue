@@ -367,6 +367,9 @@ export class VsCodeMessenger {
     this.onWebviewOrCore("readFile", async (msg) => {
       return await ide.readFile(msg.data.filepath);
     });
+    this.onWebviewOrCore("readBinaryBase64", async (msg) => {
+      return await ide.readBinaryBase64(msg.data.filepath);
+    });
     this.onWebviewOrCore("showOpenDialog", async (msg) => {
       return await ide.showOpenDialog(msg.data);
     });

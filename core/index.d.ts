@@ -914,6 +914,14 @@ export interface IDE {
 
   readFile(fileUri: string): Promise<string>;
 
+  /**
+   * Reads a file's RAW bytes and returns them base64-encoded, without UTF-8
+   * decoding, truncation, or size limits. Used by the attachment flow to pack
+   * binary files (tar.gz -> base64 -> chunks) so they survive text-ified
+   * upload channels. Returns "" when the file cannot be read.
+   */
+  readBinaryBase64(fileUri: string): Promise<string>;
+
   showOpenDialog(options: {
     selectFiles?: boolean;
     selectFolders?: boolean;

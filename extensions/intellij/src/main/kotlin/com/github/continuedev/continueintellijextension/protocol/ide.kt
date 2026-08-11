@@ -30,6 +30,8 @@ data class FileExistsParams(val filepath: String)
 
 data class ReadFileParams(val filepath: String)
 
+data class ReadBinaryBase64Params(val filepath: String)
+
 data class ShowDiffParams(
     val filepath: String,
     val newContents: String,

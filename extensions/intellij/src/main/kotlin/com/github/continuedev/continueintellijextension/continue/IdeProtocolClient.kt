@@ -146,6 +146,15 @@ class IdeProtocolClient(
                         respond(contents)
                     }
 
+                    "readBinaryBase64" -> {
+                        val params = gsonService.gson.fromJson(
+                            dataElement.toString(),
+                            ReadBinaryBase64Params::class.java
+                        )
+                        val contents = ide.readBinaryBase64(params.filepath)
+                        respond(contents)
+                    }
+
                     "showOpenDialog" -> {
                         val params = gsonService.gson.fromJson(
                             dataElement.toString(),

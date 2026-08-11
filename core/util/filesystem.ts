@@ -248,6 +248,12 @@ class FileSystemIde implements IDE {
     });
   }
 
+  async readBinaryBase64(fileUri: string): Promise<string> {
+    const filepath = fileURLToPath(fileUri);
+    const bytes = await fs.promises.readFile(filepath);
+    return bytes.toString("base64");
+  }
+
   showOpenDialog(_options: {
     selectFiles?: boolean;
     selectFolders?: boolean;

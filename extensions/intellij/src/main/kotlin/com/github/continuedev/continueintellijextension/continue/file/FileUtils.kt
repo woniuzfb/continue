@@ -68,6 +68,21 @@ class FileUtils(
         return normalizeLineEndings(text)
     }
 
+    /** Raw bytes as base64 (no text decoding / truncation), for binary
+     *  attachment packing. Returns "" when unreadable. */
+    fun readBinaryBase64(fileUri: String): String {
+        val found = findFile(fileUri)
+            ?: return ""
+        return runReadAction {
+            try {
+                val bytes = found.contentsToByteArray()
+                java.util.Base64.getEncoder().encodeToString(bytes)
+            } catch (e: Exception) {
+                ""
+            }
+        }
+    }
+
     fun openFile(fileUri: String) {
         val found = findFile(fileUri)
             ?: return
