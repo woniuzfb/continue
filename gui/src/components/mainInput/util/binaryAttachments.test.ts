@@ -5,7 +5,7 @@ import {
   DEFAULT_CHUNK_BYTES,
   isBinaryContent,
   isBinaryFileName,
-  MAX_INLINE_TEXT_CHARS,
+  MAX_INLINE_FILE_BYTES,
   packBinaryToChunks,
   pad3,
   shouldPackAttachment,
@@ -29,21 +29,35 @@ describe("binaryAttachments", () => {
   });
 
   describe("shouldPackAttachment", () => {
-    it("packs binary/archive files", () => {
+    it("packs binary/archive files regardless of size", () => {
       expect(shouldPackAttachment("bundle.zip", "text")).toBe(true);
-      expect(shouldPackAttachment("a.bin", "x\u0000y")).toBe(true);
+      expect(shouldPackAttachment("a.bin", "x\u0000y", 10)).toBe(true);
     });
 
-    it("packs large text files", () => {
+    it("packs ANY file whose real byte size exceeds the cap", () => {
       expect(
-        shouldPackAttachment("big.log", "a".repeat(MAX_INLINE_TEXT_CHARS + 1)),
+        shouldPackAttachment(
+          "readme.md",
+          "short content",
+          MAX_INLINE_FILE_BYTES + 1,
+        ),
       ).toBe(true);
+      // Huge file whose readFile text came back empty (truncation) still
+      // packs when the real size is known.
+      expect(shouldPackAttachment("big.log", "", 500_000_000)).toBe(true);
     });
 
-    it("inlines small text files", () => {
+    it("inlines small files", () => {
       expect(shouldPackAttachment("readme.md", "hello")).toBe(false);
+      expect(shouldPackAttachment("ok.txt", "a".repeat(1000), 1000)).toBe(
+        false,
+      );
       expect(
-        shouldPackAttachment("ok.txt", "a".repeat(MAX_INLINE_TEXT_CHARS)),
+        shouldPackAttachment(
+          "ok.txt",
+          "a".repeat(MAX_INLINE_FILE_BYTES),
+          MAX_INLINE_FILE_BYTES,
+        ),
       ).toBe(false);
     });
   });

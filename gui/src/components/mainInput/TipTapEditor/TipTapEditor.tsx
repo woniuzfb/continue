@@ -438,14 +438,25 @@ function TipTapEditorInner(props: TipTapEditorProps) {
               console.error("Failed to read uploaded file", e);
             }
             try {
-              // Binary/archive files and large text files can't be inlined as
+              // The REAL byte size decides whether to pack: readFile text is
+              // truncated at 10MB and returns "" past 100MB, so it can't be
+              // trusted for large files. getFileStats is cheap metadata;
+              // fall back to content length if the IDE doesn't support it.
+              let fileSize: number | undefined;
+              try {
+                const stats = await ideMessenger.ide.getFileStats([fileUri]);
+                fileSize = stats?.[fileUri]?.size;
+              } catch (e) {
+                console.warn("getFileStats failed, using content length", e);
+              }
+              // Binary/archive files and ANY large file can't be inlined as
               // UTF-8 text (mangled by the text decode, truncated by the IDE,
               // or too big for the context). Pack them instead: base64 ->
               // chunks + sha256 manifest, preserving the ORIGINAL bytes (no
               // re-packaging), attached through the normal flow. The chunks
               // are pure-ASCII base64, so they survive text-ified channels
               // intact and can be verified/rejoined via the manifest.
-              if (shouldPackAttachment(name, content)) {
+              if (shouldPackAttachment(name, content, fileSize)) {
                 // The IDE extension may not know readBinaryBase64 yet (stale
                 // build): the protocol request would otherwise hang forever.
                 // Time out and fall back to the legacy text attach.
