@@ -139,14 +139,20 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
         <GradientBorder
           loading={isStreaming && (props.isLastUserInput || isInEdit) ? 1 : 0}
           borderColor={
-            // Sent (history) user messages get a solid brand-green border so
-            // they are easy to tell apart from assistant replies. The main
-            // input only shows the gradient while streaming.
+            // Older sent (history) user messages get a solid brand-green
+            // border. The MOST RECENT user message keeps its original look:
+            // animated gradient while the model is replying (or while being
+            // edited), plain otherwise. The main input keeps its original
+            // behavior too.
             props.isMainInput
               ? isStreaming && (props.isLastUserInput || isInEdit)
                 ? undefined
                 : vscBackground
-              : "#1BBE84"
+              : !props.isLastUserInput
+                ? "#1BBE84"
+                : isStreaming || isInEdit
+                  ? undefined
+                  : vscBackground
           }
           borderRadius={defaultBorderRadius}
         >
