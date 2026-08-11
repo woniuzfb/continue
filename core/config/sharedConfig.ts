@@ -40,6 +40,7 @@ export const sharedConfigSchema = z
     lazyLoadHistory: z.boolean(),
     lazyLoadHistoryInitialCount: z.number(),
     lazyLoadHistoryPageSize: z.number(),
+    attachmentSplitThresholdMB: z.number(),
 
     // `tabAutocompleteOptions` in `ContinueConfig`
     useAutocompleteCache: z.boolean(),
@@ -189,6 +190,10 @@ export function modifyAnyConfigWithSharedConfig<
   if (sharedConfig.lazyLoadHistoryPageSize !== undefined) {
     configCopy.ui.lazyLoadHistoryPageSize =
       sharedConfig.lazyLoadHistoryPageSize;
+  }
+  if (sharedConfig.attachmentSplitThresholdMB !== undefined) {
+    configCopy.ui.attachmentSplitThresholdMB =
+      sharedConfig.attachmentSplitThresholdMB;
   }
 
   configCopy.experimental = {

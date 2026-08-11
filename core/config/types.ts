@@ -1059,14 +1059,18 @@ declare global {
      */
     lazyLoadHistory?: boolean;
     /**
-     * 懒加载开启时，初次加载的最近消息条数（默认 20）。
+     * 懒加载开启时，初次加载的最近消息条数（默认 4）。
      * 注意这里是消息条数而非"轮数"，1 轮 = user+assistant = 2 条。
      */
     lazyLoadHistoryInitialCount?: number;
     /**
-     * 上滑加载更多时每次追加的消息条数（默认 20）。
+     * 上滑加载更多时每次追加的消息条数（默认 4）。
      */
     lazyLoadHistoryPageSize?: number;
+    /**
+     * 附件超过该大小（MB）时拆分为 base64 分块 + manifest（默认 1）。
+     */
+    attachmentSplitThresholdMB?: number;
   }
 
   interface ContextMenuConfig {

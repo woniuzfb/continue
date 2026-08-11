@@ -27,12 +27,13 @@
 export const DEFAULT_CHUNK_BYTES = 9_000_000;
 
 /**
- * Files larger than this (real byte size) are packed (base64 -> chunks)
- * instead of being inlined, so they are not truncated (the IDE's readFile
- * caps at 10MB and returns "" past 100MB) and don't blow the context window.
- * Applies to ANY file type, not just text.
+ * Default inline cap: files larger than this (real byte size) are packed
+ * (base64 -> chunks) instead of being inlined, so they are not truncated
+ * (the IDE's readFile caps at 10MB and returns "" past 100MB) and don't
+ * blow the context window. Applies to ANY file type. The UI setting
+ * `ui.attachmentSplitThresholdMB` overrides this (default 1 MB).
  */
-export const MAX_INLINE_FILE_BYTES = 200_000;
+export const MAX_INLINE_FILE_BYTES = 1_000_000;
 
 /** Well-known extensions that cannot be meaningfully inlined as UTF-8 text. */
 const BINARY_EXTENSIONS = new Set([
@@ -132,19 +133,20 @@ export function isBinaryContent(content: string): boolean {
 /**
  * True when an attached file should go through the pack pipeline instead of
  * being inlined as text: binary/archive files, or ANY file whose real byte
- * size exceeds the inline cap. `fileSize` is the authoritative size from the
- * IDE stats (readFile text is truncated and unreliable for big files); when
- * unavailable it falls back to the content length.
+ * size exceeds the inline limit. `fileSize` is the authoritative size from
+ * the IDE stats (readFile text is truncated and unreliable for big files);
+ * when unavailable it falls back to the content length.
  */
 export function shouldPackAttachment(
   name: string,
   content: string,
   fileSize?: number,
+  inlineLimitBytes: number = MAX_INLINE_FILE_BYTES,
 ): boolean {
   return (
     isBinaryFileName(name) ||
     isBinaryContent(content) ||
-    (fileSize ?? content.length) > MAX_INLINE_FILE_BYTES
+    (fileSize ?? content.length) > inlineLimitBytes
   );
 }
 

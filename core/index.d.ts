@@ -1530,6 +1530,9 @@ export interface ContinueUIConfig {
   lazyLoadHistory?: boolean;
   lazyLoadHistoryInitialCount?: number;
   lazyLoadHistoryPageSize?: number;
+  /** Files larger than this (MB) are split into base64 chunks + manifest
+   * when attached. Defaults to 1. */
+  attachmentSplitThresholdMB?: number;
 }
 
 export interface ContextMenuConfig {

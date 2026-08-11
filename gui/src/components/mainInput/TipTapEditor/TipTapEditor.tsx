@@ -186,6 +186,12 @@ function TipTapEditorInner(props: TipTapEditorProps) {
   const isOSREnabled = useIsOSREnabled();
 
   const defaultModel = useAppSelector(selectSelectedChatModel);
+  // Attachments larger than this (real byte size) are split into base64
+  // chunks + manifest; configurable via ui.attachmentSplitThresholdMB.
+  const inlineLimitBytes = useAppSelector(
+    (state) =>
+      (state.config.config.ui?.attachmentSplitThresholdMB ?? 1) * 1024 * 1024,
+  );
   const isStreaming = useAppSelector((state) => state.session.isStreaming);
   const historyLength = useAppSelector((store) => store.session.history.length);
   const isInEdit = useAppSelector((store) => store.session.isInEdit);
@@ -455,8 +461,12 @@ function TipTapEditorInner(props: TipTapEditorProps) {
               // chunks + sha256 manifest, preserving the ORIGINAL bytes (no
               // re-packaging), attached through the normal flow. The chunks
               // are pure-ASCII base64, so they survive text-ified channels
-              // intact and can be verified/rejoined via the manifest.
-              if (shouldPackAttachment(name, content, fileSize)) {
+              // intact and can be verified/rejoined via the manifest. The
+              // threshold comes from ui.attachmentSplitThresholdMB (default
+              // 1 MB).
+              if (
+                shouldPackAttachment(name, content, fileSize, inlineLimitBytes)
+              ) {
                 // The IDE extension may not know readBinaryBase64 yet (stale
                 // build): the protocol request would otherwise hang forever.
                 // Time out and fall back to the legacy text attach.
@@ -507,7 +517,7 @@ function TipTapEditorInner(props: TipTapEditorProps) {
             console.error("Failed to process uploaded files", e);
           });
       });
-  }, [ideMessenger]);
+  }, [ideMessenger, inlineLimitBytes]);
 
   // Single attached file renders inline with the toolbar buttons (leftExtra).
   // Memoize so the element reference is stable across re-renders (e.g. while

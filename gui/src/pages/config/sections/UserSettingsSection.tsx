@@ -65,6 +65,7 @@ export function UserSettingsSection() {
   const lazyLoadHistoryInitialCount =
     config.ui?.lazyLoadHistoryInitialCount ?? 4;
   const lazyLoadHistoryPageSize = config.ui?.lazyLoadHistoryPageSize ?? 4;
+  const attachmentSplitThresholdMB = config.ui?.attachmentSplitThresholdMB ?? 1;
   const disableSessionTitles = config.disableSessionTitles ?? false;
   const useCurrentFileAsContext =
     config.experimental?.useCurrentFileAsContext ?? false;
@@ -159,6 +160,17 @@ export function UserSettingsSection() {
                     handleUpdate({ lazyLoadHistoryPageSize: value })
                   }
                   disabled={!lazyLoadHistory}
+                />
+                <UserSetting
+                  type="number"
+                  title="Attachment Split Threshold (MB)"
+                  description="Files larger than this size (in MB) are split into base64 chunks with a manifest when attached, so they are not truncated and don't blow the context window. Defaults to 1."
+                  value={attachmentSplitThresholdMB}
+                  min={0.1}
+                  max={100}
+                  onChange={(value) =>
+                    handleUpdate({ attachmentSplitThresholdMB: value })
+                  }
                 />
                 <UserSetting
                   type="toggle"

@@ -47,6 +47,17 @@ describe("binaryAttachments", () => {
       expect(shouldPackAttachment("big.log", "", 500_000_000)).toBe(true);
     });
 
+    it("defaults to splitting above 1 MB", () => {
+      expect(MAX_INLINE_FILE_BYTES).toBe(1_000_000);
+      expect(shouldPackAttachment("a.txt", "x", 1_000_000)).toBe(false);
+      expect(shouldPackAttachment("a.txt", "x", 1_000_001)).toBe(true);
+    });
+
+    it("respects an explicit inline limit", () => {
+      expect(shouldPackAttachment("a.txt", "x", 500_000, 100_000)).toBe(true);
+      expect(shouldPackAttachment("a.txt", "x", 50_000, 100_000)).toBe(false);
+    });
+
     it("inlines small files", () => {
       expect(shouldPackAttachment("readme.md", "hello")).toBe(false);
       expect(shouldPackAttachment("ok.txt", "a".repeat(1000), 1000)).toBe(
