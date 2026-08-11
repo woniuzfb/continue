@@ -5,8 +5,10 @@ import {
   DEFAULT_CHUNK_BYTES,
   isBinaryContent,
   isBinaryFileName,
+  MAX_INLINE_TEXT_CHARS,
   packBinaryToChunks,
   pad3,
+  shouldPackAttachment,
   writeSingleFileTar,
 } from "./binaryAttachments";
 
@@ -24,6 +26,26 @@ describe("binaryAttachments", () => {
     it("sniffs NUL bytes in content", () => {
       expect(isBinaryContent("hello\u0000world")).toBe(true);
       expect(isBinaryContent("plain text")).toBe(false);
+    });
+  });
+
+  describe("shouldPackAttachment", () => {
+    it("packs binary/archive files", () => {
+      expect(shouldPackAttachment("bundle.zip", "text")).toBe(true);
+      expect(shouldPackAttachment("a.bin", "x\u0000y")).toBe(true);
+    });
+
+    it("packs large text files", () => {
+      expect(
+        shouldPackAttachment("big.log", "a".repeat(MAX_INLINE_TEXT_CHARS + 1)),
+      ).toBe(true);
+    });
+
+    it("inlines small text files", () => {
+      expect(shouldPackAttachment("readme.md", "hello")).toBe(false);
+      expect(
+        shouldPackAttachment("ok.txt", "a".repeat(MAX_INLINE_TEXT_CHARS)),
+      ).toBe(false);
     });
   });
 

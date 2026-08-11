@@ -24,6 +24,7 @@ import {
   isBinaryFileName,
   packBinaryToChunks,
   pad3,
+  shouldPackAttachment,
 } from "../util/binaryAttachments";
 import { DragOverlay } from "./components/DragOverlay";
 import { InputBoxDiv } from "./components/StyledComponents";
@@ -437,13 +438,14 @@ function TipTapEditorInner(props: TipTapEditorProps) {
               console.error("Failed to read uploaded file", e);
             }
             try {
-              // Binary/archive files can't be inlined as UTF-8 text (mangled
-              // by the text decode, truncated by the IDE). Pack them instead:
-              // tar.gz -> base64 -> chunks + sha256 manifest (pack_b64_split.sh
+              // Binary/archive files and large text files can't be inlined as
+              // UTF-8 text (mangled by the text decode, truncated by the IDE,
+              // or too big for the context). Pack them instead: tar.gz ->
+              // base64 -> chunks + sha256 manifest (pack_b64_split.sh
               // approach), attached through the normal flow. The chunks are
               // pure-ASCII base64, so they survive text-ified channels intact
               // and can be verified/rejoined via the manifest.
-              if (isBinaryFileName(name) || isBinaryContent(content)) {
+              if (shouldPackAttachment(name, content)) {
                 // The IDE extension may not know readBinaryBase64 yet (stale
                 // build): the protocol request would otherwise hang forever.
                 // Time out and fall back to the legacy text attach.

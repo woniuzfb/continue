@@ -24,6 +24,13 @@
 export const DEFAULT_CHUNK_BYTES = 9_000_000;
 
 /**
+ * Text files larger than this are packed (tar.gz -> base64 -> chunks) instead
+ * of being inlined, so they are not truncated (the IDE's readFile caps at
+ * 10MB) and don't blow the context window.
+ */
+export const MAX_INLINE_TEXT_CHARS = 200_000;
+
+/**
  * Inputs that are already archives/compressed are stored as-is inside the
  * payload (no tar.gz wrapper), mirroring pack_b64_split.sh which `cp`s
  * *.tar.gz / *.tgz / *.zip / *.gz inputs verbatim. Everything else gets
@@ -124,6 +131,19 @@ export function isBinaryFileName(name: string): boolean {
  */
 export function isBinaryContent(content: string): boolean {
   return content.slice(0, 8_000).includes("\u0000");
+}
+
+/**
+ * True when an attached file should go through the pack pipeline instead of
+ * being inlined as text: binary/archive files, or text files above the
+ * inline size cap.
+ */
+export function shouldPackAttachment(name: string, content: string): boolean {
+  return (
+    isBinaryFileName(name) ||
+    isBinaryContent(content) ||
+    content.length > MAX_INLINE_TEXT_CHARS
+  );
 }
 
 /** Chunked base64 decode (handles multi-MB strings without call-stack blowup). */
