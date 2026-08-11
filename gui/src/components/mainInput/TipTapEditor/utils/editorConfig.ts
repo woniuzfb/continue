@@ -429,10 +429,10 @@ export function createEditorConfig(options: {
       handlePaste: (view, event) => {
         const cd = event.clipboardData;
         if (!cd) return false;
-        // Only take over the paste when the clipboard is plain text (or code
-        // wrapped in spans/divs). Genuinely rich HTML (links, bold, lists,
-        // tables, images) is left to ProseMirror's default handling so
-        // formatting survives — previously every text paste was flattened.
+        // The chat schema has no formatting nodes, so rendered HTML would be
+        // flattened anyway while the markdown source (text/plain) would be
+        // lost. Always prefer the newline-preserving plain-text path when a
+        // text/plain payload exists (see shouldUsePlainTextPaste).
         if (!shouldUsePlainTextPaste(cd)) {
           return false;
         }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hasRichHtml, shouldUsePlainTextPaste } from "./pastePolicy";
+import { shouldUsePlainTextPaste } from "./pastePolicy";
 
 function fakeDataTransfer(opts: {
   items?: { kind: string; type: string }[];
@@ -18,66 +18,45 @@ function fakeDataTransfer(opts: {
   };
 }
 
-describe("hasRichHtml", () => {
-  it("detects links, bold, lists, tables, headings, images, quotes, code", () => {
-    expect(hasRichHtml('<a href="https://x">link</a>')).toBe(true);
-    expect(hasRichHtml("<p><b>bold</b></p>")).toBe(true);
-    expect(hasRichHtml("<ul><li>item</li></ul>")).toBe(true);
-    expect(hasRichHtml("<table><tr><td>x</td></tr></table>")).toBe(true);
-    expect(hasRichHtml("<h2>title</h2>")).toBe(true);
-    expect(hasRichHtml('<img src="x.png">')).toBe(true);
-    expect(hasRichHtml("<blockquote>q</blockquote>")).toBe(true);
-    expect(hasRichHtml("<pre>code</pre>")).toBe(true);
-    expect(hasRichHtml("<code>inline</code>")).toBe(true);
-  });
-
-  it("treats span/div/p/br-only HTML as NOT rich (VS Code / terminal copies)", () => {
-    expect(
-      hasRichHtml('<meta charset="utf-8"><div>line1</div><div>line2</div>'),
-    ).toBe(false);
-    expect(hasRichHtml('<span style="color:red">const x = 1;</span>')).toBe(
-      false,
-    );
-    expect(hasRichHtml("<p>a</p><p></p><p>b</p>")).toBe(false);
-    expect(hasRichHtml("")).toBe(false);
-  });
-});
-
 describe("shouldUsePlainTextPaste", () => {
-  it("intercepts plain-text pastes (the empty-line fix must keep working)", () => {
+  it("intercepts plain-text pastes (markdown symbols + blank lines preserved)", () => {
     expect(
       shouldUsePlainTextPaste(
         fakeDataTransfer({ text: "first line\n\nsecond line" }),
       ),
     ).toBe(true);
-    // VS Code code copies: span/div-only HTML + text/plain
+  });
+
+  it("intercepts rich HTML pastes too - the chat schema has no formatting nodes", () => {
+    // Rendered web HTML (bold/headings/lists) would be flattened to text by
+    // the schema anyway, so the markdown source in text/plain must win.
     expect(
       shouldUsePlainTextPaste(
         fakeDataTransfer({
-          html: '<meta charset="utf-8"><div>echo $1</div>',
-          text: "echo $1",
+          html: "<p><b>bold</b></p><h2>heading</h2><ul><li>item</li></ul>",
+          text: "**bold**\n\n## heading\n\n* item",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldUsePlainTextPaste(
+        fakeDataTransfer({
+          html: "<table><tr><td>a</td></tr></table>",
+          text: "| a |",
         }),
       ),
     ).toBe(true);
   });
 
-  it("lets rich HTML pastes fall through to default handling (formatting preserved)", () => {
+  it("intercepts VS Code / terminal copies (span/div-highlighted text)", () => {
     expect(
       shouldUsePlainTextPaste(
         fakeDataTransfer({
-          html: "<p>see <a href='https://x'>this</a></p>",
-          text: "see this",
+          html: '<meta charset="utf-8"><div><span>echo $1</span></div>',
+          text: "echo $1",
         }),
       ),
-    ).toBe(false);
-    expect(
-      shouldUsePlainTextPaste(
-        fakeDataTransfer({
-          html: "<ul><li>one</li><li>two</li></ul>",
-          text: "one\ntwo",
-        }),
-      ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("lets image file pastes fall through to the Image extension", () => {
