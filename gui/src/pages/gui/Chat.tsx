@@ -1,5 +1,7 @@
 import {
   ArrowLeftIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
   ChatBubbleOvalLeftIcon,
 } from "@heroicons/react/24/outline";
 import { Editor, JSONContent } from "@tiptap/react";
@@ -18,6 +20,8 @@ import styled from "styled-components";
 import { Button, lightGray, vscBackground } from "../../components";
 import { useFindWidget } from "../../components/find/FindWidget";
 import TimelineItem from "../../components/gui/TimelineItem";
+import { CopyIconButton } from "../../components/gui/CopyIconButton";
+import HeaderButtonWithToolTip from "../../components/gui/HeaderButtonWithToolTip";
 import { NewSessionButton } from "../../components/mainInput/belowMainInput/NewSessionButton";
 import ThinkingBlockPeek from "../../components/mainInput/belowMainInput/ThinkingBlockPeek";
 import ContinueInputBox from "../../components/mainInput/ContinueInputBox";
@@ -57,6 +61,7 @@ import { getLocalStorage, setLocalStorage } from "../../util/localStorage";
 import { EmptyChatBody } from "./EmptyChatBody";
 import { ExploreDialogWatcher } from "./ExploreDialogWatcher";
 import { useAutoScroll } from "./useAutoScroll";
+import { loadMoreHistory } from "../../redux/thunks/loadMoreHistory";
 
 // Helper function to find the index of the latest conversation summary
 function findLatestSummaryIndex(history: ChatHistoryItem[]): number {
@@ -119,6 +124,13 @@ export function Chat() {
   const mainTextInputRef = useRef<HTMLInputElement>(null);
   const stepsDivRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
+  // Set while the "jump to previous message" button is loading earlier
+  // history and scrolling, so useAutoScroll does not yank the view to the
+  // bottom in the middle of the jump.
+  const jumpSuppressRef = useRef(false);
+  // Increments on every jump; a stale jump's timeout must not release the
+  // suppression while a newer jump is still in flight.
+  const jumpTokenRef = useRef(0);
   const history = useAppSelector((state) => state.session.history);
   const isHistoryLoading = useAppSelector(
     (state) => state.session.isHistoryLoading,
@@ -137,7 +149,7 @@ export function Chat() {
     return isJetBrains();
   }, []);
 
-  useAutoScroll(stepsDivRef, history);
+  useAutoScroll(stepsDivRef, history, jumpSuppressRef);
 
   useEffect(() => {
     // Cmd + Backspace to delete current step
@@ -278,6 +290,148 @@ export function Chat() {
     [history],
   );
 
+  /**
+   * Scrolls to the next user message. Messages below the current one are
+   * always already loaded (lazy loading only truncates the head), so no
+   * history loading is needed here. When there is no next user message,
+   * pulls the chat to the very bottom (latest content) instead.
+   */
+  const jumpToNextUserMessage = useCallback(
+    (currentMessageId: string) => {
+      const h = reduxStore.getState().session.history;
+      const idx = h.findIndex((item) => item.message.id === currentMessageId);
+      if (idx < 0) {
+        // Stale message id (history was replaced): nothing to jump to.
+        return;
+      }
+      let target: string | undefined;
+      for (let i = idx + 1; i < h.length; i++) {
+        if (h[i].message.role === "user") {
+          target = h[i].message.id;
+          break;
+        }
+      }
+      if (!target) {
+        // No next user message: pull to the very bottom (latest content).
+        stepsDivRef.current?.scrollTo({
+          top: stepsDivRef.current.scrollHeight,
+          behavior: "smooth",
+        });
+        return;
+      }
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          document
+            .querySelector(`[data-message-id="${target}"]`)
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+    },
+    [reduxStore, stepsDivRef],
+  );
+
+  /**
+   * Scrolls to the previous user message. With lazy-loaded history, older
+   * messages may not be in the DOM yet; load pages of earlier history
+   * (loadMoreHistory) until the target message exists, then scroll.
+   */
+  const jumpToPreviousUserMessage = useCallback(
+    async (currentMessageId: string) => {
+      // Suppress useAutoScroll's auto-bottom while we load earlier pages and
+      // scroll; otherwise the prepend (new user messages in loaded history)
+      // resets the scroll state and yanks the view to the bottom.
+      jumpSuppressRef.current = true;
+      const myToken = ++jumpTokenRef.current;
+      try {
+        // Stale message id (history was replaced): never load pages just to
+        // jump; abort instead.
+        if (
+          !reduxStore
+            .getState()
+            .session.history.some(
+              (item) => item.message.id === currentMessageId,
+            )
+        ) {
+          return;
+        }
+        // Always read the freshest history: prepends shift indices, so the
+        // current message's position must be recomputed on every call.
+        const findTarget = (): string | undefined => {
+          const h = reduxStore.getState().session.history;
+          const idx = h.findIndex(
+            (item) => item.message.id === currentMessageId,
+          );
+          for (let i = idx - 1; i >= 0; i--) {
+            if (h[i].message.role === "user") {
+              return h[i].message.id;
+            }
+          }
+          return undefined;
+        };
+
+        let target = findTarget();
+        let prevLength = reduxStore.getState().session.history.length;
+        // Load pages of earlier history until the target shows up. Guarded by
+        // hasMoreHistory / isHistoryLoading; stops if a load makes no progress
+        // (failure or empty page) so it can never spin forever.
+        while (!target) {
+          const session = reduxStore.getState().session;
+          if (session.isHistoryLoading) {
+            await new Promise((r) => setTimeout(r, 100));
+            continue;
+          }
+          if (!session.hasMoreHistory) {
+            break;
+          }
+          await dispatch(loadMoreHistory());
+          target = findTarget();
+          const len = reduxStore.getState().session.history.length;
+          if (len === prevLength) {
+            break;
+          }
+          prevLength = len;
+        }
+        if (!target) {
+          return;
+        }
+        // Wait for React to commit the (possibly just-loaded) messages before
+        // scrolling.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            document
+              .querySelector(`[data-message-id="${target}"]`)
+              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+          });
+        });
+      } finally {
+        // Release the suppression only once the (smooth) scroll has settled.
+        // A fixed timeout can fire mid-scroll: while the view passes the top
+        // region (scrollTop < 50), useAutoScroll's top-detection would then
+        // trigger an unwanted lazy load. Token guard: a newer jump owns the
+        // suppression until it settles.
+        let lastTop = -1;
+        const checkSettled = () => {
+          if (jumpTokenRef.current !== myToken) {
+            return;
+          }
+          const el = stepsDivRef.current;
+          if (!el) {
+            jumpSuppressRef.current = false;
+            return;
+          }
+          if (el.scrollTop === lastTop) {
+            jumpSuppressRef.current = false;
+            return;
+          }
+          lastTop = el.scrollTop;
+          requestAnimationFrame(checkSettled);
+        };
+        requestAnimationFrame(checkSettled);
+      }
+    },
+    [dispatch, reduxStore, jumpSuppressRef, jumpTokenRef],
+  );
+
   const renderChatHistoryItem = useCallback(
     (item: ChatHistoryItemWithMessageId, index: number) => {
       const {
@@ -312,6 +466,40 @@ export function Chat() {
             contextItems={contextItems}
             appliedRules={appliedRules}
             inputId={message.id}
+            bottomRightActions={
+              <>
+                <CopyIconButton
+                  text={() => {
+                    // Copy the user's typed text only: strip everything from
+                    // the synthetic "Files attached by the user:" marker on
+                    // (the attachment <file_content> blocks) so the clipboard
+                    // doesn't get the attachment payload.
+                    const text = renderChatMessage(message);
+                    const marker = text.indexOf(
+                      "\n\nFiles attached by the user:",
+                    );
+                    return (marker >= 0 ? text.slice(0, marker) : text).trim();
+                  }}
+                  clipboardIconClassName="h-3.5 w-3.5 text-gray-400"
+                  checkIconClassName="h-3.5 w-3.5 text-green-400"
+                  tooltipPlacement="top"
+                />
+                <HeaderButtonWithToolTip
+                  text="Go to previous message"
+                  tooltipPlacement="top"
+                  onClick={() => jumpToPreviousUserMessage(message.id)}
+                >
+                  <ArrowUpIcon className="h-3.5 w-3.5 text-gray-400" />
+                </HeaderButtonWithToolTip>
+                <HeaderButtonWithToolTip
+                  text="Go to next message"
+                  tooltipPlacement="top"
+                  onClick={() => jumpToNextUserMessage(message.id)}
+                >
+                  <ArrowDownIcon className="h-3.5 w-3.5 text-gray-400" />
+                </HeaderButtonWithToolTip>
+              </>
+            }
           />
         );
       }
@@ -396,7 +584,15 @@ export function Chat() {
         </div>
       );
     },
-    [sendInput, isLastUserInput, history, stepsOpen, isStreaming],
+    [
+      sendInput,
+      isLastUserInput,
+      history,
+      stepsOpen,
+      isStreaming,
+      jumpToPreviousUserMessage,
+      jumpToNextUserMessage,
+    ],
   );
 
   const showScrollbar = showChatScrollbar ?? window.innerHeight > 5000;
@@ -424,6 +620,7 @@ export function Chat() {
           .map((item, index: number) => (
             <div
               key={item.message.id}
+              data-message-id={item.message.id}
               className="min-w-0"
               style={{
                 minHeight: index === history.length - 1 ? "200px" : 0,

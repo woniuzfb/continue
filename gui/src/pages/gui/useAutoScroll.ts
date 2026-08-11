@@ -14,6 +14,7 @@ function getNumUserMsgs(history: ChatHistoryItemWithMessageId[]) {
 export const useAutoScroll = (
   ref: React.RefObject<HTMLDivElement>,
   history: ChatHistoryItemWithMessageId[],
+  suppressAutoScrollRef?: React.MutableRefObject<boolean>,
 ) => {
   const dispatch = useAppDispatch();
   const hasMoreHistory = useAppSelector(
@@ -50,7 +51,7 @@ export const useAutoScroll = (
   // ResizeObserver 重新 observe 时把 scrollTop 拉到底部，覆盖 prepend 锚定。
   // prepend 期间跳过重置即可。
   useEffect(() => {
-    if (isPrependingRef.current) return;
+    if (isPrependingRef.current || suppressAutoScrollRef?.current) return;
     setUserHasScrolled(false);
   }, [numUserMsgs]);
 
@@ -123,7 +124,8 @@ export const useAutoScroll = (
           hasMoreHistory &&
           !isHistoryLoading &&
           !isPrependingRef.current &&
-          !isStreaming
+          !isStreaming &&
+          !suppressAutoScrollRef?.current
         ) {
           // 记录 prepend 前的滚动状态
           prevScrollHeightRef.current = elem.scrollHeight;
@@ -137,6 +139,9 @@ export const useAutoScroll = (
     const resizeObserver = new ResizeObserver(() => {
       const elem = ref.current;
       if (!elem || userHasScrolled) return;
+      // External navigation (e.g. the "jump to previous message" button)
+      // suppresses auto-bottom while it loads and scrolls.
+      if (suppressAutoScrollRef?.current) return;
       // prepend 期间禁用 auto-bottom，否则会把用户拉到底部
       if (isPrependingRef.current) return;
       // prepend 刚完成时跳过 auto-bottom（userHasScrolled 状态可能尚未提交）
