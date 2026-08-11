@@ -590,7 +590,7 @@ function TipTapEditorInner(props: TipTapEditorProps) {
       }}
     >
       <div
-        className={`px-2.5 pb-1 pt-2${
+        className={`px-2.5 pb-1 pt-2 ${
           attachedFiles.length > 1 ? "has-attachments" : ""
         }`}
       >
