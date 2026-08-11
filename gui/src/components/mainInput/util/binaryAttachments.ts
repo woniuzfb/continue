@@ -1,18 +1,21 @@
 /**
- * Binary attachment packing for the "Upload File" (+) flow.
+ * Attachment packing for the "Upload File" (+) flow.
  *
  * Binary/archive files can't be inlined as UTF-8 text: the IDE's `readFile`
  * decodes bytes to text (mangling non-ASCII) and truncates large files, so
- * the model would receive garbage (or nothing). Following the
- * pack_b64_split.sh approach, binary files are instead packed as
+ * the model would receive garbage (or nothing). Large text files would blow
+ * the context window and are silently truncated by the IDE.
  *
- *   tar.gz -> base64 -> split into chunks (each under a size cap)
+ * Such files are instead base64-encoded and split into chunks (each under a
+ * size cap), plus a sha256 manifest:
  *
- * and the chunks + a sha256 manifest are attached through the normal
- * attachment flow. Base64 keeps the payload intact through text-ified
- * channels; chunking keeps each piece under the channel's size cap. The
- * manifest (sha256 of the tar.gz, of the full base64, and of every part)
- * makes the payload auditable after rejoin.
+ *   original bytes -> base64 -> split into chunks
+ *
+ * The ORIGINAL file format is never changed: no tar, no re-compression. The
+ * payload is simply the raw bytes of the file, base64-transported. The
+ * receiver rejoins the chunks, base64-decodes, and gets the exact original
+ * file (verified against payload_sha256). The manifest also lists the sha256
+ * of the full base64 and of every part.
  *
  * All helpers are pure / browser-API based so the whole pipeline runs in the
  * webview (no IDE-side packing needed — the IDE only provides raw bytes via
@@ -24,19 +27,11 @@
 export const DEFAULT_CHUNK_BYTES = 9_000_000;
 
 /**
- * Text files larger than this are packed (tar.gz -> base64 -> chunks) instead
- * of being inlined, so they are not truncated (the IDE's readFile caps at
- * 10MB) and don't blow the context window.
+ * Text files larger than this are packed (base64 -> chunks) instead of being
+ * inlined, so they are not truncated (the IDE's readFile caps at 10MB) and
+ * don't blow the context window.
  */
 export const MAX_INLINE_TEXT_CHARS = 200_000;
-
-/**
- * Inputs that are already archives/compressed are stored as-is inside the
- * payload (no tar.gz wrapper), mirroring pack_b64_split.sh which `cp`s
- * *.tar.gz / *.tgz / *.zip / *.gz inputs verbatim. Everything else gets
- * packed into a single-file tar.gz.
- */
-const STORED_AS_IS_RE = /\.(zip|gz|tgz)$/i;
 
 /** Well-known extensions that cannot be meaningfully inlined as UTF-8 text. */
 const BINARY_EXTENSIONS = new Set([
@@ -166,61 +161,6 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/**
- * Writes a minimal ustar tar archive containing a single file entry, padded
- * to 512-byte blocks with two zero blocks at the end (deterministic mtime).
- */
-export function writeSingleFileTar(name: string, data: Uint8Array): Uint8Array {
-  const encoder = new TextEncoder();
-  const header = new Uint8Array(512);
-  const nameBytes = encoder.encode(name.slice(0, 100));
-  header.set(nameBytes, 0);
-
-  const octal = (value: number, length: number) =>
-    value.toString(8).padStart(length - 1, "0") + "\0";
-  // mode 0644, uid/gid 0, size, mtime 0
-  header.set(encoder.encode(octal(0o644, 8)), 100);
-  header.set(encoder.encode(octal(0, 8)), 108);
-  header.set(encoder.encode(octal(0, 8)), 116);
-  header.set(encoder.encode(octal(data.length, 12)), 124);
-  header.set(encoder.encode(octal(0, 12)), 136);
-  header.set(encoder.encode("0"), 156); // typeflag: regular file
-  header.set(encoder.encode("ustar\0"), 257);
-  header.set(encoder.encode("00"), 263);
-
-  // checksum: sum of header bytes with the chksum field filled with spaces.
-  // Field layout (POSIX): 6 octal digits + NUL + space.
-  for (let i = 148; i < 156; i++) {
-    header[i] = 0x20;
-  }
-  let sum = 0;
-  for (const b of header) {
-    sum += b;
-  }
-  const checksum = sum.toString(8).padStart(6, "0") + "\0 ";
-  header.set(encoder.encode(checksum), 148);
-
-  const paddedDataLen = Math.ceil(data.length / 512) * 512;
-  const out = new Uint8Array(512 + paddedDataLen + 1024);
-  out.set(header, 0);
-  out.set(data, 512);
-  return out;
-}
-
-/** gzip via the browser's CompressionStream (works in Node/webviews). */
-export async function gzipBytes(data: Uint8Array): Promise<Uint8Array> {
-  if (typeof CompressionStream === "undefined") {
-    // Old webview: fail fast so the caller can fall back to the legacy
-    // text attach instead of doing pointless tar work.
-    throw new Error("CompressionStream is not available");
-  }
-  const stream = new Response(data as unknown as BodyInit).body!.pipeThrough(
-    new CompressionStream("gzip"),
-  );
-  const buf = await new Response(stream).arrayBuffer();
-  return new Uint8Array(buf);
-}
-
 /** SHA-256 hex digest. Returns "unavailable" when WebCrypto is missing. */
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   if (typeof crypto === "undefined" || !crypto?.subtle) {
@@ -242,27 +182,23 @@ export function pad3(n: number): string {
 export interface PackedBinaryResult {
   /** Base64 chunks, in order. */
   chunks: string[];
-  /** Manifest text (mirrors pack_b64_split.sh format). */
+  /** Manifest text. */
   manifest: string;
-  /** Number of bytes in the packed payload (as-is file or tar.gz). */
+  /** Number of bytes in the payload (the original file, before base64). */
   packedBytes: number;
 }
 
 /**
- * Packs a binary file into base64 chunks plus a sha256 manifest, mirroring
- * pack_b64_split.sh: inputs that are already archives (.zip/.gz/.tgz/.tar.gz)
- * are stored as-is; everything else is packed into a single-file tar.gz.
+ * Splits a file's raw bytes into base64 chunks plus a sha256 manifest. The
+ * payload is the ORIGINAL bytes — never re-packaged (no tar, no gzip) — so
+ * rejoining the chunks and base64-decoding yields the exact original file.
  * `rawBase64` must come from `ide.readBinaryBase64` (raw bytes).
  */
 export async function packBinaryToChunks(
   file: { name: string; path: string; rawBase64: string },
   chunkBytes: number = DEFAULT_CHUNK_BYTES,
 ): Promise<PackedBinaryResult> {
-  const rawBytes = base64ToBytes(file.rawBase64);
-  const storeAsIs = STORED_AS_IS_RE.test(file.name);
-  const payload = storeAsIs
-    ? rawBytes
-    : await gzipBytes(writeSingleFileTar(file.name, rawBytes));
+  const payload = base64ToBytes(file.rawBase64);
   const fullB64 = bytesToBase64(payload);
 
   const chunks: string[] = [];
@@ -283,11 +219,9 @@ export async function packBinaryToChunks(
     "# base64 split manifest",
     `# generated: ${new Date().toISOString()}`,
     `source_path : ${file.path}`,
-    `payload_format : ${
-      storeAsIs ? "original bytes (stored as-is)" : "tar.gz (single file)"
-    }`,
-    `tar_gz_bytes : ${payload.length}`,
-    `tar_gz_sha256 : ${payloadSha}`,
+    "payload_format : original bytes (stored as-is)",
+    `payload_bytes : ${payload.length}`,
+    `payload_sha256 : ${payloadSha}`,
     `b64_total_bytes : ${fullB64.length}`,
     `b64_total_sha256 : ${b64Sha}`,
     `chunk_bytes : ${chunkBytes}`,

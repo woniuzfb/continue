@@ -440,11 +440,11 @@ function TipTapEditorInner(props: TipTapEditorProps) {
             try {
               // Binary/archive files and large text files can't be inlined as
               // UTF-8 text (mangled by the text decode, truncated by the IDE,
-              // or too big for the context). Pack them instead: tar.gz ->
-              // base64 -> chunks + sha256 manifest (pack_b64_split.sh
-              // approach), attached through the normal flow. The chunks are
-              // pure-ASCII base64, so they survive text-ified channels intact
-              // and can be verified/rejoined via the manifest.
+              // or too big for the context). Pack them instead: base64 ->
+              // chunks + sha256 manifest, preserving the ORIGINAL bytes (no
+              // re-packaging), attached through the normal flow. The chunks
+              // are pure-ASCII base64, so they survive text-ified channels
+              // intact and can be verified/rejoined via the manifest.
               if (shouldPackAttachment(name, content)) {
                 // The IDE extension may not know readBinaryBase64 yet (stale
                 // build): the protocol request would otherwise hang forever.
