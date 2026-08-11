@@ -1296,4 +1296,150 @@ describe("streamResponseThunk", () => {
       },
     });
   });
+
+  it("should carry over attached files when resubmitting a message without explicit attachments", async () => {
+    const initialState = getRootStateWithClaude();
+    // A previously sent user message that failed mid-stream: paths live in
+    // metadata.attachments, contents live in the <file_content> blocks of
+    // message.content.
+    initialState.session.history = [
+      {
+        message: {
+          id: "1",
+          role: "user",
+          content: [
+            { type: "text", text: "Hello" },
+            {
+              type: "text",
+              text: '\n\nFiles attached by the user:\n\n<file_content path="/a/b.ts">\nconst b = 1;\n</file_content>\n',
+            },
+          ],
+          metadata: {
+            attachments: [{ name: "b.ts", path: "/a/b.ts" }],
+          },
+        },
+        contextItems: [],
+      },
+    ];
+    initialState.session.id = "session-123";
+    const mockStore = createMockStore(initialState);
+    const mockIdeMessenger = mockStore.mockIdeMessenger;
+
+    mockIdeMessenger.responses["llm/compileChat"] = {
+      compiledChatMessages: [],
+      didPrune: false,
+      contextPercentage: 0.5,
+    };
+
+    async function* mockStreamGenerator(): AsyncGenerator<
+      AssistantChatMessage[],
+      PromptLog
+    > {
+      yield [{ role: "assistant", content: "ok" }];
+      return {
+        prompt: "Hello",
+        completion: "ok",
+        modelProvider: "anthropic",
+        modelTitle: "Claude 3.5 Sonnet",
+      };
+    }
+    const mockStreamChat = vi.fn();
+    mockStreamChat.mockReturnValue(mockStreamGenerator());
+    mockIdeMessenger.llmStreamChat = mockStreamChat;
+
+    // Resubmit the message (index 0) WITHOUT passing attachments, like the
+    // "Resubmit last message" button and edit-and-resend do.
+    const result = await mockStore.dispatch(
+      streamResponseThunk({
+        editorState: mockEditorState,
+        modifiers: mockModifiers,
+        index: 0,
+      }) as any,
+    );
+
+    expect((result as any).payload).toBe(true);
+    const updated = (mockStore.getState() as any).session.history[0]
+      .message as ChatMessage;
+    const contentText = Array.isArray(updated.content)
+      ? updated.content
+          .map((p: any) => (p.type === "text" ? p.text : ""))
+          .join("")
+      : String(updated.content);
+    // The file must be carried over into the resent message.
+    expect(contentText).toContain('<file_content path="/a/b.ts">');
+    expect(contentText).toContain("const b = 1;");
+    expect(updated.metadata).toEqual({
+      attachments: [{ name: "b.ts", path: "/a/b.ts" }],
+    });
+  });
+
+  it("should carry over empty attached files on resubmit", async () => {
+    const initialState = getRootStateWithClaude();
+    // An attached EMPTY file: the <file_content> block exists but has no
+    // content. It must not be dropped by the carry-over logic.
+    initialState.session.history = [
+      {
+        message: {
+          id: "1",
+          role: "user",
+          content: [
+            { type: "text", text: "Hello" },
+            {
+              type: "text",
+              text: '\n\nFiles attached by the user:\n\n<file_content path="/a/empty.log">\n\n</file_content>\n',
+            },
+          ],
+          metadata: {
+            attachments: [{ name: "empty.log", path: "/a/empty.log" }],
+          },
+        },
+        contextItems: [],
+      },
+    ];
+    initialState.session.id = "session-123";
+    const mockStore = createMockStore(initialState);
+    const mockIdeMessenger = mockStore.mockIdeMessenger;
+    mockIdeMessenger.responses["llm/compileChat"] = {
+      compiledChatMessages: [],
+      didPrune: false,
+      contextPercentage: 0.5,
+    };
+    async function* mockStreamGenerator(): AsyncGenerator<
+      AssistantChatMessage[],
+      PromptLog
+    > {
+      yield [{ role: "assistant", content: "ok" }];
+      return {
+        prompt: "Hello",
+        completion: "ok",
+        modelProvider: "anthropic",
+        modelTitle: "Claude 3.5 Sonnet",
+      };
+    }
+    const mockStreamChat = vi.fn();
+    mockStreamChat.mockReturnValue(mockStreamGenerator());
+    mockIdeMessenger.llmStreamChat = mockStreamChat;
+
+    const result = await mockStore.dispatch(
+      streamResponseThunk({
+        editorState: mockEditorState,
+        modifiers: mockModifiers,
+        index: 0,
+      }) as any,
+    );
+
+    expect((result as any).payload).toBe(true);
+    const updated = (mockStore.getState() as any).session.history[0]
+      .message as ChatMessage;
+    const contentText = Array.isArray(updated.content)
+      ? updated.content
+          .map((p: any) => (p.type === "text" ? p.text : ""))
+          .join("")
+      : String(updated.content);
+    // The empty file is carried over (block present, content empty).
+    expect(contentText).toContain('<file_content path="/a/empty.log">');
+    expect(updated.metadata).toEqual({
+      attachments: [{ name: "empty.log", path: "/a/empty.log" }],
+    });
+  });
 });

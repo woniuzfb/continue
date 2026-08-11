@@ -1,6 +1,11 @@
 import { createAsyncThunk, unwrapResult } from "@reduxjs/toolkit";
 import { JSONContent } from "@tiptap/core";
-import { InputModifiers, MessagePart, TextMessagePart } from "core";
+import {
+  InputModifiers,
+  MessageContent,
+  MessagePart,
+  TextMessagePart,
+} from "core";
 
 import { v4 as uuidv4 } from "uuid";
 import { resolveEditorContent } from "../../components/mainInput/TipTapEditor/utils/resolveEditorContent";
@@ -31,6 +36,51 @@ function buildAttachedFilesText(files: AttachedFile[]): string {
     )
     .join("\n\n");
   return `\n\nFiles attached by the user:\n\n${blocks}\n`;
+}
+
+/**
+ * Rebuilds {@link AttachedFile}s for a message that was already sent. When a
+ * send fails mid-stream, the user message stays in history with the file
+ * paths in `message.metadata.attachments` and the file contents embedded in
+ * `message.content` as `<file_content path="...">` text blocks. Resubmitting
+ * that message (edit-and-resend, or the error dialog's "Resubmit last
+ * message") must carry those files along; callers of `streamResponseThunk`
+ * don't pass `attachments` in those paths, so we rebuild them here before
+ * `submitEditorAndInitAtIndex` clears the message content.
+ */
+function extractAttachmentsFromMessage(message: {
+  content: MessageContent;
+  metadata?: { attachments?: AttachmentMeta[] };
+}): AttachedFile[] {
+  const meta = message.metadata?.attachments ?? [];
+  if (meta.length === 0) {
+    return [];
+  }
+  const parts: MessagePart[] = Array.isArray(message.content)
+    ? message.content
+    : [{ type: "text", text: message.content }];
+  const text = parts
+    .filter((p): p is TextMessagePart => p.type === "text")
+    .map((p) => p.text)
+    .join("\n");
+  const contents = new Map<string, string>();
+  const foundPaths = new Set<string>();
+  const fileContentRe =
+    /<file_content path="([^"]*)">\n([\s\S]*?)\n<\/file_content>/g;
+  for (const match of text.matchAll(fileContentRe)) {
+    foundPaths.add(match[1]);
+    contents.set(match[1], match[2]);
+  }
+  // Keep every attachment whose <file_content> block was found (including
+  // genuinely empty files); only drop entries whose block could not be
+  // extracted (e.g. the message predates the attachment feature).
+  return meta
+    .map((m) => ({
+      name: m.name,
+      path: m.path,
+      content: contents.get(m.path) ?? "",
+    }))
+    .filter((f) => foundPaths.has(f.path));
 }
 
 export const streamResponseThunk = createAsyncThunk<
@@ -80,6 +130,21 @@ export const streamResponseThunk = createAsyncThunk<
         if (!selectedChatModel) {
           throw new Error("No chat model selected");
         }
+
+        // 重发（编辑历史消息、错误对话框的 "Resubmit last message"）时，调用方
+        // 不会显式传 attachments。此时从被替换的原消息里继承附件：路径在
+        // metadata.attachments，内容在 message.content 的 <file_content> 块里。
+        // 必须在 submitEditorAndInitAtIndex 清空 content 之前提取。
+        const existingMessage =
+          inputIndex >= 0 && inputIndex < state.session.history.length
+            ? state.session.history[inputIndex].message
+            : undefined;
+        const filesToAttach =
+          attachments ??
+          (existingMessage
+            ? extractAttachmentsFromMessage(existingMessage)
+            : []);
+
         dispatch(
           submitEditorAndInitAtIndex({ index: inputIndex, editorState }),
         );
@@ -118,7 +183,6 @@ export const streamResponseThunk = createAsyncThunk<
         // to the LLM) as a trailing text part. The editorState is left clean so
         // the already-sent user message echoes back only what the user typed;
         // file chips are rendered from message.metadata.attachments instead.
-        const filesToAttach = attachments ?? [];
         let finalContent = content;
         if (filesToAttach.length > 0) {
           const attachmentText = buildAttachedFilesText(filesToAttach);
