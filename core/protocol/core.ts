@@ -277,6 +277,8 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   "chatDescriber/describe": [
     {
       text: string;
+      // 传完整会话历史，让服务端能识别这不是新会话（服务端按历史判断）
+      messages?: ChatMessage[];
     },
     string | undefined,
   ];

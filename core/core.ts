@@ -642,7 +642,12 @@ export class Core {
         throw new Error("No chat model selected");
       }
 
-      return await ChatDescriber.describe(currentModel, {}, msg.data.text);
+      return await ChatDescriber.describe(
+        currentModel,
+        {},
+        msg.data.text,
+        msg.data.messages,
+      );
     });
 
     on("conversation/compact", async (msg) => {

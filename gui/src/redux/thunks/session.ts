@@ -24,6 +24,7 @@ import {
 import { RootState, ThunkApiType } from "../store";
 import { updateSelectedModelByRole } from "../thunks/updateSelectedModelByRole";
 import { compileChatForContextMetrics } from "./compileChatForContextMetrics";
+import { constructMessages } from "../util/constructMessages";
 
 const MAX_TITLE_LENGTH = 100;
 
@@ -198,14 +199,33 @@ export const saveSessionFromCache = createAsyncThunk<
     selectedChatModel
   ) {
     const assistantResponse = cached.history
-      ?.find((h) => h.message.role === "assistant")
+      ?.find(
+        (h) =>
+          h.message.role === "assistant" && !!h.message.content?.toString(),
+      )
       ?.message?.content?.toString();
+
     if (assistantResponse) {
+      // 复用 constructMessages，与发送消息路径对齐：
+      // 注入 contextItems、过滤 thinking、处理 file_content 块等
+      const withoutMessageIds = cached.history.map((item) => {
+        const { id, ...messageWithoutId } = item.message;
+        return { ...item, message: messageWithoutId };
+      });
+      const { messages: compiledMessages } = constructMessages(
+        withoutMessageIds,
+        undefined,
+        [],
+        {},
+      );
+
       try {
         const result = await extra.ideMessenger.request(
           "chatDescriber/describe",
           {
             text: assistantResponse,
+            // 传对齐后的完整历史，让服务端能识别这不是新会话
+            messages: compiledMessages,
           },
         );
         if (result.status === "success" && result.content) {
@@ -536,15 +556,33 @@ export const saveCurrentSession = createAsyncThunk<
         selectedChatModel
       ) {
         let assistantResponse = session.history
-          ?.find((h) => h.message.role === "assistant")
+          ?.find(
+            (h) =>
+              h.message.role === "assistant" && !!h.message.content?.toString(),
+          )
           ?.message?.content?.toString();
 
         if (assistantResponse) {
+          // 复用 constructMessages，与发送消息路径对齐：
+          // 注入 contextItems、过滤 thinking、处理 file_content 块等
+          const withoutMessageIds = session.history.map((item) => {
+            const { id, ...messageWithoutId } = item.message;
+            return { ...item, message: messageWithoutId };
+          });
+          const { messages: compiledMessages } = constructMessages(
+            withoutMessageIds,
+            undefined,
+            [],
+            {},
+          );
+
           try {
             const result = await extra.ideMessenger.request(
               "chatDescriber/describe",
               {
                 text: assistantResponse,
+                // 传对齐后的完整历史，让服务端能识别这不是新会话
+                messages: compiledMessages,
               },
             );
             if (result.status === "success" && result.content) {

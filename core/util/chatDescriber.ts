@@ -1,4 +1,4 @@
-import { ILLM, LLMFullCompletionOptions } from "..";
+import { ChatMessage, ILLM, LLMFullCompletionOptions } from "..";
 
 import { removeCodeBlocksAndTrim, removeQuotesAndEscapes } from ".";
 
@@ -17,6 +17,7 @@ export class ChatDescriber {
     model: ILLM,
     completionOptions: LLMFullCompletionOptions,
     message: string,
+    history?: ChatMessage[],
   ): Promise<string | undefined> {
     if (!ChatDescriber.prompt) {
       return;
@@ -31,14 +32,27 @@ export class ChatDescriber {
 
     completionOptions.maxTokens = ChatDescriber.maxTokens;
 
+    // 带上会话历史，让服务端能识别这不是新会话；
+    // 无 history 时退回原有单条消息行为
+    const messages: ChatMessage[] =
+      history && history.length > 0
+        ? [
+            ...history,
+            {
+              role: "user" as const,
+              content: ChatDescriber.prompt + message,
+            },
+          ]
+        : [
+            {
+              role: "user" as const,
+              content: ChatDescriber.prompt + message,
+            },
+          ];
+
     // Prompt the user's current LLM for the title
     const titleResponse = await model.chat(
-      [
-        {
-          role: "user",
-          content: ChatDescriber.prompt + message,
-        },
-      ],
+      messages,
       new AbortController().signal,
       completionOptions,
     );
