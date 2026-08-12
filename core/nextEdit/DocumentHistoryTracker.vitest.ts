@@ -93,9 +93,9 @@ describe("DocumentHistoryTracker", () => {
     });
 
     it("should return null if the document doesn't exist", () => {
-      // Spy on console.error
+      // Spy on console.warn
       const consoleErrorSpy = vi
-        .spyOn(console, "error")
+        .spyOn(console, "warn")
         .mockImplementation(() => {});
 
       const ast = tracker.getMostRecentAst("nonexistent-path");
@@ -116,9 +116,9 @@ describe("DocumentHistoryTracker", () => {
       // @ts-ignore - accessing private property for testing
       tracker.documentAstMap.set(testDocPath, []);
 
-      // Spy on console.error
+      // Spy on console.warn
       const consoleErrorSpy = vi
-        .spyOn(console, "error")
+        .spyOn(console, "warn")
         .mockImplementation(() => {});
 
       const ast = tracker.getMostRecentAst(testDocPath);
@@ -143,9 +143,9 @@ describe("DocumentHistoryTracker", () => {
     });
 
     it("should return null if the document doesn't exist", () => {
-      // Spy on console.error
+      // Spy on console.warn
       const consoleErrorSpy = vi
-        .spyOn(console, "error")
+        .spyOn(console, "warn")
         .mockImplementation(() => {});
 
       const content = tracker.getMostRecentDocumentHistory("nonexistent-path");
@@ -164,9 +164,9 @@ describe("DocumentHistoryTracker", () => {
       // @ts-ignore - accessing private property for testing
       tracker.documentContentHistoryMap.set(testDocPath, []);
 
-      // Spy on console.error
+      // Spy on console.warn
       const consoleErrorSpy = vi
-        .spyOn(console, "error")
+        .spyOn(console, "warn")
         .mockImplementation(() => {});
 
       const content = tracker.getMostRecentDocumentHistory(testDocPath);
@@ -185,9 +185,9 @@ describe("DocumentHistoryTracker", () => {
       tracker.addDocument(testDocPath, testContent1, mockAst1);
       tracker.deleteDocument(testDocPath);
 
-      // Spy on console.error
+      // Spy on console.warn
       const consoleErrorSpy = vi
-        .spyOn(console, "error")
+        .spyOn(console, "warn")
         .mockImplementation(() => {});
 
       const ast = tracker.getMostRecentAst(testDocPath);
@@ -212,9 +212,9 @@ describe("DocumentHistoryTracker", () => {
 
       tracker.clearMap();
 
-      // Spy on console.error
+      // Spy on console.warn
       const consoleErrorSpy = vi
-        .spyOn(console, "error")
+        .spyOn(console, "warn")
         .mockImplementation(() => {});
 
       expect(tracker.getMostRecentAst(testDocPath)).toBeNull();
