@@ -203,11 +203,18 @@ export class HistoryManager {
   }
 
   load(sessionId: string): Session {
+    const sessionFile = getSessionFilePath(sessionId);
+    if (!fs.existsSync(sessionFile)) {
+      // 文件不存在是预期场景：新建的 session tab 在发消息前从未保存到磁盘。
+      // 静默返回空 session，不作为错误处理。
+      return {
+        history: [],
+        title: NEW_SESSION_TITLE,
+        workspaceDirectory: "",
+        sessionId: sessionId,
+      };
+    }
     try {
-      const sessionFile = getSessionFilePath(sessionId);
-      if (!fs.existsSync(sessionFile)) {
-        throw new Error(`Session file ${sessionFile} does not exist`);
-      }
       const session: Session = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
       session.sessionId = sessionId;
       return session;
