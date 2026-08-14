@@ -9,6 +9,10 @@ import { LocalStorageProvider } from "../context/LocalStorage";
 import { useWebviewListener } from "../hooks/useWebviewListener";
 import { useAppDispatch, useAppSelector } from "../redux/hooks";
 import { setCodeToEdit } from "../redux/slices/editState";
+import {
+  setDontMergeHistoricalReplyBubbles,
+  setDontMergeReplyBubbles,
+} from "../redux/slices/sessionSlice";
 import { setShowDialog } from "../redux/slices/uiSlice";
 import { enterEdit, exitEdit } from "../redux/thunks/edit";
 import { saveCurrentSession } from "../redux/thunks/session";
@@ -43,6 +47,22 @@ const Layout = () => {
 
   const { mainEditor } = useMainEditor();
   const dialogMessage = useAppSelector((state) => state.ui.dialogMessage);
+  // UI 设置镜像：流式不合并 + 历史会话不合并（均默认 true）。
+  // config 变化时同步到 session slice。
+  const dontMergeReplyBubbles = useAppSelector(
+    (state) => state.config.config?.ui?.dontMergeReplyBubbles ?? true,
+  );
+  const dontMergeHistoricalReplyBubbles = useAppSelector(
+    (state) => state.config.config?.ui?.dontMergeHistoricalReplyBubbles ?? true,
+  );
+  useEffect(() => {
+    dispatch(setDontMergeReplyBubbles(dontMergeReplyBubbles));
+  }, [dontMergeReplyBubbles, dispatch]);
+  useEffect(() => {
+    dispatch(
+      setDontMergeHistoricalReplyBubbles(dontMergeHistoricalReplyBubbles),
+    );
+  }, [dontMergeHistoricalReplyBubbles, dispatch]);
 
   const showDialog = useAppSelector((state) => state.ui.showDialog);
   const isInEdit = useAppSelector((store) => store.session.isInEdit);

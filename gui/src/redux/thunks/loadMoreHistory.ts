@@ -34,7 +34,10 @@ export const loadMoreHistory = createAsyncThunk<void, void, ThunkApiType>(
     }
 
     const pageSize = getState().config.config.ui?.lazyLoadHistoryPageSize ?? 4;
-    const loadedCount = state.history.length;
+    // 分页偏移以“已从磁盘加载的条目数”为准（loadedDiskCount），而不是
+    // history.length —— 轮次内合并（mergeSplitReplies）会减少内存条数，
+    // 但磁盘条目数与偏移一一对应，必须用它来取下一页。
+    const loadedCount = state.loadedDiskCount ?? state.history.length;
     // loadPage 的 offset = 从末尾跳过的条数 = 当前已加载条数
     const requestOffset = loadedCount;
 

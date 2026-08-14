@@ -231,6 +231,9 @@ export type CachedSession = {
   historyLoadedOffset?: number;
   historyTotalCount?: number;
   hasMoreHistory?: boolean;
+  loadedDiskCount?: number;
+  dontMergeReplyBubbles?: boolean;
+  dontMergeHistoricalReplyBubbles?: boolean;
   // Context metrics
   isPruned?: boolean;
   contextPercentage?: number;
@@ -330,7 +333,145 @@ type SessionState = {
   historyTotalCount?: number; // 磁盘上完整 history 总条数
   hasMoreHistory?: boolean; // 是否还有更早的消息可加载
   isHistoryLoading?: boolean; // 是否正在加载更多历史
+  // 已从磁盘加载的条目数（懒加载时有效）。分页偏移以此为准而非
+  // history.length，因此“轮次内合并”（mergeSplitReplies 减少条目数）
+  // 不会破坏翻页记账。全量加载后清空。
+  loadedDiskCount?: number;
+  // UI 设置镜像：dontMergeReplyBubbles（默认 true=流式不合并气泡）、
+  // dontMergeHistoricalReplyBubbles（默认 true=历史会话加载不合并）。
+  // 由 Layout 监听 config.ui 同步。
+  dontMergeReplyBubbles?: boolean;
+  dontMergeHistoricalReplyBubbles?: boolean;
 };
+
+/**
+ * Repair old sessions written before the mid-response-thinking fix: a single
+ * reply could be split across several history items
+ * (`assistant → thinking → assistant …`), leaving the copy button with only
+ * the trailing fragment.
+ *
+ * Within each reply group (consecutive assistant/thinking items between
+ * user/tool messages), if MORE THAN ONE assistant item carries content, the
+ * whole group is merged into a single assistant item: contents are
+ * concatenated in stream order (faithfully restoring the original reply,
+ * including mid-sentence cuts), and thinking texts are moved into
+ * `reasoning`. Normal flows (empty placeholder + thinking + one answer, or a
+ * single content-bearing assistant) are left untouched. Idempotent.
+ *
+ * The FIRST reply group (the first assistant/thinking run after the first
+ * user message) is exempt: servers may derive the session ID from the
+ * first-turn content, so that turn must stay byte-identical across reloads.
+ * (With lazy-load prepends, the true first turn is only ever the first
+ * group once the oldest page is loaded — intermediate groups get merged as
+ * soon as an older page arrives, so everything converges.)
+ */
+export function mergeSplitReplies(
+  history: ChatHistoryItemWithMessageId[],
+): ChatHistoryItemWithMessageId[] {
+  const result: ChatHistoryItemWithMessageId[] = [];
+  let group: ChatHistoryItemWithMessageId[] = [];
+  let isFirstGroup = true;
+
+  const flush = () => {
+    if (!group.length) {
+      return;
+    }
+    const isFirst = isFirstGroup;
+    isFirstGroup = false;
+
+    if (isFirst) {
+      // 首轮保持原样：服务端可能依据首轮对话内容确定会话 ID，
+      // 这一轮必须跨重载保持字节一致。
+      result.push(...group);
+      group = [];
+      return;
+    }
+
+    const contentItems = group.filter(
+      (i) =>
+        i.message.role === "assistant" &&
+        renderChatMessage(i.message).trim().length > 0,
+    );
+    if (contentItems.length <= 1) {
+      result.push(...group);
+      group = [];
+      return;
+    }
+
+    const contents = contentItems.map((i) => renderChatMessage(i.message));
+    const thinkingTexts = group
+      .filter((i) => i.message.role === "thinking")
+      .map((i) => renderChatMessage(i.message).trim())
+      .filter(Boolean);
+    const assistantItems = group.filter((i) => i.message.role === "assistant");
+    const firstAssistant = assistantItems[0] ?? group[0];
+
+    // 拆分回复里 tool call 可能落在后面的 assistant 条目上
+    // （流式顺序：text → thinking → text + toolCall），合并时不能只保留
+    // firstAssistant 的 toolCalls / toolCallStates，否则工具调用链会断。
+    const allToolCallStates = assistantItems.flatMap(
+      (i) => i.toolCallStates ?? [],
+    );
+    const allToolCalls = assistantItems.flatMap(
+      (i) => (i.message as any).toolCalls ?? [],
+    );
+    // 组内第一条 thinking 的签名/redacted/reasoning_details 原样保留到合并
+    // 后的 message 上：当前 GUI 流程（constructMessages 过滤 thinking +
+    // precompiled）不会把它们发给 LLM，但合并不应销毁这些数据——例如
+    // Anthropic extended thinking 的签名块依赖 role==="thinking" 条目，
+    // 若未来发送路径改为不过滤 thinking，这些字段仍然可用。assistant 分支
+    // 的转换器不读这些字段，保留在 message 上无副作用。
+    const firstThinking = group.find((i) => i.message.role === "thinking")
+      ?.message as any;
+
+    result.push({
+      ...firstAssistant,
+      toolCallStates: allToolCallStates.length
+        ? allToolCallStates
+        : firstAssistant.toolCallStates,
+      message: {
+        ...firstAssistant.message,
+        content: contents.join(""),
+        toolCalls: allToolCalls.length
+          ? allToolCalls
+          : (firstAssistant.message as any).toolCalls,
+        ...(firstThinking?.signature
+          ? { signature: firstThinking.signature }
+          : {}),
+        ...(firstThinking?.redactedThinking
+          ? { redactedThinking: firstThinking.redactedThinking }
+          : {}),
+        ...(firstThinking?.reasoning_details
+          ? { reasoning_details: firstThinking.reasoning_details }
+          : {}),
+      },
+      // endAt 必须设置：StepContainer 用 !reasoning.endAt 判断“思考中”，
+      // 置空会让已完成的回复永远显示 in-progress。thinking 条目不带时间戳，
+      // 合并时刻的 Date.now() 是当前可得的最佳值。
+      reasoning: thinkingTexts.length
+        ? {
+            text: thinkingTexts.join("\n\n"),
+            startAt: firstAssistant.reasoning?.startAt ?? Date.now(),
+            endAt: firstAssistant.reasoning?.endAt ?? Date.now(),
+            active: false,
+          }
+        : firstAssistant.reasoning,
+    } as ChatHistoryItemWithMessageId);
+    group = [];
+  };
+
+  for (const item of history) {
+    const role = item.message.role;
+    if (role === "assistant" || role === "thinking") {
+      group.push(item);
+    } else {
+      flush();
+      result.push(item);
+    }
+  }
+  flush();
+  return result;
+}
 
 /**
  * streamUpdate 的目标对象：既能是 session slice 的 state（正常流），
@@ -342,6 +483,9 @@ export type StreamUpdateTarget = {
   contextPercentage?: number;
   contextInputTokens?: number;
   contextLength?: number;
+  // UI 设置：默认 true=不合并气泡。true 时 thinking 之后的 assistant 内容
+  // 保持原有行为（新建条目），false 时才续接前一个 assistant 条目。
+  dontMergeReplyBubbles?: boolean;
 };
 
 /**
@@ -438,18 +582,47 @@ export function applyStreamUpdatesToHistory(
       lastMessage.role !== message.role ||
       message.role === "tool" // Tool messages should always create new messages
     ) {
-      // Create a new message
-      const historyItem: ChatHistoryItemWithMessageId = {
-        message: {
-          ...message,
-          content: "", // Start with empty content, let accumulation logic handle it
-          id: uuidv4(),
-        },
-        contextItems: [],
-      };
-      target.history.push(historyItem);
-      lastItem = target.history[target.history.length - 1];
-      lastMessage = lastItem.message;
+      // A thinking message can arrive MID-response: the model has already
+      // streamed answer text, then emits an extra reasoning block, then
+      // keeps streaming the answer. When bubble merging is enabled
+      // (dontMergeReplyBubbles=false), the following assistant content must
+      // CONTINUE the previous assistant item instead of starting a new one —
+      // otherwise one reply is split across multiple history items. The
+      // guard on non-empty previous content keeps the normal
+      // reasoning_content flow (thinking arrives BEFORE the answer, previous
+      // placeholder is empty) exactly as before. When dontMergeReplyBubbles
+      // is true (default), bubbles stay split and the copy button fallback
+      // handles the complete reply.
+      if (
+        !(target.dontMergeReplyBubbles ?? true) &&
+        message.role === "assistant" &&
+        lastMessage.role === "thinking"
+      ) {
+        const prevItem = target.history[target.history.length - 2];
+        if (
+          prevItem &&
+          prevItem.message.role === "assistant" &&
+          renderChatMessage(prevItem.message).trim().length > 0
+        ) {
+          lastItem = prevItem;
+          lastMessage = prevItem.message;
+        }
+      }
+
+      if (lastMessage.role !== message.role || message.role === "tool") {
+        // Create a new message
+        const historyItem: ChatHistoryItemWithMessageId = {
+          message: {
+            ...message,
+            content: "", // Start with empty content, let accumulation logic handle it
+            id: uuidv4(),
+          },
+          contextItems: [],
+        };
+        target.history.push(historyItem);
+        lastItem = target.history[target.history.length - 1];
+        lastMessage = lastItem.message;
+      }
     }
 
     // Add to the existing message
@@ -549,6 +722,8 @@ export const INITIAL_SESSION_STATE: SessionState = {
   lastSessionId: undefined,
   newestToolbarPreviewForInput: {},
   compactionLoading: {},
+  dontMergeReplyBubbles: true,
+  dontMergeHistoricalReplyBubbles: true,
 };
 
 export const sessionSlice = createSlice({
@@ -875,9 +1050,21 @@ export const sessionSlice = createSlice({
       state.historyTotalCount = undefined;
       state.hasMoreHistory = false;
       state.isHistoryLoading = false;
+      state.loadedDiskCount = undefined;
 
       if (payload) {
-        state.history = payload.history as any;
+        // 合并的是“轮次内”的气泡块（user 之后连续的 assistant/thinking），
+        // 与分页正交。分页偏移由 loadedDiskCount（已加载的磁盘条目数）记账，
+        // 不依赖 history.length，所以懒加载/全量加载都可以安全合并。
+        // 注意：loadedDiskCount 必须在合并前记录原始页条数。
+        // 默认 dontMergeHistoricalReplyBubbles=true（历史会话不合并）。
+        if (payload.historyTruncated) {
+          state.loadedDiskCount = (payload.history as any[]).length;
+        }
+        state.history =
+          (state.dontMergeHistoricalReplyBubbles ?? true)
+            ? (payload.history as any)
+            : mergeSplitReplies(payload.history as any);
         state.title = payload.title;
         state.id = payload.sessionId;
         if (payload.mode) {
@@ -928,7 +1115,12 @@ export const sessionSlice = createSlice({
       // 恢复缓存的字段
       state.id = payload.sessionId;
       state.title = payload.title;
-      state.history = payload.history;
+      // 合并轮次内气泡块；分页偏移由 loadedDiskCount 记账，不受合并影响。
+      // 默认 dontMergeHistoricalReplyBubbles=true（历史会话不合并）。
+      state.history =
+        (state.dontMergeHistoricalReplyBubbles ?? true)
+          ? payload.history
+          : mergeSplitReplies(payload.history);
       state.mode = payload.mode;
       state.symbols = payload.symbols || {};
       state.hasReasoningEnabled = payload.hasReasoningEnabled;
@@ -937,6 +1129,10 @@ export const sessionSlice = createSlice({
       state.historyLoadedOffset = payload.historyLoadedOffset;
       state.historyTotalCount = payload.historyTotalCount;
       state.hasMoreHistory = payload.hasMoreHistory;
+      state.loadedDiskCount = payload.loadedDiskCount;
+      state.dontMergeReplyBubbles = payload.dontMergeReplyBubbles ?? true;
+      state.dontMergeHistoricalReplyBubbles =
+        payload.dontMergeHistoricalReplyBubbles ?? true;
       state.isHistoryLoading = false;
       // Context 指标
       state.isPruned = payload.isPruned;
@@ -972,7 +1168,15 @@ export const sessionSlice = createSlice({
         state.isHistoryLoading = false;
         return;
       }
-      state.history = [...payload.items, ...state.history];
+      // 合并轮次内的气泡块（可能跨页边界——组在内存中连续即可安全合并，
+      // 分页偏移由 loadedDiskCount 记账）。必须先按磁盘页条数累加，再合并。
+      // 默认 dontMergeHistoricalReplyBubbles=true（历史会话不合并）。
+      state.loadedDiskCount =
+        (state.loadedDiskCount ?? state.history.length) + payload.items.length;
+      state.history =
+        (state.dontMergeHistoricalReplyBubbles ?? true)
+          ? [...payload.items, ...state.history]
+          : mergeSplitReplies([...payload.items, ...state.history]);
       state.historyLoadedOffset = payload.newLoadedOffset;
       state.hasMoreHistory = payload.hasMore;
       state.historyTotalCount = payload.totalCount;
@@ -981,6 +1185,23 @@ export const sessionSlice = createSlice({
     },
     setIsHistoryLoading: (state, { payload }: PayloadAction<boolean>) => {
       state.isHistoryLoading = payload;
+    },
+    /**
+     * UI 设置镜像：config.ui?.dontMergeReplyBubbles（默认 true=流式不合并气泡）。
+     * 由 Layout 监听 config 变化后 dispatch。
+     */
+    setDontMergeReplyBubbles: (state, { payload }: PayloadAction<boolean>) => {
+      state.dontMergeReplyBubbles = payload;
+    },
+    /**
+     * UI 设置镜像：config.ui?.dontMergeHistoricalReplyBubbles
+     * （默认 true=历史会话加载不合并气泡）。由 Layout 监听 config 变化后 dispatch。
+     */
+    setDontMergeHistoricalReplyBubbles: (
+      state,
+      { payload }: PayloadAction<boolean>,
+    ) => {
+      state.dontMergeHistoricalReplyBubbles = payload;
     },
     /**
      * 初始化分页元数据（loadSession 在懒加载模式下 dispatch）。
@@ -999,6 +1220,7 @@ export const sessionSlice = createSlice({
       state.historyTruncated = false;
       state.hasMoreHistory = false;
       state.historyLoadedOffset = 0;
+      state.loadedDiskCount = undefined;
     },
     /**
      * 发送新消息前加载完整 history（loadFullHistory thunk 调用）。
@@ -1008,10 +1230,14 @@ export const sessionSlice = createSlice({
       state,
       { payload }: PayloadAction<ChatHistoryItemWithMessageId[]>,
     ) => {
-      state.history = payload;
+      state.history =
+        (state.dontMergeHistoricalReplyBubbles ?? true)
+          ? payload
+          : mergeSplitReplies(payload);
       state.historyTruncated = false;
       state.hasMoreHistory = false;
       state.historyLoadedOffset = 0;
+      state.loadedDiskCount = undefined;
       state.isHistoryLoading = false;
     },
     updateSessionTitle: (state, { payload }: PayloadAction<string>) => {
@@ -1427,6 +1653,8 @@ export const {
   setCompactionLoading,
   prependHistoryItems,
   setIsHistoryLoading,
+  setDontMergeReplyBubbles,
+  setDontMergeHistoricalReplyBubbles,
   setHistoryPagination,
   markHistoryFullyLoaded,
   setFullHistory,

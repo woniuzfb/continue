@@ -41,6 +41,9 @@ export const sharedConfigSchema = z
     lazyLoadHistoryInitialCount: z.number(),
     lazyLoadHistoryPageSize: z.number(),
     attachmentSplitThresholdMB: z.number(),
+    dontMergeReplyBubbles: z.boolean(),
+    dontMergeHistoricalReplyBubbles: z.boolean(),
+    excludeThinkingFromCopy: z.boolean(),
 
     // `tabAutocompleteOptions` in `ContinueConfig`
     useAutocompleteCache: z.boolean(),
@@ -194,6 +197,17 @@ export function modifyAnyConfigWithSharedConfig<
   if (sharedConfig.attachmentSplitThresholdMB !== undefined) {
     configCopy.ui.attachmentSplitThresholdMB =
       sharedConfig.attachmentSplitThresholdMB;
+  }
+  if (sharedConfig.dontMergeReplyBubbles !== undefined) {
+    configCopy.ui.dontMergeReplyBubbles = sharedConfig.dontMergeReplyBubbles;
+  }
+  if (sharedConfig.dontMergeHistoricalReplyBubbles !== undefined) {
+    configCopy.ui.dontMergeHistoricalReplyBubbles =
+      sharedConfig.dontMergeHistoricalReplyBubbles;
+  }
+  if (sharedConfig.excludeThinkingFromCopy !== undefined) {
+    configCopy.ui.excludeThinkingFromCopy =
+      sharedConfig.excludeThinkingFromCopy;
   }
 
   configCopy.experimental = {

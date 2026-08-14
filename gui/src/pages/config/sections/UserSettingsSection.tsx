@@ -66,6 +66,10 @@ export function UserSettingsSection() {
     config.ui?.lazyLoadHistoryInitialCount ?? 4;
   const lazyLoadHistoryPageSize = config.ui?.lazyLoadHistoryPageSize ?? 4;
   const attachmentSplitThresholdMB = config.ui?.attachmentSplitThresholdMB ?? 1;
+  const dontMergeReplyBubbles = config.ui?.dontMergeReplyBubbles ?? true;
+  const dontMergeHistoricalReplyBubbles =
+    config.ui?.dontMergeHistoricalReplyBubbles ?? true;
+  const excludeThinkingFromCopy = config.ui?.excludeThinkingFromCopy ?? true;
   const disableSessionTitles = config.disableSessionTitles ?? false;
   const useCurrentFileAsContext =
     config.experimental?.useCurrentFileAsContext ?? false;
@@ -107,6 +111,33 @@ export function UserSettingsSection() {
             <ConfigHeader title="Chat" variant="sm" />
             <Card>
               <div className="flex flex-col gap-4">
+                <UserSetting
+                  type="toggle"
+                  title="Don't Merge Reply Bubbles"
+                  description="Keep each thinking/reply segment as its own bubble in new conversations (default). Disable to merge mid-response thinking back into the original reply bubble."
+                  value={dontMergeReplyBubbles}
+                  onChange={(value) =>
+                    handleUpdate({ dontMergeReplyBubbles: value })
+                  }
+                />
+                <UserSetting
+                  type="toggle"
+                  title="Don't Merge Historical Reply Bubbles"
+                  description="Keep split replies in old sessions unmerged when loading (default). Disable to repair previously split replies into one bubble."
+                  value={dontMergeHistoricalReplyBubbles}
+                  onChange={(value) =>
+                    handleUpdate({ dontMergeHistoricalReplyBubbles: value })
+                  }
+                />
+                <UserSetting
+                  type="toggle"
+                  title="Exclude Thinking From Copy"
+                  description="Copy only the reply content, excluding thinking/reasoning blocks (default). Disable to include thinking text in the copied content."
+                  value={excludeThinkingFromCopy}
+                  onChange={(value) =>
+                    handleUpdate({ excludeThinkingFromCopy: value })
+                  }
+                />
                 <UserSetting
                   type="toggle"
                   title="Show Session Tabs"

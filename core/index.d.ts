@@ -1530,6 +1530,20 @@ export interface ContinueUIConfig {
   lazyLoadHistory?: boolean;
   lazyLoadHistoryInitialCount?: number;
   lazyLoadHistoryPageSize?: number;
+  /** When true (default), reply bubbles are never merged during streaming:
+   * each thinking/assistant segment keeps its own history item. The copy
+   * button still copies the whole reply group. Set to false to merge
+   * mid-response thinking back into the original assistant item. */
+  dontMergeReplyBubbles?: boolean;
+  /** When true (default), loading an old session does NOT merge split
+   * replies (assistant→thinking→assistant) into one bubble. Set to false to
+   * repair old split replies on load. */
+  dontMergeHistoricalReplyBubbles?: boolean;
+  /** When true (default), the copy button copies only the reply content,
+   * excluding thinking/reasoning blocks. Set to false to include thinking
+   * text (from `role:"thinking"` items and inline `<think>` reasoning) in
+   * the copied text. */
+  excludeThinkingFromCopy?: boolean;
   /** Files larger than this (MB) are split into base64 chunks + manifest
    * when attached. Defaults to 1. */
   attachmentSplitThresholdMB?: number;

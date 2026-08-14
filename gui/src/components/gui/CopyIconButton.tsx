@@ -1,4 +1,8 @@
-import { CheckIcon, ClipboardIcon } from "@heroicons/react/24/outline";
+import {
+  CheckIcon,
+  ClipboardIcon,
+  XMarkIcon,
+} from "@heroicons/react/24/outline";
 import HeaderButtonWithToolTip from "./HeaderButtonWithToolTip";
 import useCopy from "../../hooks/useCopy";
 
@@ -17,18 +21,20 @@ export function CopyIconButton({
   clipboardIconClassName = "h-4 w-4 text-gray-400",
   tooltipPlacement = "bottom",
 }: CopyIconButtonProps) {
-  const { copyText, copied } = useCopy(text);
+  const { copyText, copied, copyFailed } = useCopy(text);
 
   return (
     <>
       <HeaderButtonWithToolTip
         tooltipPlacement={tooltipPlacement}
         tabIndex={tabIndex}
-        text={copied ? "Copied" : "Copy"}
+        text={copied ? "Copied" : copyFailed ? "Copy failed" : "Copy"}
         onClick={copyText}
       >
         {copied ? (
           <CheckIcon className={checkIconClassName} />
+        ) : copyFailed ? (
+          <XMarkIcon className="h-4 w-4 text-red-400" />
         ) : (
           <ClipboardIcon className={clipboardIconClassName} />
         )}
