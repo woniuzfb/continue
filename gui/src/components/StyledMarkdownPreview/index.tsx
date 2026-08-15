@@ -21,6 +21,10 @@ import { ToolTip } from "../gui/Tooltip";
 import FilenameLink from "./FilenameLink";
 import "./katex.css";
 import "./markdown.css";
+import {
+  getMarkdownArtifact,
+  setMarkdownArtifact,
+} from "./markdownArtifactCache";
 import MermaidBlock from "./MermaidBlock";
 import { rehypeHighlightPlugin } from "./rehypeHighlightPlugin";
 import { SecureImageComponent } from "./SecureImageComponent";
@@ -190,6 +194,91 @@ function getCodeChildrenContent(children: any) {
 const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
   props: StyledMarkdownPreviewProps,
 ) {
+  // ── 渲染产物缓存(外层,组件级分支)────────────────────────────
+  // 命中缓存时渲染静态产物组件,完全不挂载 useRemark(react-remark 底层
+  // 是 solid-js 响应式运行时,即使不喂数据,mount 时的初始化和 unmount
+  // 时的 dispose 依然是每条消息几 ms 的硬成本)。分支后:
+  //   命中   → 无 hook 管线成本,纯 React 元素 + DOM
+  //   未命中 → MarkdownPipeline 完整路径,算完回填缓存
+  const uiConfig = useAppSelector(selectUIConfig);
+  const renderInlineLatex = uiConfig?.renderInlineLatex ?? false;
+  const sessionId = useAppSelector((state) => state.session.id);
+
+  const artifactKey = useMemo(() => {
+    // 与 MarkdownPipeline 的 preprocessedSource 保持一致(键的一部分)
+    let source = fixDoubleDollarNewLineLatex(
+      patchNestedMarkdown(props.source ?? ""),
+    );
+    if (!renderInlineLatex) {
+      source = replaceSingleDollarOutsideCode(source);
+    }
+    const head = `${sessionId}|${props.itemIndex ?? -1}|${props.isRenderingInStepContainer ? 1 : 0}|${props.showToolCallStatusIcon ? 1 : 0}|${props.toolCallId ?? ""}|${props.expandCodeblocks ? 1 : 0}|${props.disableManualApply ? 1 : 0}|${props.collapsible ? 1 : 0}`;
+    return `${head}|${source}`;
+  }, [
+    sessionId,
+    props.itemIndex,
+    props.isRenderingInStepContainer,
+    props.showToolCallStatusIcon,
+    props.toolCallId,
+    props.expandCodeblocks,
+    props.disableManualApply,
+    props.collapsible,
+    props.source,
+    renderInlineLatex,
+  ]);
+
+  const codeWrapState = uiConfig?.codeWrap ? "pre-wrap" : "pre";
+
+  // 空 source 短路:useRemark 对空输入不产出 reactContent,STORE effect 的
+  // `!reactContent` 守卫使这类条目永远无法回填缓存 → 每次切回都 miss 并
+  // 挂载完整管线(solid-js 运行时初始化 + symbols 变更时全量 rerender,
+  // 实测 36 条空占位贡献了切回后 ~700ms effects 和后续余震)。空内容直接
+  // 渲染空容器,视觉与管线输出一致,且不进缓存计数(消除 md MISS 噪音)。
+  if (!props.source || !props.source.trim()) {
+    return (
+      <StyledMarkdown
+        fontSize={getFontSize()}
+        whiteSpace={codeWrapState}
+        bgColor={props.useParentBackgroundColor ? "" : vscBackground}
+      />
+    );
+  }
+
+  const cachedArtifact = getMarkdownArtifact(artifactKey);
+
+  if (cachedArtifact !== undefined) {
+    return (
+      <StyledMarkdown
+        fontSize={getFontSize()}
+        whiteSpace={codeWrapState}
+        bgColor={props.useParentBackgroundColor ? "" : vscBackground}
+      >
+        {cachedArtifact}
+      </StyledMarkdown>
+    );
+  }
+
+  return (
+    <MarkdownPipeline
+      {...props}
+      artifactKey={artifactKey}
+      renderInlineLatex={renderInlineLatex}
+      codeWrapState={codeWrapState}
+    />
+  );
+});
+
+/**
+ * 完整 remark → rehype → highlight 管线(未命中缓存时挂载)。
+ * 原有逻辑原样保留,新增:计算完成后回填产物缓存(非流式时)。
+ */
+const MarkdownPipeline = memo(function MarkdownPipeline(
+  props: StyledMarkdownPreviewProps & {
+    artifactKey: string;
+    renderInlineLatex: boolean;
+    codeWrapState: string;
+  },
+) {
   // The refs are a workaround because rehype options are stored on initiation
   // So they won't use the most up-to-date state values
   // So in this case we just put them in refs
@@ -224,10 +313,6 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
   const pastFileInfoRef = useUpdatingRef(pastFileInfo);
   const itemIndexRef = useUpdatingRef(props.itemIndex);
 
-  const uiConfig = useAppSelector(selectUIConfig);
-  const renderInlineLatex = uiConfig?.renderInlineLatex ?? false;
-  const codeWrapState = uiConfig?.codeWrap ? "pre-wrap" : "pre";
-
   const codeblockStreamIds = useRef<string[]>([]);
 
   // When inline LaTeX is disabled, replace single $ delimiters with
@@ -240,11 +325,15 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
     let source = fixDoubleDollarNewLineLatex(
       patchNestedMarkdown(props.source ?? ""),
     );
-    if (!renderInlineLatex) {
+    if (!props.renderInlineLatex) {
       source = replaceSingleDollarOutsideCode(source);
     }
     return source;
-  }, [props.source, renderInlineLatex]);
+  }, [props.source, props.renderInlineLatex]);
+
+  const isSessionStreaming = useAppSelector(
+    (state) => state.session.isStreaming,
+  );
 
   const [reactContent, setMarkdownSource] = useRemark({
     remarkPlugins: [
@@ -404,10 +493,23 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
     setMarkdownSource(preprocessedSource);
   }, [preprocessedSource]);
 
+  useEffect(() => {
+    // 回填缓存:仅在非流式时写入。流式期间 source 每个 chunk 一变,而
+    // reactContent 是异步更新的,此时无法保证 reactContent 对应当前
+    // source,写入会把过期产物污染进缓存。
+    if (!reactContent) {
+      return;
+    }
+    if (isSessionStreaming) {
+      return;
+    }
+    setMarkdownArtifact(props.artifactKey, reactContent);
+  }, [reactContent, isSessionStreaming, props.artifactKey]);
+
   return (
     <StyledMarkdown
       fontSize={getFontSize()}
-      whiteSpace={codeWrapState}
+      whiteSpace={props.codeWrapState}
       bgColor={props.useParentBackgroundColor ? "" : vscBackground}
     >
       {reactContent}

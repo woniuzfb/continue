@@ -187,9 +187,16 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
     }
   }, [tabs.map((t) => t.id).join(",")]);
 
-  const handleTabClick = async (id: string) => {
+  const handleTabClick = (id: string) => {
     const targetTab = tabs.find((tab) => tab.id === id);
     if (!targetTab) return;
+
+    // Clicking the already active tab must be a no-op. In particular, while
+    // it is streaming, re-running loadSession would restore the LRU snapshot
+    // taken at stream start and can temporarily replace newer in-memory chunks.
+    if (targetTab.isActive) {
+      return;
+    }
 
     // 先切 UI（立即响应），save/load 在后台执行。
     // 旧实现 await loadSession 阻塞 setActiveTab，目标 session 未命中 LRU
@@ -245,6 +252,7 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
         <Tab
           key={tab.id}
           isActive={tab.isActive}
+          aria-current={tab.isActive ? "page" : undefined}
           onClick={() => handleTabClick(tab.id)}
           onAuxClick={(e) => {
             // Middle mouse button

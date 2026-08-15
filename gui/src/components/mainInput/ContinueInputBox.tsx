@@ -6,7 +6,7 @@ import {
   RuleMetadata,
   SlashCommandSource,
 } from "core";
-import { memo, ReactNode, useContext, useMemo } from "react";
+import { memo, ReactNode, useContext, useMemo, useState } from "react";
 import { defaultBorderRadius, vscBackground } from "..";
 import { useAppSelector } from "../../redux/hooks";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
@@ -17,6 +17,8 @@ import { GradientBorder } from "./GradientBorder";
 import { ToolbarOptions } from "./InputToolbar";
 import { Lump } from "./Lump";
 import { TipTapEditor } from "./TipTapEditor";
+import { InputBoxDiv } from "./TipTapEditor/components/StyledComponents";
+import { getUserInputStaticHtml } from "./userInputHtmlCache";
 import { AttachmentMeta, AttachedFile } from "./types";
 
 interface ContinueInputBoxProps {
@@ -120,6 +122,23 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
 
   const { appliedRules = [], contextItems = [], attachments = [] } = props;
   const hasBottomExtras = appliedRules.length > 0 || contextItems.length > 0;
+
+  // ── 历史 user 消息静态预览 ────────────────────────────────────
+  // 命中 HTML 缓存时先渲染纯静态内容(无 ProseMirror 实例成本,约
+  // 20-40ms/条 → <1ms),点击后换成真编辑器并自动聚焦。editorState
+  // 引用变化(消息被编辑/重发)时缓存自动失效,回到真编辑器路径。
+  const cachedHtml = useMemo(
+    () =>
+      props.isMainInput
+        ? undefined
+        : getUserInputStaticHtml(props.inputId, props.editorState),
+    [props.isMainInput, props.inputId, props.editorState],
+  );
+  const [isStaticPreview, setIsStaticPreview] = useState(
+    () => cachedHtml !== undefined,
+  );
+  const showStaticPreview = isStaticPreview && cachedHtml !== undefined;
+
   const actions = props.bottomRightActions && (
     // pr on the rows (below) + no extra padding here keeps the buttons
     // 8px from the right edge, aligned with the assistant reply actions
@@ -153,17 +172,47 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
           }
           borderRadius={defaultBorderRadius}
         >
-          <TipTapEditor
-            editorState={props.editorState}
-            onEnter={props.onEnter}
-            placeholder={placeholder}
-            isMainInput={props.isMainInput ?? false}
-            availableContextProviders={filteredContextProviders}
-            availableSlashCommands={filteredSlashCommands}
-            historyKey={historyKey}
-            toolbarOptions={toolbarOptions}
-            inputId={props.inputId}
-          />
+          {showStaticPreview ? (
+            // 静态预览:结构与 TipTapEditor 一致(InputBoxDiv > 内边距层 >
+            // .scroll-container > .ProseMirror 内容)。.ProseMirror 的排版
+            // 样式由 prosemirror-view 全局注入(主输入常驻,必然已存在),
+            // .mention 等来自全局导入的 TipTapEditor.css。
+            <InputBoxDiv
+              className="w-full min-w-0 cursor-text"
+              onPointerDown={(event) => {
+                // Mount the real editor before the browser completes this
+                // interaction. TipTap's layout effect then makes the very
+                // first click enter edit mode instead of merely replacing the
+                // cached preview (which previously required a second click).
+                event.preventDefault();
+                setIsStaticPreview(false);
+              }}
+              data-testid={`continue-input-static-${props.inputId}`}
+            >
+              <div className="px-2.5 pb-1 pt-2">
+                <div className="scroll-container">
+                  <div
+                    className="tiptap ProseMirror"
+                    style={{ outline: "none", whiteSpace: "pre-wrap" }}
+                    dangerouslySetInnerHTML={{ __html: cachedHtml }}
+                  />
+                </div>
+              </div>
+            </InputBoxDiv>
+          ) : (
+            <TipTapEditor
+              editorState={props.editorState}
+              onEnter={props.onEnter}
+              placeholder={placeholder}
+              isMainInput={props.isMainInput ?? false}
+              availableContextProviders={filteredContextProviders}
+              availableSlashCommands={filteredSlashCommands}
+              historyKey={historyKey}
+              toolbarOptions={toolbarOptions}
+              inputId={props.inputId}
+              autoFocusOnMount={!props.isMainInput && cachedHtml !== undefined}
+            />
+          )}
         </GradientBorder>
         {attachments.length > 0 && (
           <div className="flex items-center gap-1 pb-1 pl-1 pr-2 pt-1">

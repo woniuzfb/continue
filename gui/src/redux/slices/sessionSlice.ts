@@ -234,6 +234,8 @@ export type CachedSession = {
   loadedDiskCount?: number;
   dontMergeReplyBubbles?: boolean;
   dontMergeHistoricalReplyBubbles?: boolean;
+  // 缓存副本是否有未持久化变更（后台续流置脏，saveSessionFromCache 清零）
+  dirty?: boolean;
   // Context metrics
   isPruned?: boolean;
   contextPercentage?: number;
@@ -342,6 +344,11 @@ type SessionState = {
   // 由 Layout 监听 config.ui 同步。
   dontMergeReplyBubbles?: boolean;
   dontMergeHistoricalReplyBubbles?: boolean;
+  // 内存会话是否有未持久化到磁盘的变更（history/title/contextMetrics）。
+  // false 时 saveCurrentSession 跳过 history/save —— 消除切 tab 时对
+  // 未变更会话的全量 clone + 写盘（长会话 ~2s 的 IPC 排队阻塞）。
+  // 分页加载（prepend/loadFullHistory）只读不写盘，不置脏。
+  dirty?: boolean;
 };
 
 /**
@@ -737,6 +744,7 @@ export const sessionSlice = createSlice({
       if (!state.history.length) {
         return;
       }
+      state.dirty = true;
 
       const lastMessage = state.history[state.history.length - 1];
 
@@ -753,13 +761,30 @@ export const sessionSlice = createSlice({
     setActive: (state) => {
       state.isStreaming = true;
     },
+    /**
+     * 持久化成功后清除脏标记（saveCurrentSession 成功回调 dispatch）。
+     * 带 sessionId 防竞态：await 期间用户可能已切到其他会话。
+     */
+    markSessionPersisted: (state, { payload }: PayloadAction<string>) => {
+      if (state.id === payload) {
+        state.dirty = false;
+      }
+    },
+    /** Mark the current session for persistence when session-scoped config changes. */
+    markSessionDirty: (state) => {
+      if (state.history.length > 0) {
+        state.dirty = true;
+      }
+    },
     setIsGatheringContext: (state, { payload }: PayloadAction<boolean>) => {
       const curMessage = state.history.at(-1);
       if (curMessage) {
+        state.dirty = true;
         curMessage.isGatheringContext = payload;
       }
     },
     clearDanglingMessages: (state) => {
+      state.dirty = true;
       // This is used during cancellation
       // After the last user or tool message, we can have thinking and or valid assitant message (content or generated tool calls) OR nothing.
       // The only thing allowed after the last assistant message that has either content or generated tool calls
@@ -839,6 +864,7 @@ export const sessionSlice = createSlice({
       }>,
     ) => {
       if (state.history[index]) {
+        state.dirty = true;
         state.history[index].contextItems = contextItems;
       }
     },
@@ -852,6 +878,7 @@ export const sessionSlice = createSlice({
       }>,
     ) => {
       const { index, editorState } = payload;
+      state.dirty = true;
 
       if (state.history.length && index < state.history.length) {
         // Resubmission - update input message, truncate history after resubmit with new empty response message
@@ -908,6 +935,7 @@ export const sessionSlice = createSlice({
       }>,
     ) => {
       const { index } = payload;
+      state.dirty = true;
 
       if (state.history.length && index < state.history.length) {
         state.codeBlockApplyStates.curIndex = 0;
@@ -928,6 +956,7 @@ export const sessionSlice = createSlice({
     },
     deleteMessage: (state, action: PayloadAction<number>) => {
       // Deletes the current assistant message and the previous user message
+      state.dirty = true;
       state.history.splice(action.payload - 1, 2);
       state.inlineErrorMessage = undefined;
       state.isPruned = false;
@@ -941,6 +970,7 @@ export const sessionSlice = createSlice({
       // Removes the conversation summary from the specified message
       const historyItem = state.history[action.payload];
       if (historyItem?.conversationSummary) {
+        state.dirty = true;
         state.history[action.payload] = {
           ...historyItem,
           conversationSummary: undefined,
@@ -964,6 +994,7 @@ export const sessionSlice = createSlice({
         );
         return;
       }
+      state.dirty = true;
       state.history[index] = {
         ...state.history[index],
         ...updates,
@@ -986,6 +1017,7 @@ export const sessionSlice = createSlice({
         return;
       }
 
+      state.dirty = true;
       historyItem.contextItems = [
         ...historyItem.contextItems,
         ...payload.contextItems,
@@ -1001,13 +1033,15 @@ export const sessionSlice = createSlice({
       }>,
     ) => {
       if (state.history[payload.index]) {
+        state.dirty = true;
         state.history[payload.index].appliedRules = payload.appliedRules;
       }
     },
     setInactive: (state) => {
       const curMessage = state.history.at(-1);
 
-      if (curMessage) {
+      if (curMessage?.isGatheringContext) {
+        state.dirty = true;
         curMessage.isGatheringContext = false;
       }
 
@@ -1026,6 +1060,7 @@ export const sessionSlice = createSlice({
     streamUpdate: (state, action: PayloadAction<ChatMessage[]>) => {
       // 提取为纯函数，供“后台续流”（流所属会话已切走）时把更新
       // 写入该会话的 LRU 缓存副本。
+      state.dirty = true;
       applyStreamUpdatesToHistory(state, action.payload);
     },
     newSession: (state, { payload }: PayloadAction<Session | undefined>) => {
@@ -1051,6 +1086,8 @@ export const sessionSlice = createSlice({
       state.hasMoreHistory = false;
       state.isHistoryLoading = false;
       state.loadedDiskCount = undefined;
+      // 从磁盘/新建加载的内容与磁盘一致，干净
+      state.dirty = false;
 
       if (payload) {
         // 合并的是“轮次内”的气泡块（user 之后连续的 assistant/thinking），
@@ -1133,6 +1170,7 @@ export const sessionSlice = createSlice({
       state.dontMergeReplyBubbles = payload.dontMergeReplyBubbles ?? true;
       state.dontMergeHistoricalReplyBubbles =
         payload.dontMergeHistoricalReplyBubbles ?? true;
+      state.dirty = payload.dirty ?? false;
       state.isHistoryLoading = false;
       // Context 指标
       state.isPruned = payload.isPruned;
@@ -1241,6 +1279,7 @@ export const sessionSlice = createSlice({
       state.isHistoryLoading = false;
     },
     updateSessionTitle: (state, { payload }: PayloadAction<string>) => {
+      state.dirty = true;
       state.title = payload;
     },
     setIsSessionMetadataLoading: (
@@ -1333,6 +1372,7 @@ export const sessionSlice = createSlice({
         },
       });
 
+      state.dirty = true;
       state.history[state.history.length - 1].contextItems = contextItems;
     },
     updateApplyState: (state, { payload }: PayloadAction<ApplyState>) => {
@@ -1373,6 +1413,7 @@ export const sessionSlice = createSlice({
       );
 
       if (toolCallState) {
+        state.dirty = true;
         toolCallState.status = "generated";
 
         const tool = action.payload.tools.find(
@@ -1397,6 +1438,7 @@ export const sessionSlice = createSlice({
         action.payload.toolCallId,
       );
       if (toolCallState) {
+        state.dirty = true;
         toolCallState.output = action.payload.contextItems;
         toolCallState.mcpUiState = action.payload.mcpUiState;
       }
@@ -1425,6 +1467,7 @@ export const sessionSlice = createSlice({
         action.payload.toolCallId,
       );
       if (toolCallState) {
+        state.dirty = true;
         toolCallState.processedArgs = action.payload.newArgs;
       }
     },
@@ -1439,6 +1482,7 @@ export const sessionSlice = createSlice({
         action.payload.toolCallId,
       );
       if (toolCallState) {
+        state.dirty = true;
         toolCallState.status = "canceled";
       }
     },
@@ -1454,6 +1498,7 @@ export const sessionSlice = createSlice({
         action.payload.toolCallId,
       );
       if (toolCallState) {
+        state.dirty = true;
         toolCallState.status = "errored";
         if (action.payload.output) {
           toolCallState.output = action.payload.output;
@@ -1471,6 +1516,7 @@ export const sessionSlice = createSlice({
         action.payload.toolCallId,
       );
       if (toolCallState) {
+        state.dirty = true;
         toolCallState.status = "done";
       }
     },
@@ -1485,10 +1531,13 @@ export const sessionSlice = createSlice({
         action.payload.toolCallId,
       );
       if (toolCallState) {
+        state.dirty = true;
         toolCallState.status = "calling";
       }
     },
     setMode: (state, action: PayloadAction<MessageModes>) => {
+      // mode 持久化在 session 文件里
+      state.dirty = true;
       state.mode = action.payload;
     },
     setIsInEdit: (state, action: PayloadAction<boolean>) => {
@@ -1547,6 +1596,7 @@ export const sessionSlice = createSlice({
       state,
       action: PayloadAction<ContextMetricsSnapshot>,
     ) => {
+      state.dirty = true;
       state.contextMetrics = action.payload;
     },
     /**
@@ -1555,6 +1605,9 @@ export const sessionSlice = createSlice({
      * 下次发送消息后会重新计算并覆盖。
      */
     clearContextMetrics: (state) => {
+      // 清除意味着旧快照 stale：跳过 save 会让磁盘残留过期 metrics，
+      // 下次加载还原旧值，所以这里也算脏。
+      state.dirty = true;
       state.contextMetrics = undefined;
     },
   },
@@ -1659,6 +1712,8 @@ export const {
   markHistoryFullyLoaded,
   setFullHistory,
   restoreCachedSession,
+  markSessionDirty,
+  markSessionPersisted,
 } = sessionSlice.actions;
 
 export const { selectIsGatheringContext } = sessionSlice.selectors;

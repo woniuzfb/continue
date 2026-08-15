@@ -120,6 +120,7 @@ export function Chat() {
     (store) => store.config.config.ui?.showSessionTabs,
   );
   const isStreaming = useAppSelector((state) => state.session.isStreaming);
+  const sessionId = useAppSelector((state) => state.session.id);
   const [stepsOpen] = useState<(boolean | undefined)[]>([]);
   const mainTextInputRef = useRef<HTMLInputElement>(null);
   const stepsDivRef = useRef<HTMLDivElement>(null);
@@ -149,7 +150,7 @@ export function Chat() {
     return isJetBrains();
   }, []);
 
-  useAutoScroll(stepsDivRef, history, jumpSuppressRef);
+  useAutoScroll(stepsDivRef, history, sessionId, jumpSuppressRef);
 
   useEffect(() => {
     // Cmd + Backspace to delete current step

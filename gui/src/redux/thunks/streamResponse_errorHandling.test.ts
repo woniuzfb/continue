@@ -198,10 +198,8 @@ describe("streamResponseThunk", () => {
       ...noModelState,
       session: {
         ...noModelState.session,
+        dirty: true,
         streamAborter: expect.any(AbortController),
-        history: [
-          { ...noModelState.session.history[0], isGatheringContext: false },
-        ],
       },
       ui: {
         ...noModelState.ui,
@@ -308,6 +306,7 @@ describe("streamResponseThunk", () => {
             message: {
               content: "Hello, please help me with this code",
               id: "mock-uuid-123",
+              metadata: undefined,
               role: "user",
             },
           },
@@ -440,6 +439,10 @@ describe("streamResponseThunk", () => {
         payload: undefined,
       },
       {
+        type: "session/markSessionPersisted",
+        payload: "session-123",
+      },
+      {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
@@ -509,6 +512,8 @@ describe("streamResponseThunk", () => {
       ...initialState,
       session: {
         ...initialState.session,
+        contextMetrics: undefined,
+        dirty: false,
         title: "Hello",
         history: [
           {
@@ -539,12 +544,12 @@ describe("streamResponseThunk", () => {
             message: {
               content: "Hello, please help me with this code",
               id: "mock-uuid-123",
+              metadata: undefined,
               role: "user",
             },
           },
           {
             contextItems: [],
-            isGatheringContext: false,
             message: {
               content: "",
               id: "mock-uuid-123",
@@ -810,6 +815,9 @@ describe("streamResponseThunk", () => {
       ...initialState,
       session: {
         ...initialState.session,
+        contextMetrics: undefined,
+        dirty: true,
+        inlineErrorMessage: undefined,
         streamAborter: expect.any(AbortController),
         mainEditorContentTrigger: mockEditorState, // Editor content that triggered the request
       },

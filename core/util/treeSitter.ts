@@ -291,21 +291,36 @@ export async function getSymbolsForFile(
   return symbols;
 }
 
+/** 超过此字符数的文件跳过 symbol 提取：巨型文件（生成物/数据文件/打包产物）
+ * 的 treesitter 同步 parse 会占住 host 事件循环数秒（实测单文件 8s），
+ * 阻塞所有在途 IPC；且超大文件的 symbol 列表对 SymbolLink 渲染无意义。 */
+const MAX_SYMBOL_FILE_CHARS = 1_000_000;
+
 export async function getSymbolsForManyFiles(
   uris: string[],
   ide: IDE,
 ): Promise<FileSymbolMap> {
-  const filesAndSymbols = await Promise.all(
-    uris.map(async (uri): Promise<[string, SymbolWithRange[]]> => {
+  const results: [string, SymbolWithRange[]][] = [];
+  for (let i = 0; i < uris.length; i++) {
+    const uri = uris[i];
+    let symbols: SymbolWithRange[] | undefined;
+    try {
       const contents = await ide.readFile(uri);
-      let symbols = undefined;
-      try {
-        symbols = await getSymbolsForFile(uri, contents);
-      } catch (e) {
-        console.error(`Failed to get symbols for ${uri}:`, e);
+      if (contents.length > MAX_SYMBOL_FILE_CHARS) {
+        results.push([uri, []]);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        continue;
       }
-      return [uri, symbols ?? []];
-    }),
-  );
+      symbols = await getSymbolsForFile(uri, contents);
+    } catch (e) {
+      console.error(`Failed to get symbols for ${uri}:`, e);
+    }
+    results.push([uri, symbols ?? []]);
+    // 每处理一个文件让出一次事件循环（原来 Promise.all 里的每个任务
+    // 在首个 await 后同步连跑 parse+遍历，大文件批处理会把 host 卡死
+    // 数秒，阻塞所有在途 IPC）
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  const filesAndSymbols = results;
   return Object.fromEntries(filesAndSymbols);
 }

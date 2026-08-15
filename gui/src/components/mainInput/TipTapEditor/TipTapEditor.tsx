@@ -7,6 +7,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,6 +30,7 @@ import {
 import { DragOverlay } from "./components/DragOverlay";
 import { InputBoxDiv } from "./components/StyledComponents";
 import { useMainEditor } from "./MainEditorProvider";
+import { setUserInputStaticHtml } from "../userInputHtmlCache";
 import "./TipTapEditor.css";
 import { createEditorConfig, getPlaceholderText } from "./utils/editorConfig";
 import { handleImageFile } from "./utils/imageUtils";
@@ -83,6 +85,11 @@ export interface TipTapEditorProps {
   /** Whether there are pending attached files. When true, an empty editor is
    * still considered submittable so a user can send attachments-only messages. */
   hasAttachments?: boolean;
+
+  /** Focus the editor as soon as it mounts. Used when a historical user
+   * message transitions from cached static HTML to the real editor on click,
+   * so the user's click lands in a focused, editable editor. */
+  autoFocusOnMount?: boolean;
 }
 
 export const TIPPY_DIV_ID = "tippy-js-div";
@@ -301,6 +308,45 @@ function TipTapEditorInner(props: TipTapEditorProps) {
       }
     };
   }, [props.isMainInput, editor, dispatch]);
+
+  // ── 历史 user 消息静态 HTML 缓存 ─────────────────────────────
+  // 卸载时若内容未被用户改过,把 editor.getHTML() 存入模块级缓存。
+  // 重挂载时 ContinueInputBox 优先渲染缓存的静态 HTML(跳过编辑器实
+  // 例创建),点击后才挂载真编辑器 —— 消除切 tab 重挂载时每条 user
+  // 消息 ~20-40ms 的 ProseMirror 实例成本。
+  const isHistoryInput = !props.isMainInput;
+  const editorDirtyRef = useRef(false);
+  const editorStateRef = useUpdatingRef(effectiveEditorState);
+
+  useEffect(() => {
+    if (!isHistoryInput || !editor) {
+      return;
+    }
+    editorDirtyRef.current = false;
+    const markDirty = () => {
+      editorDirtyRef.current = true;
+    };
+    editor.on("update", markDirty);
+    return () => {
+      editor.off("update", markDirty);
+      if (!editor.isDestroyed && !editorDirtyRef.current) {
+        setUserInputStaticHtml(
+          props.inputId,
+          editorStateRef.current,
+          editor.getHTML(),
+        );
+      }
+    };
+  }, [isHistoryInput, editor, props.inputId, editorStateRef]);
+
+  // Focus before paint when a cached historical message is promoted to a
+  // real editor. A passive effect runs too late for the opening interaction:
+  // the preview disappears first and the user has to click the editor again.
+  useLayoutEffect(() => {
+    if (props.autoFocusOnMount && editor && !editor.isDestroyed) {
+      editor.commands.focus("end", { scrollIntoView: false });
+    }
+  }, [props.autoFocusOnMount, editor]);
 
   useEffect(() => {
     if (isInEdit) {

@@ -1,9 +1,7 @@
 import { ChevronDownIcon } from "@heroicons/react/24/outline";
-import { inferResolvedUriFromRelativePath } from "core/util/ideUtils";
 import { renderContextItems } from "core/util/messageContent";
-import { useContext, useEffect, useMemo, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { IdeMessengerContext } from "../../../context/IdeMessenger";
-import { useIdeMessengerRequest } from "../../../hooks/useIdeMessengerRequest";
 import { useWebviewListener } from "../../../hooks/useWebviewListener";
 import { getStatusIcon } from "../../../pages/gui/ToolCallDiv/utils";
 import { useAppSelector } from "../../../redux/hooks";
@@ -13,6 +11,11 @@ import {
   selectApplyStateByToolCallId,
 } from "../../../redux/slices/sessionSlice";
 import { getFontSize } from "../../../util";
+import {
+  fileExistsCached,
+  invalidateFileExists,
+  resolveRelativePathToUriCached,
+} from "../../../util/fileUriCache";
 import Spinner from "../../gui/Spinner";
 import { isTerminalCodeBlock } from "../utils";
 import { ApplyActions } from "./ApplyActions";
@@ -57,23 +60,18 @@ export function StepContainerPreToolbar({
   collapsible,
 }: StepContainerPreToolbarProps) {
   const ideMessenger = useContext(IdeMessengerContext);
-  const history = useAppSelector((state) => state.session.history);
+  // 只订阅长度而非整个 history 数组：旧实现让每个代码块（长会话
+  // 400+ 个）都订阅 state.session.history，会话内任何 mutation
+  // （流式 chunk、symbols 更新等）都会使全部代码块重跑选择器并
+  // 因数组引用变化而重渲染。
+  const historyLength = useAppSelector((state) => state.session.history.length);
   const [isExpanded, setIsExpanded] = useState(expanded ?? true);
 
   const [relativeFilepathUri, setRelativeFilepathUri] = useState<string | null>(
     null,
   );
-
-  const fileExistsInput = useMemo(
-    () => (relativeFilepathUri ? { filepath: relativeFilepathUri } : null),
-    [relativeFilepathUri],
-  );
-
-  const {
-    result: fileExists,
-    refresh: refreshFileExists,
-    isLoading: isLoadingFileExists,
-  } = useIdeMessengerRequest("fileExists", fileExistsInput);
+  const [fileExists, setFileExists] = useState<boolean | null>(null);
+  const [isLoadingFileExists, setIsLoadingFileExists] = useState(false);
 
   const nextCodeBlockIndex = useAppSelector(
     (state) => state.session.codeBlockApplyStates.curIndex,
@@ -125,9 +123,7 @@ export function StepContainerPreToolbar({
 
   const isStreaming = useAppSelector((store) => store.session.isStreaming);
 
-  const isLastItem = useMemo(() => {
-    return itemIndex === history.length - 1;
-  }, [history.length, itemIndex]);
+  const isLastItem = itemIndex === historyLength - 1;
 
   const isGeneratingCodeBlock = isLastItem && isLastCodeblock && isStreaming;
 
@@ -144,17 +140,39 @@ export function StepContainerPreToolbar({
     !isNextCodeBlock,
   );
 
+  // 挂载时解析相对路径 + 检查文件存在性。两级查询都走模块级缓存
+  // （util/fileUriCache），切 tab 重挂载时不再每个代码块各发一串
+  // IPC —— 旧实现在长会话（400+ 带路径代码块）切回时形成上千个
+  // fileExists 请求洪峰，响应错落返回逐个 setState，是主线程
+  // 长任务瀑布的主要来源。
   useEffect(() => {
-    const getRelativeFilepathUri = async () => {
-      if (relativeFilepath) {
-        const resolvedUri = await inferResolvedUriFromRelativePath(
-          relativeFilepath,
-          ideMessenger.ide,
-        );
-        setRelativeFilepathUri(resolvedUri);
+    let cancelled = false;
+    if (!relativeFilepath) {
+      setRelativeFilepathUri(null);
+      setFileExists(null);
+      return;
+    }
+    setIsLoadingFileExists(true);
+    void (async () => {
+      const uri = await resolveRelativePathToUriCached(
+        ideMessenger.ide,
+        relativeFilepath,
+      );
+      if (cancelled) return;
+      setRelativeFilepathUri(uri);
+      if (!uri) {
+        setFileExists(null);
+        setIsLoadingFileExists(false);
+        return;
       }
+      const exists = await fileExistsCached(ideMessenger.ide, uri);
+      if (cancelled) return;
+      setFileExists(exists);
+      setIsLoadingFileExists(false);
+    })();
+    return () => {
+      cancelled = true;
     };
-    void getRelativeFilepathUri();
   }, [relativeFilepath, ideMessenger.ide]);
 
   async function getFileUriToApplyTo() {
@@ -195,7 +213,9 @@ export function StepContainerPreToolbar({
     });
 
     setAppliedFileUri(fileUri);
-    void refreshFileExists();
+    // applyToFile 是 fire-and-forget，立即 force refresh 会与实际写文件竞态。
+    // 这里只失效旧值；后续重挂载/状态刷新时再读取真实结果。
+    invalidateFileExists(fileUri);
   }
 
   function onClickInsertAtCursor() {
@@ -225,17 +245,19 @@ export function StepContainerPreToolbar({
       ideMessenger.post("showFile", {
         filepath: appliedFileUri,
       });
+      return;
     }
 
-    if (relativeFilepath) {
-      const filepath = await inferResolvedUriFromRelativePath(
-        relativeFilepath,
-        ideMessenger.ide,
-      );
-
-      ideMessenger.post("showFile", {
-        filepath,
-      });
+    const filepath =
+      relativeFilepathUri ??
+      (relativeFilepath
+        ? await resolveRelativePathToUriCached(
+            ideMessenger.ide,
+            relativeFilepath,
+          )
+        : null);
+    if (filepath) {
+      ideMessenger.post("showFile", { filepath });
     }
   }
 

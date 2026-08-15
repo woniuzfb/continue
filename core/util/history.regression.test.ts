@@ -131,6 +131,38 @@ describe("HistoryManager truncated-history save (regression)", () => {
     expect(leftovers).toEqual([]);
   });
 
+  it("does not partially strip an attachment containing a standalone closing tag", async () => {
+    const sessionId = uuidv4();
+    const content =
+      '<file_content path="/tmp/example.ts">\n' +
+      'const example = "file-content parser";\n' +
+      "</file_content>\n" +
+      "const afterLiteralTag = true;\n" +
+      "</file_content>\n";
+    await historyManager.save({
+      sessionId,
+      title: "attachment parser safety",
+      workspaceDirectory: "ws",
+      history: [
+        {
+          message: {
+            role: "user",
+            content,
+            metadata: {
+              attachments: [{ name: "example.ts", path: "/tmp/example.ts" }],
+            },
+          },
+          contextItems: [],
+        },
+      ],
+    });
+
+    // The first standalone closing tag makes the span ambiguous. Retaining
+    // the whole user message is preferable to saving a silently truncated one.
+    const onDisk = readDisk(sessionId);
+    expect(onDisk.history[0].message.content).toBe(content);
+  });
+
   it("loadPage clamps offset beyond total instead of returning corrupt slices", async () => {
     const sessionId = uuidv4();
     await historyManager.save({

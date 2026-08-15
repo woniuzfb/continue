@@ -296,19 +296,13 @@ describe("streamResponseThunk - tool calls", () => {
       "session/setAllSessionMetadata",
       "session/refreshMetadata/fulfilled",
       "session/update/fulfilled",
+      "session/markSessionPersisted",
       "session/saveCurrent/fulfilled",
       "chat/streamWrapper/fulfilled",
       "chat/streamAfterToolCall/fulfilled",
       "chat/callTool/fulfilled",
       "chat/streamNormalInput/fulfilled",
       "session/saveCurrent/pending",
-      "session/update/pending",
-      "session/updateSessionMetadata",
-      "session/refreshMetadata/pending",
-      "session/setIsSessionMetadataLoading",
-      "session/setAllSessionMetadata",
-      "session/refreshMetadata/fulfilled",
-      "session/update/fulfilled",
       "session/saveCurrent/fulfilled",
       "chat/streamWrapper/fulfilled",
       "chat/streamResponse/fulfilled",
@@ -442,6 +436,7 @@ describe("streamResponseThunk - tool calls", () => {
       ...initialState,
       session: {
         ...initialState.session,
+        dirty: false,
         history: [
           {
             contextItems: [],
@@ -459,6 +454,7 @@ describe("streamResponseThunk - tool calls", () => {
               id: expect.any(String),
               role: "user",
               content: "Hello, please help me with this code",
+              metadata: undefined,
             },
           },
           {
@@ -498,6 +494,7 @@ describe("streamResponseThunk - tool calls", () => {
                   },
                 },
                 parsedArgs: { query: "test function" },
+                mcpUiState: undefined,
                 status: "done",
                 output: [
                   {
@@ -523,7 +520,6 @@ describe("streamResponseThunk - tool calls", () => {
           },
           {
             contextItems: [],
-            isGatheringContext: false,
             message: {
               content: "Search completed.",
               id: "mock-uuid-123",
@@ -704,6 +700,7 @@ describe("streamResponseThunk - tool calls", () => {
             message: {
               content: "Hello, please help me with this code",
               id: "mock-uuid-123",
+              metadata: undefined,
               role: "user",
             },
           },
@@ -893,6 +890,10 @@ describe("streamResponseThunk - tool calls", () => {
         payload: undefined,
       },
       {
+        type: "session/markSessionPersisted",
+        payload: "session-123",
+      },
+      {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
@@ -986,6 +987,7 @@ describe("streamResponseThunk - tool calls", () => {
       ...initialState,
       session: {
         ...initialState.session,
+        dirty: false,
         history: [
           {
             contextItems: [],
@@ -1002,12 +1004,12 @@ describe("streamResponseThunk - tool calls", () => {
             message: {
               content: "Hello, please help me with this code",
               id: expect.any(String),
+              metadata: undefined,
               role: "user",
             },
           },
           {
             contextItems: [],
-            isGatheringContext: false,
             message: {
               content: "I'll search the codebase for you.",
               id: "mock-uuid-123",
@@ -1267,6 +1269,7 @@ describe("streamResponseThunk - tool calls", () => {
             message: {
               content: "Hello, please help me with this code",
               id: "mock-uuid-123",
+              metadata: undefined,
               role: "user",
             },
           },
@@ -1454,6 +1457,10 @@ describe("streamResponseThunk - tool calls", () => {
           requestStatus: "fulfilled",
         },
         payload: undefined,
+      },
+      {
+        type: "session/markSessionPersisted",
+        payload: "session-123",
       },
       {
         type: "session/saveCurrent/fulfilled",
@@ -1722,6 +1729,10 @@ describe("streamResponseThunk - tool calls", () => {
         payload: undefined,
       },
       {
+        type: "session/markSessionPersisted",
+        payload: "session-123",
+      },
+      {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
@@ -1785,6 +1796,7 @@ describe("streamResponseThunk - tool calls", () => {
       ...initialState,
       session: {
         ...initialState.session,
+        dirty: false,
         title: "Session summary",
         history: [
           {
@@ -1802,12 +1814,12 @@ describe("streamResponseThunk - tool calls", () => {
             message: {
               content: "Hello, please help me with this code",
               id: expect.any(String),
+              metadata: undefined,
               role: "user",
             },
           },
           {
             contextItems: [],
-            isGatheringContext: false,
             message: {
               content: "I'll search for test functions in the codebase.",
               id: expect.any(String),
@@ -1843,6 +1855,7 @@ describe("streamResponseThunk - tool calls", () => {
                   },
                 },
                 parsedArgs: { query: "test function" },
+                mcpUiState: undefined,
                 status: "done", // Tool call completed successfully
                 output: [
                   {
@@ -1870,7 +1883,6 @@ describe("streamResponseThunk - tool calls", () => {
           },
           {
             contextItems: [],
-            isGatheringContext: false,
             message: {
               content:
                 "I found several test functions in your codebase. Here are the main ones I discovered...",

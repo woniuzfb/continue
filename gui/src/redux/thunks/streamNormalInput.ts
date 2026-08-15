@@ -265,8 +265,10 @@ export const streamNormalInput = createAsyncThunk<
         return;
       }
       if (bgCache !== current) {
-        bgCache = copyOf(current);
-        setCachedSession(streamSessionId, bgCache!);
+        const copy = copyOf(current);
+        copy.dirty = true; // 后台 chunk 属未持久化内容
+        bgCache = copy;
+        setCachedSession(streamSessionId, copy);
       }
       applyStreamUpdatesToHistory(bgCache!, messages);
     };

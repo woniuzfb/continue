@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { loadMoreHistory } from "../../redux/thunks/loadMoreHistory";
 import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionSlice";
@@ -11,9 +11,41 @@ function getNumUserMsgs(history: ChatHistoryItemWithMessageId[]) {
   return history.filter((msg) => msg.message.role === "user").length;
 }
 
+type SavedScrollPosition = {
+  scrollTop: number;
+  wasAtBottom: boolean;
+};
+
+// Chat remains mounted while tabs switch, so the scroll container itself is
+// shared. Keep viewport state outside React and key it by session instead of
+// letting the previously visible session's scrollTop leak into the next one.
+const MAX_SAVED_SESSION_SCROLL_POSITIONS = 20;
+const sessionScrollPositions = new Map<string, SavedScrollPosition>();
+
+function saveSessionScrollPosition(sessionId: string, elem: HTMLDivElement) {
+  if (!sessionId) return;
+  const wasAtBottom =
+    Math.abs(elem.scrollHeight - elem.scrollTop - elem.clientHeight) < 1;
+  if (sessionScrollPositions.has(sessionId)) {
+    sessionScrollPositions.delete(sessionId);
+  } else if (
+    sessionScrollPositions.size >= MAX_SAVED_SESSION_SCROLL_POSITIONS
+  ) {
+    const oldestSessionId = sessionScrollPositions.keys().next().value;
+    if (oldestSessionId !== undefined) {
+      sessionScrollPositions.delete(oldestSessionId);
+    }
+  }
+  sessionScrollPositions.set(sessionId, {
+    scrollTop: elem.scrollTop,
+    wasAtBottom,
+  });
+}
+
 export const useAutoScroll = (
   ref: React.RefObject<HTMLDivElement>,
   history: ChatHistoryItemWithMessageId[],
+  sessionId: string,
   suppressAutoScrollRef?: React.MutableRefObject<boolean>,
 ) => {
   const dispatch = useAppDispatch();
@@ -32,6 +64,13 @@ export const useAutoScroll = (
   const isPrependingRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
   const prevScrollTopRef = useRef(0);
+  // Preserve a real, already-rendered message as the prepend anchor. The
+  // scrollHeight delta is only a fallback because asynchronous row layout can
+  // continue changing the total height.
+  const prependAnchorRef = useRef<{
+    messageId: string;
+    top: number;
+  } | null>(null);
   // 记录上一次 history 长度，用于检测 prepend（长度增加且发生在头部）
   const prevHistoryLengthRef = useRef(history.length);
   // prepend 超时保护：loadMoreHistory 失败/返回空时 prependHistoryItems 不会
@@ -44,16 +83,88 @@ export const useAutoScroll = (
   // 会错误地 auto-bottom 拉到底部。设此标记跳过，等 scroll handler 更新
   // userHasScrolled 后再清除。
   const skipNextAutoBottomRef = useRef(false);
+  // While restoring another session's viewport, ResizeObserver can fire for
+  // every mounted row. It must not interpret the previous tab's state as a
+  // request to jump this tab to the bottom.
+  const isRestoringSessionScrollRef = useRef(false);
+  const latestHistoryLengthRef = useRef(history.length);
+  const currentSessionIdRef = useRef(sessionId);
+  const sessionViewportTokenRef = useRef(0);
+  latestHistoryLengthRef.current = history.length;
 
-  // 新 user 消息出现时重置 auto-scroll。
-  // 但 prepend 上滑加载的历史几乎必然含 user 消息（user/assistant 交替），
-  // 会导致 numUserMsgs 增加 → setUserHasScrolled(false) → 触发 re-render →
-  // ResizeObserver 重新 observe 时把 scrollTop 拉到底部，覆盖 prepend 锚定。
-  // prepend 期间跳过重置即可。
+  // The scroll element is shared by every tab. Restore the incoming viewport
+  // before paint and fence every deferred callback with a token so a rapid
+  // A -> B -> A switch cannot let an older tab overwrite the current one.
+  useLayoutEffect(() => {
+    const elem = ref.current;
+    if (!elem) return;
+
+    const token = ++sessionViewportTokenRef.current;
+    currentSessionIdRef.current = sessionId;
+    const saved = sessionScrollPositions.get(sessionId);
+    isRestoringSessionScrollRef.current = true;
+    isPrependingRef.current = false;
+    prependAnchorRef.current = null;
+    skipNextAutoBottomRef.current = false;
+    prevHistoryLengthRef.current = latestHistoryLengthRef.current;
+
+    const isCurrentRestore = () =>
+      sessionViewportTokenRef.current === token &&
+      currentSessionIdRef.current === sessionId;
+
+    const restore = () => {
+      const currentElem = ref.current;
+      if (!currentElem || !isCurrentRestore()) return;
+      if (saved?.wasAtBottom) {
+        currentElem.scrollTop = currentElem.scrollHeight;
+      } else if (saved) {
+        currentElem.scrollTop = Math.min(
+          saved.scrollTop,
+          Math.max(0, currentElem.scrollHeight - currentElem.clientHeight),
+        );
+      } else {
+        // A session with no saved viewport follows the historical behavior:
+        // show its latest message rather than retaining the previous tab's
+        // raw scrollTop.
+        currentElem.scrollTop = currentElem.scrollHeight;
+      }
+    };
+
+    restore();
+    setUserHasScrolled(saved ? !saved.wasAtBottom : false);
+    const frame = requestAnimationFrame(() => {
+      if (!isCurrentRestore()) return;
+      restore();
+      const currentElem = ref.current;
+      if (currentElem) {
+        saveSessionScrollPosition(sessionId, currentElem);
+      }
+      isRestoringSessionScrollRef.current = false;
+    });
+
+    return () => {
+      cancelAnimationFrame(frame);
+      if (sessionViewportTokenRef.current === token) {
+        // Invalidate scroll/ResizeObserver callbacks queued by this tab before
+        // the next tab's layout effect installs its own token.
+        sessionViewportTokenRef.current++;
+        isRestoringSessionScrollRef.current = false;
+      }
+    };
+  }, [sessionId, ref]);
+
+  // A user-count change caused by switching sessions is not a new message in
+  // the current session. Skip that transition so the restored scrolled state
+  // cannot be reset before ResizeObserver attaches to the incoming rows.
+  const lastResetSessionIdRef = useRef(sessionId);
   useEffect(() => {
+    if (lastResetSessionIdRef.current !== sessionId) {
+      lastResetSessionIdRef.current = sessionId;
+      return;
+    }
     if (isPrependingRef.current || suppressAutoScrollRef?.current) return;
     setUserHasScrolled(false);
-  }, [numUserMsgs]);
+  }, [numUserMsgs, sessionId, suppressAutoScrollRef]);
 
   // 当 isHistoryLoading 从 true 变 false 但 history 未增长（加载失败/空结果），
   // 清除 isPrependingRef 避免永久阻塞
@@ -65,6 +176,7 @@ export const useAutoScroll = (
       }
       prependTimeoutRef.current = setTimeout(() => {
         if (isPrependingRef.current) {
+          prependAnchorRef.current = null;
           isPrependingRef.current = false;
         }
         prependTimeoutRef.current = null;
@@ -72,30 +184,63 @@ export const useAutoScroll = (
     }
   }, [isHistoryLoading]);
 
-  // prepend 检测：当 history 长度增加但不是新增 user 消息时（numUserMsgs 未变），
-  // 说明是 prepend 了更早的历史，需要锚定滚动位置
-  useEffect(() => {
-    if (!ref.current) return;
+  // Restore the prepend anchor before paint. useEffect is visibly too late:
+  // the browser paints the prepended rows at the old scrollTop and then jumps
+  // when the passive effect applies the correction.
+  useLayoutEffect(() => {
+    const elem = ref.current;
+    if (!elem) return;
     const prevLen = prevHistoryLengthRef.current;
     prevHistoryLengthRef.current = history.length;
 
     if (history.length > prevLen && isPrependingRef.current) {
-      const elem = ref.current;
-      const newScrollHeight = elem.scrollHeight;
-      const delta = newScrollHeight - prevScrollHeightRef.current;
-      elem.scrollTop = prevScrollTopRef.current + delta;
-      // 双 ref 延迟清除：
-      // - isPrependingRef 延迟到下一帧，防止紧随的 scroll handler rAF
-      //   中顶部检测重复触发 loadMoreHistory
-      // - skipNextAutoBottomRef 延迟到下一帧，防止紧随的 ResizeObserver
-      //   回调（effect 重建）在 userHasScrolled 状态提交前 auto-bottom 拉到底部
-      // 两者都在 rAF 中清除，此时 scroll handler 已有机会更新 userHasScrolled=true
+      const anchor = prependAnchorRef.current;
+      const anchorElement = anchor
+        ? Array.from(
+            elem.querySelectorAll<HTMLElement>("[data-message-id]"),
+          ).find((node) => node.dataset.messageId === anchor.messageId)
+        : null;
+
+      if (anchor && anchorElement) {
+        const currentTop = anchorElement.getBoundingClientRect().top;
+        elem.scrollTop += currentTop - anchor.top;
+      } else {
+        // Fallback for legacy messages without a stable DOM id.
+        const delta = elem.scrollHeight - prevScrollHeightRef.current;
+        elem.scrollTop = prevScrollTopRef.current + delta;
+      }
+
+      // Re-anchor once more on the next frame to absorb asynchronous row
+      // layout, but stop immediately if the anchor disappeared.
       skipNextAutoBottomRef.current = true;
+      const prependSessionId = currentSessionIdRef.current;
+      const prependSessionToken = sessionViewportTokenRef.current;
       requestAnimationFrame(() => {
+        if (
+          currentSessionIdRef.current !== prependSessionId ||
+          sessionViewportTokenRef.current !== prependSessionToken
+        ) {
+          return;
+        }
+        const currentElem = ref.current;
+        const currentAnchor = prependAnchorRef.current;
+        if (currentElem && currentAnchor) {
+          const node = Array.from(
+            currentElem.querySelectorAll<HTMLElement>("[data-message-id]"),
+          ).find(
+            (candidate) =>
+              candidate.dataset.messageId === currentAnchor.messageId,
+          );
+          if (node) {
+            currentElem.scrollTop +=
+              node.getBoundingClientRect().top - currentAnchor.top;
+          }
+        }
+        prependAnchorRef.current = null;
         isPrependingRef.current = false;
         skipNextAutoBottomRef.current = false;
       });
-      // 清除超时保护（正常 prepend 已完成）
+
       if (prependTimeoutRef.current) {
         clearTimeout(prependTimeoutRef.current);
         prependTimeoutRef.current = null;
@@ -108,12 +253,15 @@ export const useAutoScroll = (
 
     const handleScroll = () => {
       requestAnimationFrame(() => {
+        if (currentSessionIdRef.current !== sessionId) return;
+        if (isRestoringSessionScrollRef.current) return;
         const elem = ref.current;
         if (!elem) return;
 
         const isAtBottom =
           Math.abs(elem.scrollHeight - elem.scrollTop - elem.clientHeight) < 1;
 
+        saveSessionScrollPosition(sessionId, elem);
         setUserHasScrolled(!isAtBottom);
 
         // 顶部检测：触发懒加载
@@ -127,9 +275,21 @@ export const useAutoScroll = (
           !isStreaming &&
           !suppressAutoScrollRef?.current
         ) {
-          // 记录 prepend 前的滚动状态
+          // Record both a DOM anchor and the old scroll metrics. The anchor
+          // keeps the same visible message at the same viewport position while
+          // prepended rows are mounted and measured.
           prevScrollHeightRef.current = elem.scrollHeight;
           prevScrollTopRef.current = elem.scrollTop;
+          const containerTop = elem.getBoundingClientRect().top;
+          const visibleMessage = Array.from(
+            elem.querySelectorAll<HTMLElement>("[data-message-id]"),
+          ).find((node) => node.getBoundingClientRect().bottom > containerTop);
+          prependAnchorRef.current = visibleMessage
+            ? {
+                messageId: visibleMessage.dataset.messageId!,
+                top: visibleMessage.getBoundingClientRect().top,
+              }
+            : null;
           isPrependingRef.current = true;
           void dispatch(loadMoreHistory());
         }
@@ -139,6 +299,7 @@ export const useAutoScroll = (
     const resizeObserver = new ResizeObserver(() => {
       const elem = ref.current;
       if (!elem || userHasScrolled) return;
+      if (isRestoringSessionScrollRef.current) return;
       // External navigation (e.g. the "jump to previous message" button)
       // suppresses auto-bottom while it loads and scrolls.
       if (suppressAutoScrollRef?.current) return;
@@ -147,6 +308,7 @@ export const useAutoScroll = (
       // prepend 刚完成时跳过 auto-bottom（userHasScrolled 状态可能尚未提交）
       if (skipNextAutoBottomRef.current) return;
       elem.scrollTop = elem.scrollHeight;
+      saveSessionScrollPosition(sessionId, elem);
     });
 
     ref.current.addEventListener("scroll", handleScroll);
@@ -166,6 +328,7 @@ export const useAutoScroll = (
     hasMoreHistory,
     isHistoryLoading,
     isStreaming,
+    sessionId,
     dispatch,
   ]);
 
@@ -175,6 +338,7 @@ export const useAutoScroll = (
       if (prependTimeoutRef.current) {
         clearTimeout(prependTimeoutRef.current);
       }
+      prependAnchorRef.current = null;
       isPrependingRef.current = false;
     };
   }, []);

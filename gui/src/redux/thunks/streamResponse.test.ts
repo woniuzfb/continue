@@ -195,6 +195,7 @@ describe("streamResponseThunk", () => {
             message: {
               content: "Hello, please help me with this code",
               id: "mock-uuid-123",
+              metadata: undefined,
               role: "user",
             },
           },
@@ -339,6 +340,10 @@ describe("streamResponseThunk", () => {
         payload: undefined,
       },
       {
+        type: "session/markSessionPersisted",
+        payload: "session-123",
+      },
+      {
         type: "session/saveCurrent/fulfilled",
         meta: expect.objectContaining({
           arg: { openNewSession: false },
@@ -432,6 +437,7 @@ describe("streamResponseThunk", () => {
       ...initialState,
       session: {
         ...initialState.session,
+        dirty: false,
         streamAborter: expect.any(AbortController),
         title: "Session summary",
         isPruned: false,
@@ -453,12 +459,12 @@ describe("streamResponseThunk", () => {
             message: {
               content: "Hello, please help me with this code",
               id: "mock-uuid-123",
+              metadata: undefined,
               role: "user",
             },
           },
           {
             contextItems: [],
-            isGatheringContext: false,
             message: {
               content: "First chunkSecond chunk", // Chunks get combined
               id: "mock-uuid-123",
@@ -645,19 +651,13 @@ describe("streamResponseThunk", () => {
       "session/setAllSessionMetadata",
       "session/refreshMetadata/fulfilled",
       "session/update/fulfilled",
+      "session/markSessionPersisted",
       "session/saveCurrent/fulfilled",
       "chat/streamWrapper/fulfilled",
       "chat/streamAfterToolCall/fulfilled",
       "chat/callTool/fulfilled",
       "chat/streamNormalInput/fulfilled",
       "session/saveCurrent/pending",
-      "session/update/pending",
-      "session/updateSessionMetadata",
-      "session/refreshMetadata/pending",
-      "session/setIsSessionMetadataLoading",
-      "session/setAllSessionMetadata",
-      "session/refreshMetadata/fulfilled",
-      "session/update/fulfilled",
       "session/saveCurrent/fulfilled",
       "chat/streamWrapper/fulfilled",
       "chat/streamResponse/fulfilled",
@@ -779,6 +779,7 @@ describe("streamResponseThunk", () => {
       ...stateWithToolSettings,
       session: {
         ...stateWithToolSettings.session,
+        dirty: false,
         history: [
           {
             contextItems: [],
@@ -796,6 +797,7 @@ describe("streamResponseThunk", () => {
               id: expect.any(String),
               role: "user",
               content: "Hello, please help me with this code",
+              metadata: undefined,
             },
           },
           {
@@ -835,6 +837,7 @@ describe("streamResponseThunk", () => {
                   },
                 },
                 parsedArgs: { query: "test function" },
+                mcpUiState: undefined,
                 status: "done",
                 output: [
                   {
@@ -860,7 +863,6 @@ describe("streamResponseThunk", () => {
           },
           {
             contextItems: [],
-            isGatheringContext: false,
             message: {
               content: "Search completed.",
               id: "mock-uuid-123",
@@ -1010,6 +1012,7 @@ describe("streamResponseThunk", () => {
             message: {
               content: "Hello, please help me with this code",
               id: "mock-uuid-123",
+              metadata: undefined,
               role: "user",
             },
           },
@@ -1167,6 +1170,10 @@ describe("streamResponseThunk", () => {
         payload: undefined,
       },
       {
+        type: "session/markSessionPersisted",
+        payload: "session-123",
+      },
+      {
         type: "session/saveCurrent/fulfilled",
         meta: {
           arg: {
@@ -1257,6 +1264,7 @@ describe("streamResponseThunk", () => {
       ...abortState,
       session: {
         ...abortState.session,
+        dirty: false,
         history: [
           {
             contextItems: [],
@@ -1269,12 +1277,12 @@ describe("streamResponseThunk", () => {
             message: {
               content: "Hello, please help me with this code",
               id: "mock-uuid-123",
+              metadata: undefined,
               role: "user",
             },
           },
           {
             contextItems: [],
-            isGatheringContext: false,
             message: {
               content: "First chunk", // Only first chunk before abort
               id: "mock-uuid-123",

@@ -39,6 +39,73 @@ const SESSION_LOCK_STALE_MS = 8_000; // 超过此年龄的锁视为陈旧（持�
 const SESSION_LOCK_TIMEOUT_MS = 10_000; // 超过此时间仍拿不到锁则放弃等待
 const SESSION_LOCK_RETRY_MS = 25;
 
+// 会话持久化瘦身：只剥离用户消息中由附件元数据明确标识的块，避免
+// 改写普通正文、代码示例或其他 history 字段中的字面量标签。
+function stripAttachedFileContent(history: Session["history"] | undefined) {
+  if (!history) return;
+  for (const item of history) {
+    if (item.message.role !== "user") continue;
+    const attachments = item.message.metadata?.attachments;
+    if (!Array.isArray(attachments) || attachments.length === 0) continue;
+    const paths = new Set(
+      attachments
+        .map((attachment) =>
+          typeof attachment === "object" && attachment !== null
+            ? (attachment as { path?: unknown }).path
+            : undefined,
+        )
+        .filter((path): path is string => typeof path === "string"),
+    );
+    if (paths.size === 0) continue;
+    const stripText = (text: string) => {
+      // Attachments are generated as line-delimited blocks. Requiring both
+      // markers to occupy their own line avoids treating a tag mentioned in
+      // ordinary prose or source code as an attachment boundary.
+      const blockRe =
+        /^[ \t]*<file_content path="([^"]*)">[ \t]*\r?\n([\s\S]*?)^[ \t]*<\/file_content>[ \t]*(?:\r?\n|$)/gim;
+      return text.replace(
+        blockRe,
+        (
+          block,
+          path: string,
+          body: string,
+          offset: number,
+          fullText: string,
+        ) => {
+          if (!paths.has(path)) return block;
+
+          // A nested opening marker means this is source text, not the flat
+          // attachment format emitted by buildAttachedFilesText. Leave it
+          // untouched because a regex cannot reliably match nested blocks.
+          if (/^[ \t]*<file_content\b/gim.test(body)) return block;
+
+          // A standalone closing tag in the body is ambiguous: the lazy regex
+          // stops at the first one. If another closing tag appears before the
+          // next attachment opening, retaining the original text is safer than
+          // silently dropping a suffix of the user's attached file.
+          const remaining = fullText.slice(offset + block.length);
+          const nextOpening = remaining.search(/^[ \t]*<file_content path="/im);
+          const untilNextOpening =
+            nextOpening === -1 ? remaining : remaining.slice(0, nextOpening);
+          if (
+            /^[ \t]*<\/file_content>[ \t]*(?:\r?\n|$)/im.test(untilNextOpening)
+          ) {
+            return block;
+          }
+          return `<file_content path="${path}"/>`;
+        },
+      );
+    };
+    if (typeof item.message.content === "string") {
+      item.message.content = stripText(item.message.content);
+    } else if (Array.isArray(item.message.content)) {
+      item.message.content = item.message.content.map((part) =>
+        part.type === "text" ? { ...part, text: stripText(part.text) } : part,
+      );
+    }
+  }
+}
+
 // 运行时守护不变量，防止未来有人调参数时不慎打破 STALE < TIMEOUT。
 if (SESSION_LOCK_STALE_MS >= SESSION_LOCK_TIMEOUT_MS) {
   throw new Error(
@@ -217,6 +284,9 @@ export class HistoryManager {
     try {
       const session: Session = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
       session.sessionId = sessionId;
+      // 加载瘦身（见 stripAttachedFileContent 注释）：旧文件迁移前仍是肥的，
+      // 剥离后再返回，避免 100MB+ 块体灌进 IPC 与 webview 堆
+      stripAttachedFileContent(session.history);
       return session;
     } catch (e) {
       console.log(`Error loading session: ${e}`);
@@ -352,6 +422,10 @@ export class HistoryManager {
         return;
       }
     }
+
+    // 写盘瘦身（见 stripAttachedFileContent 注释）：覆盖合并后的完整 history
+    // （含从磁盘读回的冻结头部），块体不落盘。幂等，重复剥离无副作用。
+    stripAttachedFileContent(finalHistory);
 
     const orderedSession: Session = {
       sessionId: session.sessionId,

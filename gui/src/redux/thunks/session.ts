@@ -13,6 +13,8 @@ import {
   deleteCachedSession,
   deleteSessionMetadata,
   getCachedSession,
+  markSessionDirty,
+  markSessionPersisted,
   newSession,
   restoreCachedSession,
   setAllSessionMetadata,
@@ -53,6 +55,7 @@ export function cacheCurrentSession(state: RootState): void {
     chatModelTitle: selectedChatModel?.title,
     hasReasoningEnabled: session.hasReasoningEnabled,
     isStreaming: session.isStreaming,
+    dirty: session.dirty,
     historyTruncated: session.historyTruncated,
     historyLoadedOffset: session.historyLoadedOffset,
     historyTotalCount: session.historyTotalCount,
@@ -247,13 +250,6 @@ export const saveSessionFromCache = createAsyncThunk<
     title = NEW_SESSION_TITLE;
   }
 
-  // 同步缓存里的标题与 streaming 结束标记
-  setCachedSession(sessionId, {
-    ...cached,
-    title,
-    isStreaming: false,
-  });
-
   const session: Session = {
     sessionId,
     title,
@@ -266,6 +262,18 @@ export const saveSessionFromCache = createAsyncThunk<
     contextMetrics: cached.contextMetrics,
   };
   unwrapResult(await dispatch(updateSession(session)));
+
+  // Only clear the exact cache snapshot that was persisted. A replacement
+  // created while the save was in flight must remain dirty.
+  const currentCached = getCachedSession(sessionId);
+  if (currentCached === cached) {
+    setCachedSession(sessionId, {
+      ...currentCached,
+      title,
+      isStreaming: false,
+      dirty: false,
+    });
+  }
 });
 
 /*
@@ -284,12 +292,13 @@ export const loadSession = createAsyncThunk<
     { sessionId, saveCurrentSession: save },
     { extra, dispatch, getState },
   ) => {
+    const isSwitch = sessionId !== getState().session.id;
     // Cache current session before switching (so switching back is instant).
     // 启动场景跳过：redux-persist 持久化 session.id 但不持久化 history，
     // 重启后 state = {id:A, history:[]}。若此时 cacheCurrentSession 会把
     // 伪空 A 写入 LRU，随后 getCachedSession(A) 命中导致跳过磁盘加载，
     // 历史丢失。启动时 sessionId === state.session.id，非"切换"，无需缓存。
-    if (sessionId !== getState().session.id) {
+    if (isSwitch) {
       cacheCurrentSession(getState());
     }
 
@@ -341,6 +350,7 @@ export const loadSession = createAsyncThunk<
     // Must await so that compileChatForContextMetrics sees the restored model.
     if (chatModelTitle) {
       await dispatch(selectChatModelForProfile(chatModelTitle)).unwrap();
+      // 中间若被 React 渲染 168 条消息阻塞，耗时体现在这里
     }
 
     // 指标恢复路径：
@@ -382,6 +392,7 @@ export const selectChatModelForProfile = createAsyncThunk<
     );
     const selectedProfile = selectSelectedProfile(state);
     if (selectedProfile && modelMatch) {
+      const previousModelTitle = selectSelectedChatModel(state)?.title;
       await dispatch(
         updateSelectedModelByRole({
           role: "chat",
@@ -389,6 +400,12 @@ export const selectChatModelForProfile = createAsyncThunk<
           selectedProfile,
         }),
       );
+      // chatModelTitle is persisted with the session rather than the profile.
+      // A model switch without a subsequent message must therefore make the
+      // current session eligible for the next tab-switch save.
+      if (previousModelTitle !== modelTitle) {
+        dispatch(markSessionDirty());
+      }
     }
   },
 );
@@ -546,6 +563,14 @@ export const saveCurrentSession = createAsyncThunk<
       dispatch(newSession());
     }
 
+    // 脏标记跳过：会话内容（history/title/metrics/mode）自上次成功保存后
+    // 未变更（分页加载只读不写盘，不置脏），history/save 是纯冗余 ——
+    // 长会话的全量 structured clone + 写盘会阻塞后续 IPC ~2s。
+    // 标题仍是 NEW_SESSION_TITLE 的会话不跳过：需要生成标题并落盘。
+    if (!session.dirty && session.title !== NEW_SESSION_TITLE) {
+      return;
+    }
+
     const selectedChatModel = selectSelectedChatModel(getState());
 
     // New session has already been dispatched
@@ -627,8 +652,21 @@ export const saveCurrentSession = createAsyncThunk<
       // 持久化 context 指标快照，下次加载会话时直接还原
       contextMetrics: session.contextMetrics,
     };
-
+    // Retain the cache identity observed before persisting. A background
+    // stream may replace it while the write is in flight; that replacement
+    // must stay dirty because its contents are newer than this snapshot.
+    const cachedBeforeSave = getCachedSession(session.id);
     const result = await dispatch(updateSession(updatedSession));
     unwrapResult(result);
+
+    // 持久化成功：清脏标记（当前会话）+ 同步 LRU 缓存副本
+    dispatch(markSessionPersisted(session.id));
+    if (
+      cachedBeforeSave &&
+      getCachedSession(session.id) === cachedBeforeSave &&
+      !cachedBeforeSave.isStreaming
+    ) {
+      setCachedSession(session.id, { ...cachedBeforeSave, dirty: false });
+    }
   },
 );
