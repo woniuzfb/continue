@@ -150,9 +150,22 @@ export function constructMessages(
         continue;
       }
 
+      // Assistant 回复在被重发时永远是历史消息，其中的内联 base64 图
+      // 与历史用户消息一样剥离，避免每轮请求重复携带大段 base64
+      let content = item.message.content;
+      if (typeof content === "string") {
+        content = stripInlineImageBase64(content);
+      } else if (content) {
+        content = content.map((part) =>
+          part.type === "text"
+            ? { ...part, text: stripInlineImageBase64(part.text ?? "") }
+            : part,
+        );
+      }
+
       msgs.push({
         ctxItems: item.contextItems,
-        message: item.message,
+        message: { ...item.message, content },
       });
 
       // Add a tool message for each tool call

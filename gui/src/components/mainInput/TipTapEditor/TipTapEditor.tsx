@@ -15,9 +15,11 @@ import {
 import { IdeMessengerContext } from "../../../context/IdeMessenger";
 import useIsOSREnabled from "../../../hooks/useIsOSREnabled";
 import useUpdatingRef from "../../../hooks/useUpdatingRef";
+import { useStore } from "react-redux";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { selectSelectedChatModel } from "../../../redux/slices/configSlice";
 import { setMainEditorDraft } from "../../../redux/slices/sessionSlice";
+import { RootState } from "../../../redux/store";
 import InputToolbar, { ToolbarOptions } from "../InputToolbar";
 import { ComboBoxItem, AttachedFile } from "../types";
 import {
@@ -178,8 +180,36 @@ function AttachedFileChip({
   );
 }
 
+/** Mirror of the retention rule in `clearDanglingMessages` (sessionSlice):
+ * the just-sent user message is kept in history iff some assistant message
+ * after it received content (or a generated tool call). When nothing was
+ * received, the user bubble is rolled back into the input instead. */
+function wasLastUserMessageRetained(
+  history: RootState["session"]["history"],
+): boolean {
+  let lastUserOrToolIdx = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const role = history[i].message.role;
+    if (role === "user" || role === "tool") {
+      lastUserOrToolIdx = i;
+      break;
+    }
+  }
+  for (let i = history.length - 1; i > lastUserOrToolIdx; i--) {
+    const item = history[i];
+    const hasGeneratedMsg = item.toolCallStates?.some(
+      (toolCallState) => toolCallState.status !== "generating",
+    );
+    if (item.message.content || hasGeneratedMsg) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function TipTapEditorInner(props: TipTapEditorProps) {
   const dispatch = useAppDispatch();
+  const reduxStore = useStore<RootState>();
   const mainEditorContext = useMainEditor();
 
   // --- Attached files (Upload File via "+") ---
@@ -222,10 +252,12 @@ function TipTapEditorInner(props: TipTapEditorProps) {
   // metadata is stored on message.metadata for the UI to render chips.
   // We read through attachedFilesRef so the closure captured by the editor's
   // Enter keybinding always sees the latest value. The chips are cleared
-  // optimistically (same as the editor text), but if the send fails (error
-  // interrupt, handled by streamThunkWrapper which reports success via a
-  // boolean), the previously selected files are restored so the user does not
-  // have to pick them again.
+  // optimistically (same as the editor text). If the send fails,
+  // streamThunkWrapper has already run clearDanglingMessages, which keeps the
+  // user bubble when the assistant received any content and rolls it back
+  // into the input otherwise. We restore the files only in the rollback
+  // case; when the bubble was retained, its metadata still carries the
+  // attachments, and restoring them here would duplicate them in the input.
   const wrappedOnEnter: typeof props.onEnter = async (
     editorState,
     modifiers,
@@ -236,9 +268,15 @@ function TipTapEditorInner(props: TipTapEditorProps) {
       setAttachedFiles([]);
       const result = await props.onEnter(editorState, modifiers, editor, files);
       if (result === false) {
-        // Send was interrupted by an error: bring the files back. If the user
-        // already picked new files while the send was in flight, keep those.
-        setAttachedFiles((prev) => (prev.length === 0 ? files : prev));
+        const retained = wasLastUserMessageRetained(
+          reduxStore.getState().session.history,
+        );
+        // User bubble was rolled back (assistant received nothing): bring
+        // the files back too. If the user already picked new files while
+        // the send was in flight, keep those.
+        if (!retained) {
+          setAttachedFiles((prev) => (prev.length === 0 ? files : prev));
+        }
       }
       return result === false ? false : true;
     }

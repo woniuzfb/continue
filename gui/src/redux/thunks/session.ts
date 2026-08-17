@@ -204,12 +204,7 @@ export const saveSessionFromCache = createAsyncThunk<
     !getState().config.config?.disableSessionTitles &&
     selectedChatModel
   ) {
-    const assistantResponse = cached.history
-      ?.find(
-        (h) =>
-          h.message.role === "assistant" && !!h.message.content?.toString(),
-      )
-      ?.message?.content?.toString();
+    const assistantResponse = getAssistantResponseText(cached.history);
 
     if (assistantResponse) {
       // 复用 constructMessages，与发送消息路径对齐：
@@ -514,6 +509,36 @@ export const loadLastSession = createAsyncThunk<
   }
 });
 
+/**
+ * 取第一个含非空正文的回复 run 的完整文本作为标题生成输入。
+ * 一轮回复可能被 thinking 气泡拆成多个 assistant history item
+ * （dontMergeReplyBubbles 默认 true），只取第一条会丢失句中续流内容。
+ * 拼接语义与复制按钮（ResponseActions）和重载合并（mergeSplitReplies）
+ * 保持一致：run = 连续的 assistant/thinking 条目（user/tool/system 打断），
+ * 正文 join("")（续流是句中续接，不是独立段落）；跨 run 不聚合。
+ * content 为 parts 数组时用 renderChatMessage 取纯文本（toString 会得到
+ * "[object Object]"）。
+ */
+function getAssistantResponseText(
+  history: { message: ChatMessage }[] | undefined,
+): string | undefined {
+  const parts: string[] = [];
+  for (const item of history ?? []) {
+    const role = item.message.role;
+    if (role === "assistant" || role === "thinking") {
+      if (role === "assistant") {
+        const text = renderChatMessage(item.message);
+        if (text.trim().length > 0) {
+          parts.push(text);
+        }
+      }
+    } else if (parts.length > 0) {
+      break; // 第一个非空 run 结束，不再跨 run 聚合
+    }
+  }
+  return parts.length ? parts.join("") : undefined;
+}
+
 function getChatTitleFromMessage(message: ChatMessage) {
   // Replace <file_content>...</file_content> attachment blocks with a
   // [file: path] marker BEFORE picking the last line. Without this, a session
@@ -583,12 +608,7 @@ export const saveCurrentSession = createAsyncThunk<
         !getState().config.config?.disableSessionTitles &&
         selectedChatModel
       ) {
-        let assistantResponse = session.history
-          ?.find(
-            (h) =>
-              h.message.role === "assistant" && !!h.message.content?.toString(),
-          )
-          ?.message?.content?.toString();
+        let assistantResponse = getAssistantResponseText(session.history);
 
         if (assistantResponse) {
           // 复用 constructMessages，与发送消息路径对齐：

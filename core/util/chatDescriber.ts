@@ -4,7 +4,7 @@ import { removeCodeBlocksAndTrim, removeQuotesAndEscapes } from ".";
 
 import type { FromCoreProtocol, ToCoreProtocol } from "../protocol";
 import type { IMessenger } from "../protocol/messenger";
-import { renderChatMessage } from "./messageContent";
+import { renderChatMessage, stripInlineImageBase64 } from "./messageContent";
 import { convertFromUnifiedHistory } from "./messageConversion";
 
 export class ChatDescriber {
@@ -24,7 +24,8 @@ export class ChatDescriber {
     }
 
     // Clean up and distill the message we want to send to the LLM
-    message = removeCodeBlocksAndTrim(message);
+    // （标题生成的输入是 assistant 回复原文，内联 base64 图需一并剥离）
+    message = stripInlineImageBase64(removeCodeBlocksAndTrim(message));
 
     if (!message) {
       return;
@@ -72,7 +73,8 @@ export class ChatDescriber {
     }
 
     // Clean up and distill the message we want to send to the LLM
-    message = removeCodeBlocksAndTrim(message);
+    // （标题生成的输入是 assistant 回复原文，内联 base64 图需一并剥离）
+    message = stripInlineImageBase64(removeCodeBlocksAndTrim(message));
 
     if (!message) {
       return;
