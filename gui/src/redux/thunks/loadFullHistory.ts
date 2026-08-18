@@ -38,8 +38,21 @@ export const loadFullHistory = createAsyncThunk<void, void, ThunkApiType>(
     const diskHistory = result.content.history;
     const headCount = state.historyLoadedOffset ?? 0;
 
+    // 守卫：historyTruncated=true 蕴含磁盘上应存在 headCount 条头部消息。
+    // 若磁盘 history 短于尾部（文件缺失时 load() 返回空、JSON 损坏被静默
+    // 吞掉、或多窗口并发改写），继续合并会静默丢弃头部、以部分上下文发送，
+    // 且发送结束的自动 save 会用尾部-only 覆盖磁盘，永久破坏原文件。
+    // 这里显式失败：streamResponse 会 setInactive 并中止发送（复用既有
+    // 错误对话框路径），保留磁盘原状以便修复。
+    if (diskHistory.length < headCount) {
+      throw new Error(
+        `loadFullHistory: on-disk history (${diskHistory.length}) is shorter ` +
+          `than the expected frozen head (${headCount}). Refusing to merge ` +
+          `a partial context and overwrite the session file; aborting send.`,
+      );
+    }
+
     // 合并：磁盘头部未加载部分 + 当前已加载（可能被 truncate/delete/edit 过）的尾部。
-    // headCount 超过磁盘长度时（外部修改等罕见情况）退化为全量覆盖。
     const safeHeadCount = Math.min(headCount, diskHistory.length);
     const mergedHistory = [
       ...diskHistory.slice(0, safeHeadCount),

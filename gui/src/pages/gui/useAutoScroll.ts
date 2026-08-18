@@ -342,4 +342,78 @@ export const useAutoScroll = (
       isPrependingRef.current = false;
     };
   }, []);
+
+  // 视口填满检测：懒加载初始页可能不足一屏（如尾部恰好只有一轮的多气泡
+  // 回复）。滚动容器无可滚动空间 → scroll 事件永不触发 → 顶部懒加载死锁：
+  // 用户看到"只有最后一轮对话且无法上滑"。这里在每次挂载/prepend 后测量，
+  // 未填满视口且还有历史时主动补页，直到内容可滚动或历史加载完。
+  // 连续失败（loadPage 报错等导致 history 未增长）超过 3 次后放弃，避免
+  // 无限重试；sessionId 切换或成功增长后重置。
+  const fillViewportAttemptsRef = useRef(0);
+  useEffect(() => {
+    fillViewportAttemptsRef.current = 0;
+  }, [sessionId]);
+  // history 增长 = 上一次补页成功，重置失败计数（大视口可能需要连续多页
+  // 才能填满；只有"连续 3 次都未增长"才视为失败放弃）。
+  const lastFillCheckLengthRef = useRef(history.length);
+  useEffect(() => {
+    if (history.length > lastFillCheckLengthRef.current) {
+      fillViewportAttemptsRef.current = 0;
+    }
+    lastFillCheckLengthRef.current = history.length;
+  }, [history.length]);
+  useEffect(() => {
+    if (!hasMoreHistory || isHistoryLoading || isStreaming) return;
+    if (isPrependingRef.current) return;
+    if (fillViewportAttemptsRef.current >= 3) return;
+    const prevLengthAtDispatch = history.length;
+    // 双 rAF：等 React 渲染 + 行布局完成后测量才准确
+    let innerRaf = 0;
+    const outerRaf = requestAnimationFrame(() => {
+      innerRaf = requestAnimationFrame(() => {
+        const elem = ref.current;
+        if (!elem) return;
+        if (currentSessionIdRef.current !== sessionId) return;
+        // isRestoring 检查放在帧回调内：mount 时 restore（layout effect）
+        // 先置位再排队清位的 frame；本 effect 的帧排在 restore frame 之后，
+        // 执行到此处时 restore 已完成。若在 effect body 检查，首次挂载会
+        // 被 isRestoring=true 挡住且之后无重跑信号，补页永远不触发。
+        if (isRestoringSessionScrollRef.current) return;
+        if (isPrependingRef.current) return;
+        // 不足一屏（无滚动空间，scroll handler 无法触发）
+        if (elem.scrollHeight <= elem.clientHeight) {
+          fillViewportAttemptsRef.current += 1;
+          isPrependingRef.current = true;
+          prevScrollHeightRef.current = elem.scrollHeight;
+          prevScrollTopRef.current = elem.scrollTop;
+          prependAnchorRef.current = null; // 顶部无可见锚，prepend 后走 scrollHeight-delta 恢复
+          void dispatch(loadMoreHistory());
+          // prepend 成功（history 增长）由上面的 effect 链路重置 isPrependingRef；
+          // 这里只兜底失败场景：若干帧后 history 未增长则立即解锁并允许重试。
+          setTimeout(() => {
+            if (
+              isPrependingRef.current &&
+              latestHistoryLengthRef.current === prevLengthAtDispatch
+            ) {
+              isPrependingRef.current = false;
+            }
+          }, PREPEND_TIMEOUT_MS);
+        }
+      });
+    });
+    return () => {
+      cancelAnimationFrame(outerRaf);
+      cancelAnimationFrame(innerRaf);
+    };
+    // history.length：prepend 成功后重测（循环填满视口）
+    // isHistoryLoading：失败路径（loading true→false）也重测一次
+  }, [
+    history.length,
+    hasMoreHistory,
+    isHistoryLoading,
+    isStreaming,
+    sessionId,
+    ref,
+    dispatch,
+  ]);
 };
