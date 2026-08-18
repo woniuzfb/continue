@@ -5,6 +5,10 @@ import { ListHistoryOptions } from "../protocol/core.js";
 
 import { NEW_SESSION_TITLE } from "./constants.js";
 import {
+  collapseFileContentBlocks,
+  stripInlineImageBase64,
+} from "./messageContent.js";
+import {
   getSessionFilePath,
   getSessionsFolderPath,
   getSessionsListPath,
@@ -102,6 +106,23 @@ function stripAttachedFileContent(history: Session["history"] | undefined) {
       item.message.content = item.message.content.map((part) =>
         part.type === "text" ? { ...part, text: stripText(part.text) } : part,
       );
+    }
+  }
+
+  // promptLogs 瘦身：promptLog 记录的是 LLM 边界的最终渲染 prompt，当前
+  // 消息的附件以完整 <file_content> 块形式进入（工具循环每轮各留一份全量
+  // 拷贝），旧会话文件因此膨胀到 100MB+。这里把完整块折叠为自闭合标记
+  // （与消息本体的瘦身格式一致），并按现有方法剥离内联 base64 图片。
+  // 不做 attachment 路径匹配：promptLog 挂在 assistant 消息上，无从对照
+  // user 消息的 metadata；且它是遥测产物，保留 path 即可。幂等。
+  for (const item of history) {
+    if (!item.promptLogs?.length) continue;
+    for (const log of item.promptLogs) {
+      if (typeof log.prompt === "string") {
+        log.prompt = collapseFileContentBlocks(
+          stripInlineImageBase64(log.prompt),
+        );
+      }
     }
   }
 }

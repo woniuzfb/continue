@@ -1,4 +1,5 @@
 import {
+  collapseFileContentBlocks,
   replaceFileContentBlocks,
   stripInlineImageBase64,
 } from "./messageContent.js";
@@ -73,6 +74,93 @@ describe("messageContent attachment helpers (regression)", () => {
 
     it("returns empty/undefined-safe input unchanged", () => {
       expect(replaceFileContentBlocks("")).toBe("");
+    });
+  });
+
+  describe("replaceFileContentBlocks — self-closing (slimmed) markers", () => {
+    // After a disk round-trip, stripAttachedFileContent rewrites attachment
+    // blocks as `<file_content path="..."/>`. Rendering MUST produce the same
+    // output as the full-block form, otherwise the first-round bytes of a
+    // session change after a reload and downstream session-identity checks
+    // (server-side fingerprinting over the first round) see a "new" session.
+    it("replaces a self-closing marker exactly like a full block", () => {
+      const full =
+        '<file_content path="src/a.py">\nprint(1)\n</file_content>\n';
+      const slimmed = '<file_content path="src/a.py"/>\n';
+      expect(replaceFileContentBlocks(full)).toBe(
+        replaceFileContentBlocks(slimmed),
+      );
+      expect(replaceFileContentBlocks(slimmed)).toBe("[file: src/a.py]");
+    });
+
+    it("does NOT let a self-closing marker swallow a following full block", () => {
+      // Hazard: the full-block regex's attrs group can absorb the `/` of the
+      // self-closing tag and match all the way to the NEXT block's closing
+      // tag. Self-closing replacement runs first precisely to prevent this.
+      const input =
+        '<file_content path="slim.py"/>\n' +
+        "prose between\n" +
+        '<file_content path="full.py">\nBODY\n</file_content>\n';
+      const out = replaceFileContentBlocks(input);
+      // The marker's own trailing newline is consumed, same as a full block.
+      expect(out).toBe("[file: slim.py]prose between\n[file: full.py]");
+    });
+
+    it("handles self-closing markers without a path attribute", () => {
+      expect(replaceFileContentBlocks("<file_content/>\n")).toBe("[file]");
+    });
+
+    it("does NOT replace a mid-line self-closing mention in prose", () => {
+      const input = 'talk about <file_content path="x.py"/> inline here';
+      expect(replaceFileContentBlocks(input)).toBe(input);
+    });
+
+    it("supports quoted and bare path values in self-closing markers", () => {
+      expect(
+        replaceFileContentBlocks("<file_content path='sp aced.py'/>\n"),
+      ).toBe("[file: sp aced.py]");
+      expect(replaceFileContentBlocks("<file_content path=bare.py/>\n")).toBe(
+        "[file: bare.py]",
+      );
+    });
+  });
+
+  describe("collapseFileContentBlocks — persistence slimming", () => {
+    it("collapses a full block into its self-closing marker, dropping the body", () => {
+      const input =
+        "<file_content path=\"src/a.py\">\nprint('hello')\n</file_content>\n";
+      expect(collapseFileContentBlocks(input)).toBe(
+        '<file_content path="src/a.py"/>',
+      );
+    });
+
+    it("collapses multiple blocks independently", () => {
+      const input =
+        '<file_content path="a.js">\nA\n</file_content>\n\n' +
+        '<file_content path="b.js">\nB\n</file_content>\n';
+      // Each block consumes its own trailing newline (same rule as the
+      // full-block replacement), so one newline remains between markers.
+      expect(collapseFileContentBlocks(input)).toBe(
+        '<file_content path="a.js"/>\n<file_content path="b.js"/>',
+      );
+    });
+
+    it("falls back to <file_content/> when no path attribute is present", () => {
+      expect(
+        collapseFileContentBlocks("<file_content>\nZ\n</file_content>\n"),
+      ).toBe("<file_content/>");
+    });
+
+    it("is idempotent (already-collapsed text passes through)", () => {
+      const once = collapseFileContentBlocks(
+        '<file_content path="a.py">\nA\n</file_content>\n',
+      );
+      expect(collapseFileContentBlocks(once)).toBe(once);
+    });
+
+    it("leaves an inline mid-line mention untouched", () => {
+      const input = 'looks like <file_content path="x.py"> in prose';
+      expect(collapseFileContentBlocks(input)).toBe(input);
     });
   });
 

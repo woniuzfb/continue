@@ -88,6 +88,16 @@ const FILE_CONTENT_BLOCK_RE =
   /^[ \t]*<file_content\b([^>\r\n]*)>[ \t]*\r?\n([\s\S]*?)^[ \t]*<\/file_content\s*>[ \t]*(?:\r?\n|$)/gim;
 
 /**
+ * Match the SELF-CLOSING form `<file_content path="..."/>`. This is the
+ * persistence-slimming format written by stripAttachedFileContent (history.ts):
+ * attachment bodies are stripped before hitting disk, leaving only the marker.
+ * Line-anchored like FILE_CONTENT_BLOCK_RE so a mid-line mention in prose is
+ * never mistaken for a real slimmed attachment.
+ */
+const FILE_CONTENT_SELF_CLOSING_RE =
+  /^[ \t]*<file_content\b([^>\r\n]*)\/>[ \t]*(?:\r?\n|$)/gim;
+
+/**
  * Extract the path attribute value from an opening tag's attribute string.
  * Supports double-quoted, single-quoted, and bare (unquoted) values, matching
  * the Python `_CLINE_FILE_PATH_RE`.
@@ -112,9 +122,35 @@ function extractPathFromAttrs(attrs: string): string | undefined {
  */
 export function replaceFileContentBlocks(text: string): string {
   if (!text) return text;
+  // Self-closing markers FIRST. The full-block regex's attrs group
+  // `[^>\r\n]*` can absorb the `/` of a self-closing tag, making it match
+  // from a self-closing marker all the way to a LATER block's closing tag —
+  // swallowing that block whole. Replacing self-closing forms first removes
+  // them from the text so the full-block pass can only match real pairs.
+  return text
+    .replace(FILE_CONTENT_SELF_CLOSING_RE, (_match, attrs: string) => {
+      const path = extractPathFromAttrs(attrs);
+      return path ? `[file: ${path}]` : "[file]";
+    })
+    .replace(FILE_CONTENT_BLOCK_RE, (_match, attrs: string) => {
+      const path = extractPathFromAttrs(attrs);
+      return path ? `[file: ${path}]` : "[file]";
+    });
+}
+
+/**
+ * Collapse line-delimited <file_content path="...">...</file_content> blocks
+ * into their self-closing form `<file_content path="..."/>`, dropping the
+ * body. Used to slim promptLogs before persistence: a promptLog records the
+ * FINAL rendered prompt at the LLM boundary, where the current message's
+ * attachments appear as full blocks (one full copy per tool-loop round).
+ * Idempotent: collapsed markers never re-match the full-block regex.
+ */
+export function collapseFileContentBlocks(text: string): string {
+  if (!text) return text;
   return text.replace(FILE_CONTENT_BLOCK_RE, (_match, attrs: string) => {
     const path = extractPathFromAttrs(attrs);
-    return path ? `[file: ${path}]` : "[file]";
+    return path ? `<file_content path="${path}"/>` : "<file_content/>";
   });
 }
 

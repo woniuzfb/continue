@@ -219,4 +219,49 @@ describe("HistoryManager truncated-history save (regression)", () => {
     const sessions = historyManager.list({});
     expect(sessions.some((s) => s.sessionId === sessionId)).toBe(false);
   });
+
+  it("slims promptLogs on save: full blocks collapse, inline base64 images strip", async () => {
+    const sessionId = uuidv4();
+    // A promptLog as captured at the LLM boundary: the current message's
+    // attachment appears as a FULL block, plus an inline base64 image.
+    const fatPrompt =
+      "<system>sys</system>\n" +
+      "<user>see files\n" +
+      '<file_content path="/tmp/big.b64">\n' +
+      "AAAA....(26MB of base64)\n" +
+      "</file_content>\n" +
+      "and ![shot](data:image/png;base64,AAAABBBB)</user>\n";
+    await historyManager.save({
+      sessionId,
+      title: "promptlog slimming",
+      workspaceDirectory: "ws",
+      history: [
+        msg("user", "attach please"),
+        {
+          message: { role: "assistant", content: "done" },
+          contextItems: [],
+          promptLogs: [
+            {
+              modelTitle: "m",
+              modelProvider: "local",
+              prompt: fatPrompt,
+              completion: "ok",
+            },
+          ],
+        },
+      ],
+    });
+
+    const onDisk = readDisk(sessionId);
+    const log = onDisk.history[1].promptLogs![0];
+    // Body dropped, path kept as the self-closing slimming marker.
+    expect(log.prompt).toContain('<file_content path="/tmp/big.b64"/>');
+    expect(log.prompt).not.toContain("AAAA....");
+    // Inline image reduced to its marker via the existing stripper.
+    expect(log.prompt).toContain("![shot]");
+    expect(log.prompt).not.toContain("data:image/png;base64");
+    // Completion and model metadata are preserved.
+    expect(log.completion).toBe("ok");
+    expect(log.modelTitle).toBe("m");
+  });
 });
