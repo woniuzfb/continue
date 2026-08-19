@@ -725,7 +725,9 @@ function TipTapEditorInner(props: TipTapEditorProps) {
                 const { schema } = editor.state;
                 const node = schema.nodes.image.create({ src: dataUrl });
                 editor.commands.command(({ tr }) => {
-                  tr.insert(0, node);
+                  // 图片是 atom block,后面补一个空段落让光标有处可停
+                  const paragraph = schema.nodes.paragraph.create();
+                  tr.insert(tr.selection.from, [node, paragraph]);
                   return true;
                 });
               }
