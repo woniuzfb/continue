@@ -4,7 +4,11 @@ import { removeCodeBlocksAndTrim, removeQuotesAndEscapes } from ".";
 
 import type { FromCoreProtocol, ToCoreProtocol } from "../protocol";
 import type { IMessenger } from "../protocol/messenger";
-import { renderChatMessage, stripInlineImageBase64 } from "./messageContent";
+import {
+  renderChatMessage,
+  replaceFileContentBlocks,
+  stripInlineImageBase64,
+} from "./messageContent";
 import { convertFromUnifiedHistory } from "./messageConversion";
 
 export class ChatDescriber {
@@ -31,6 +35,18 @@ export class ChatDescriber {
       return;
     }
 
+    // 取第一轮用户消息拼进标题生成输入，让标题贴合会话起点；
+    // 同样做清理：折叠 <file_content> 附件块、去 base64 图片 / 代码块，
+    // 避免整个文件内容膨胀标题 prompt
+    const firstUserMessage = history?.find((m) => m.role === "user");
+    const firstUserText = firstUserMessage
+      ? stripInlineImageBase64(
+          removeCodeBlocksAndTrim(
+            replaceFileContentBlocks(renderChatMessage(firstUserMessage)),
+          ),
+        )
+      : "";
+
     completionOptions.maxTokens = ChatDescriber.maxTokens;
 
     // 带上会话历史，让服务端能识别这不是新会话；
@@ -41,13 +57,21 @@ export class ChatDescriber {
             ...history,
             {
               role: "user" as const,
-              content: ChatDescriber.prompt + message,
+              content:
+                ChatDescriber.prompt +
+                firstUserText +
+                (firstUserText ? "\n\n" : "") +
+                message,
             },
           ]
         : [
             {
               role: "user" as const,
-              content: ChatDescriber.prompt + message,
+              content:
+                ChatDescriber.prompt +
+                firstUserText +
+                (firstUserText ? "\n\n" : "") +
+                message,
             },
           ];
 

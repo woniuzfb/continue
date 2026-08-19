@@ -1,4 +1,4 @@
-import { LLMFullCompletionOptions } from "..";
+import { ChatMessage, LLMFullCompletionOptions } from "..";
 import { testLLM } from "../test/fixtures";
 import { ChatDescriber } from "./chatDescriber";
 
@@ -53,6 +53,57 @@ describe("ChatDescriber", () => {
       const result = await ChatDescriber.describe(testLLM, {}, message);
 
       expect(result).toBe(expectedResult);
+    });
+
+    it("should prepend the first user message from history to the prompt", async () => {
+      const message = "Second question";
+      const history: ChatMessage[] = [
+        { role: "user", content: "First question" },
+        { role: "assistant", content: "First answer" },
+      ];
+
+      // REPEAT_LAST_MSG 会把最后一条消息（即标题生成 prompt）原样返回；
+      // 下标 = user 消息数 - 1，带历史后为 1，所以需要两组
+      testLLM.chatStreams = [[], ["REPEAT_LAST_MSG"]];
+
+      const result = await ChatDescriber.describe(
+        testLLM,
+        {},
+        message,
+        history,
+      );
+
+      expect(result).toBe(
+        ChatDescriber.prompt + "First question" + "\n" + message,
+      );
+    });
+
+    it("should collapse file_content blocks in the first user message", async () => {
+      const message = "What do you think?";
+      const history: ChatMessage[] = [
+        {
+          role: "user",
+          content:
+            'Look at this:\n<file_content path="src/a.py">\nprint("hi")\n</file_content>\nThen answer',
+        },
+        { role: "assistant", content: "Answer" },
+      ];
+
+      testLLM.chatStreams = [[], ["REPEAT_LAST_MSG"]];
+
+      const result = await ChatDescriber.describe(
+        testLLM,
+        {},
+        message,
+        history,
+      );
+
+      expect(result).toBe(
+        ChatDescriber.prompt +
+          "Look at this:\n[file: src/a.py]Then answer" +
+          "\n" +
+          message,
+      );
     });
 
     it("should propagate error if model.chat throws an error", async () => {
