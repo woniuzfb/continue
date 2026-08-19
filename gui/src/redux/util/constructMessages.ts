@@ -100,17 +100,32 @@ export function constructMessages(
       // current (last) user message so the model can still see the image.
       const isHistory = index !== lastUserMsgIndexInHistory;
       if (isHistory) {
-        content = content.map((part) => {
-          if (part.type === "text") {
-            return {
-              ...part,
-              text: stripInlineImageBase64(
-                replaceFileContentBlocks(part.text ?? ""),
-              ),
-            };
-          }
-          return part;
-        });
+        content = content
+          .map((part) => {
+            if (part.type === "text") {
+              return {
+                ...part,
+                text: stripInlineImageBase64(
+                  replaceFileContentBlocks(part.text ?? ""),
+                ),
+              };
+            }
+            return part;
+          })
+          // 历史 imageUrl part 中的 data: base64（attach image）从发给模型的
+          // 上下文中完全移除、不留占位：服务端会话 key 不含 imageUrl part，
+          // 整段删除不改变 key 输入；http URL 图片不膨胀且有信息量，保留
+          .filter(
+            (part) =>
+              part.type !== "imageUrl" ||
+              !part.imageUrl.url.startsWith("data:"),
+          );
+
+        // 纯图片历史消息过滤后可能为空数组，多数 API 拒绝空 content；
+        // 用空 text part 保住消息壳，不打乱消息序列
+        if (content.length === 0) {
+          content = [{ type: "text", text: "" }];
+        }
       }
 
       const ctxItemParts = item.contextItems

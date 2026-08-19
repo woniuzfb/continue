@@ -553,6 +553,139 @@ describe("constructMessages", () => {
     expect(appliedRules).toContainEqual(NORMAL_RULE);
   });
 
+  test("should remove data: imageUrl parts from history user messages but keep them in the current message", () => {
+    const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+    mockHistory = [
+      // History user message with attach image (data: base64)
+      {
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "看这张图" },
+            { type: "imageUrl", imageUrl: { url: dataUrl } },
+          ],
+        } as UserChatMessage,
+        contextItems: [],
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Assistant response",
+        } as AssistantChatMessage,
+        contextItems: [],
+      },
+      // Current (last) user message with attach image
+      {
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "继续" },
+            { type: "imageUrl", imageUrl: { url: dataUrl } },
+          ],
+        } as UserChatMessage,
+        contextItems: [],
+      },
+    ];
+
+    const { messages } = constructMessages(
+      mockHistory,
+      "Base System Message",
+      mockRules,
+      {},
+    );
+
+    const historyContent = messages[1].content as any[];
+    // data: imageUrl part fully removed, no placeholder text left behind
+    expect(historyContent).toEqual([{ type: "text", text: "看这张图" }]);
+    expect(JSON.stringify(historyContent)).not.toContain("base64");
+
+    const currentContent = messages[3].content as any[];
+    // Current message keeps the image so the model can still see it
+    expect(currentContent).toEqual([
+      { type: "text", text: "继续" },
+      { type: "imageUrl", imageUrl: { url: dataUrl } },
+    ]);
+  });
+
+  test("should keep http(s) imageUrl parts in history user messages", () => {
+    mockHistory = [
+      {
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Here is a diagram" },
+            {
+              type: "imageUrl",
+              imageUrl: { url: "https://example.com/image.jpg" },
+            },
+          ],
+        } as UserChatMessage,
+        contextItems: [],
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Assistant response",
+        } as AssistantChatMessage,
+        contextItems: [],
+      },
+      {
+        message: { role: "user", content: "Next question" } as UserChatMessage,
+        contextItems: [],
+      },
+    ];
+
+    const { messages } = constructMessages(
+      mockHistory,
+      "Base System Message",
+      mockRules,
+      {},
+    );
+
+    const historyContent = messages[1].content as any[];
+    expect(historyContent).toEqual([
+      { type: "text", text: "Here is a diagram" },
+      { type: "imageUrl", imageUrl: { url: "https://example.com/image.jpg" } },
+    ]);
+  });
+
+  test("should keep an empty text shell when a history user message was pure data: images", () => {
+    mockHistory = [
+      // Pure-image history message
+      {
+        message: {
+          role: "user",
+          content: [
+            { type: "imageUrl", imageUrl: { url: "data:image/png;base64,x" } },
+          ],
+        } as UserChatMessage,
+        contextItems: [],
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "Assistant response",
+        } as AssistantChatMessage,
+        contextItems: [],
+      },
+      {
+        message: { role: "user", content: "Next question" } as UserChatMessage,
+        contextItems: [],
+      },
+    ];
+
+    const { messages } = constructMessages(
+      mockHistory,
+      "Base System Message",
+      mockRules,
+      {},
+    );
+
+    // Message sequence stays intact; empty text part keeps the shell
+    expect(messages[1].role).toBe("user");
+    expect(messages[1].content).toEqual([{ type: "text", text: "" }]);
+  });
+
   test("system message should include rules triggered by context items from the last user message forward", () => {
     // Create context item that should trigger the CONTEXT_RULE
     const triggeringContextItem = createContextItem(
