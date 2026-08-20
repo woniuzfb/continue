@@ -35,6 +35,8 @@ import { findUriInDirs, getUriPathBasename } from "core/util/uri";
 import { findLastIndex } from "lodash";
 import { v4 as uuidv4 } from "uuid";
 import { type InlineErrorMessageType } from "../../components/mainInput/InlineErrorMessage";
+import { type AttachedFile } from "../../components/mainInput/types";
+import { extractAttachmentsFromMessage } from "../../components/mainInput/util/attachments";
 import { toolCallCtxItemToCtxItemWithId } from "../../pages/gui/ToolCallDiv/utils";
 import { addToolCallDeltaToState, isEditTool } from "../../util/toolCallState";
 import { RootState } from "../store";
@@ -307,6 +309,11 @@ type SessionState = {
   id: string;
   streamAborter: AbortController;
   mainEditorContentTrigger?: JSONContent | undefined;
+  // Rollback of a failed/canceled send restores the user's input: the text
+  // goes through mainEditorContentTrigger, and the attached files (with their
+  // content, rebuilt from the rolled-back message) through this field. The
+  // main input consumes both and clears the triggers.
+  mainEditorAttachmentsRestore?: AttachedFile[] | undefined;
   // Draft content of the main input editor, preserved across route changes
   // (e.g. navigating to /history or /config and back) so the user's in-progress
   // input is not lost when the Chat route unmounts.
@@ -826,6 +833,13 @@ export const sessionSlice = createSlice({
         const lastRole = lastMsg.message.role as "user" | "tool";
         if (lastRole === "user") {
           state.mainEditorContentTrigger = lastMsg.editorState;
+          // The user bubble is rolled back into the input: restore its
+          // attachments too (paths from metadata, contents from the
+          // <file_content> blocks) so the input's file chips come back
+          // alongside the text.
+          const restoredFiles = extractAttachmentsFromMessage(lastMsg.message);
+          state.mainEditorAttachmentsRestore =
+            restoredFiles.length > 0 ? restoredFiles : undefined;
           state.history = state.history.slice(0, lastUserOrToolIdx);
         } else {
           state.history = state.history.slice(0, lastUserOrToolIdx + 1);
@@ -840,6 +854,13 @@ export const sessionSlice = createSlice({
       action: PayloadAction<JSONContent | undefined>,
     ) => {
       state.mainEditorContentTrigger = action.payload;
+    },
+    // Consumed by the main input to restore attachment chips after a rollback
+    setMainEditorAttachmentsRestore: (
+      state,
+      action: PayloadAction<AttachedFile[] | undefined>,
+    ) => {
+      state.mainEditorAttachmentsRestore = action.payload;
     },
     // Persist/restore the main input draft across route changes
     setMainEditorDraft: (
@@ -879,6 +900,9 @@ export const sessionSlice = createSlice({
     ) => {
       const { index, editorState } = payload;
       state.dirty = true;
+      // A new send invalidates any pending rollback restore so stale
+      // attachment chips can't appear after this submit
+      state.mainEditorAttachmentsRestore = undefined;
 
       if (state.history.length && index < state.history.length) {
         // Resubmission - update input message, truncate history after resubmit with new empty response message
@@ -1673,6 +1697,7 @@ export const {
   updateHistoryItemAtIndex,
   clearDanglingMessages,
   setMainEditorContentTrigger,
+  setMainEditorAttachmentsRestore,
   setMainEditorDraft,
   deleteMessage,
   deleteCompaction,

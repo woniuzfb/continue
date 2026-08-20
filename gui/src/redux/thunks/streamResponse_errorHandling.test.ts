@@ -834,4 +834,58 @@ describe("streamResponseThunk", () => {
       },
     });
   });
+
+  it("should restore attachments into the input when the send fails and the user bubble is rolled back", async () => {
+    const initialState = getRootStateWithClaude();
+    // A previous completed round must exist: after the rollback removes the
+    // just-sent user message, a history-based mirror heuristic would find the
+    // PREVIOUS assistant's content and wrongly conclude the bubble was kept.
+    initialState.session.history = [
+      {
+        message: { id: "1", role: "user", content: "Previous question" },
+        contextItems: [],
+      },
+      {
+        message: { id: "2", role: "assistant", content: "Previous answer" },
+        contextItems: [],
+      },
+    ];
+    initialState.session.id = "session-123";
+    const mockStore = createMockStore(initialState);
+    const mockIdeMessenger = mockStore.mockIdeMessenger;
+    const requestSpy = vi.spyOn(mockIdeMessenger, "request");
+
+    requestSpy.mockImplementation(async (message, data) => {
+      if (message === "llm/compileChat") {
+        return {
+          done: true,
+          status: "error",
+          error: "Model configuration is invalid",
+        };
+      } else {
+        return await mockIdeMessenger.request(message, data);
+      }
+    });
+
+    const result = await mockStore.dispatch(
+      streamResponseThunk({
+        editorState: mockEditorState,
+        modifiers: mockModifiers,
+        attachments: [
+          { name: "a.ts", path: "/a/a.ts", content: "const a = 1;" },
+        ],
+      }) as any,
+    );
+
+    expect(result.type).toBe("chat/streamResponse/fulfilled");
+    expect((result as any).payload).toBe(false);
+
+    const finalState = (mockStore.getState() as any).session;
+    // The just-sent user bubble was rolled back out of history
+    expect(finalState.history).toHaveLength(2);
+    // ...and its attachments were published for the input to restore as chips
+    expect(finalState.mainEditorAttachmentsRestore).toEqual([
+      { name: "a.ts", path: "/a/a.ts", content: "const a = 1;" },
+    ]);
+  });
 });
