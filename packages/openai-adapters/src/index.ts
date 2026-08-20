@@ -8,6 +8,7 @@ import { BedrockApi } from "./apis/Bedrock.js";
 import { CohereApi } from "./apis/Cohere.js";
 import { CometAPIApi } from "./apis/CometAPI.js";
 
+import { ClawRouterApi } from "./apis/ClawRouter.js";
 import { DeepSeekApi } from "./apis/DeepSeek.js";
 import { GeminiApi } from "./apis/Gemini.js";
 import { InceptionApi } from "./apis/Inception.js";
@@ -18,7 +19,6 @@ import { MockApi } from "./apis/Mock.js";
 import { MoonshotApi } from "./apis/Moonshot.js";
 import { OpenAIApi } from "./apis/OpenAI.js";
 import { OpenRouterApi } from "./apis/OpenRouter.js";
-import { ClawRouterApi } from "./apis/ClawRouter.js";
 import { RelaceApi } from "./apis/Relace.js";
 import { VertexAIApi } from "./apis/VertexAI.js";
 import { WatsonXApi } from "./apis/WatsonX.js";
@@ -186,7 +186,7 @@ export function constructLlmApi(config: LLMConfig): BaseLlmApi | undefined {
     case "lmstudio":
       return openAICompatible("http://localhost:1234/", config);
     case "Local":
-      return openAICompatible("http://localhost:5000/v1/", config);
+      return openAICompatible("http://localhost:5002/v1/", config);
     case "ollama":
       // for openai compaitability, we need to add /v1 to the end of the url
       // this is required for cli (for core, endpoints are overriden by core/llm/llms/Ollama.ts)
@@ -242,6 +242,6 @@ export {
   getAnthropicMediaTypeFromDataUrl,
 } from "./apis/AnthropicUtils.js";
 
-export { isResponsesModel } from "./apis/openaiResponses.js";
 export { OPENROUTER_HEADERS } from "./apis/OpenRouter.js";
+export { isResponsesModel } from "./apis/openaiResponses.js";
 export { extractBase64FromDataUrl, parseDataUrl } from "./util/url.js";

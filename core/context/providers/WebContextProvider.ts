@@ -5,7 +5,7 @@ import {
   ContextProviderExtras,
   FetchFunction,
 } from "../..";
-const LOCAL_WEB_SEARCH_BASE_URL = "http://127.0.0.1:5000/";
+const LOCAL_WEB_SEARCH_BASE_URL = "http://127.0.0.1:5002/";
 
 export const fetchSearchResults = async (
   query: string,

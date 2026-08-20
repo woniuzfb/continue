@@ -6,7 +6,7 @@ import OpenAI from "./OpenAI.js";
 class Local extends OpenAI {
   static providerName = "Local";
   static defaultOptions: Partial<LLMOptions> = {
-    apiBase: "http://localhost:5000/v1/",
+    apiBase: "http://localhost:5002/v1/",
   };
 
   // Allow reasoning fields to be attached to historical assistant messages
