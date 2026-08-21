@@ -25,6 +25,10 @@ export class AutocompleteLruCache {
   private static capacity = 1000;
   private static flushInterval = 30000;
   private static instancePromise?: Promise<AutocompleteLruCache>;
+  private static lastInitFailureAt = 0;
+  // Retry backoff so a transiently-failing sqlite open (e.g. locked file)
+  // neither poisons the cache forever nor gets hammered on every keystroke
+  private static initRetryBackoffMs = 60_000;
   private mutex = new Mutex();
   private cache: Map<string, CacheEntry> = new Map();
   private dirty: Set<string> = new Set();
@@ -38,13 +42,23 @@ export class AutocompleteLruCache {
    */
   static async get(): Promise<AutocompleteLruCache> {
     if (!AutocompleteLruCache.instancePromise) {
+      if (
+        AutocompleteLruCache.lastInitFailureAt > 0 &&
+        Date.now() - AutocompleteLruCache.lastInitFailureAt <
+          AutocompleteLruCache.initRetryBackoffMs
+      ) {
+        throw new Error(
+          "AutocompleteLruCache: skipping init retry within backoff window",
+        );
+      }
       AutocompleteLruCache.instancePromise = (async () => {
-        const db = await open({
-          filename: getTabAutocompleteCacheSqlitePath(),
-          driver: sqlite3.Database,
-        });
-        await db.exec("PRAGMA busy_timeout = 3000;");
-        await db.run(`
+        try {
+          const db = await open({
+            filename: getTabAutocompleteCacheSqlitePath(),
+            driver: sqlite3.Database,
+          });
+          await db.exec("PRAGMA busy_timeout = 3000;");
+          await db.run(`
           CREATE TABLE IF NOT EXISTS cache (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
@@ -52,10 +66,17 @@ export class AutocompleteLruCache {
           )
         `);
 
-        const instance = new AutocompleteLruCache(db);
-        await instance.loadFromDb();
-        instance.startFlushTimer();
-        return instance;
+          const instance = new AutocompleteLruCache(db);
+          await instance.loadFromDb();
+          instance.startFlushTimer();
+          return instance;
+        } catch (e) {
+          // Clear the promise so a later call can retry after the backoff,
+          // instead of every caller rethrowing a poisoned rejection forever
+          AutocompleteLruCache.instancePromise = undefined;
+          AutocompleteLruCache.lastInitFailureAt = Date.now();
+          throw e;
+        }
       })();
     }
     return AutocompleteLruCache.instancePromise;

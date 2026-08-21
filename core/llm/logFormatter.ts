@@ -117,7 +117,13 @@ export class LLMLogFormatter {
     let i = 0;
     let prefix;
     while (true) {
-      const candidate = i < LOG_PREFIXES.length ? LOG_PREFIXES[i] : `X`;
+      // Beyond the fixed set, synthesize unique candidates (X0, X1, ...) —
+      // guarantees termination even under heavy interaction churn, where a
+      // constant "X" could be both in use and the last freed prefix
+      const candidate =
+        i < LOG_PREFIXES.length
+          ? LOG_PREFIXES[i]
+          : `X${i - LOG_PREFIXES.length}`;
       if (
         !usedPrefixes.includes(candidate) &&
         (candidate === " " || candidate !== this.lastFreedPrefix)

@@ -8,6 +8,10 @@ import { pruneLinesFromTop } from "../llm/countTokens";
 import { getRepoMapFilePath } from "./paths";
 import { findUriInDirs } from "./uri";
 
+// Safety valve for the paginated signature scan below — should never be hit
+// in practice, but guarantees termination even if pagination logic regresses.
+const MAX_SIGNATORY_ITERATIONS = 10_000;
+
 export interface RepoMapOptions {
   includeSignatures?: boolean;
   dirUris?: string[];
@@ -66,7 +70,14 @@ class RepoMapGenerator {
       // Process uris and signatures
       let snippetOffset = 0;
       let uriOffset = 0;
+      let iterations = 0;
       while (true) {
+        iterations++;
+        if (iterations > MAX_SIGNATORY_ITERATIONS) {
+          // Safety valve: pagination should always terminate via hasMore*;
+          // cap it so any unforeseen non-termination can't spin the CPU
+          break;
+        }
         const { groupedByUri, hasMoreSnippets, hasMoreUris } =
           await CodeSnippetsCodebaseIndex.getPathsAndSignatures(
             this.allUris,
