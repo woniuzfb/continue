@@ -84,11 +84,40 @@ export function getSessionsFolderPath(): string {
 }
 
 export function getIndexFolderPath(): string {
-  const indexPath = path.join(getContinueGlobalPath(), "index");
-  if (!fs.existsSync(indexPath)) {
-    fs.mkdirSync(indexPath);
+  const globalPath = getContinueGlobalPath();
+  const legacyIndexPath = path.join(globalPath, "index");
+
+  // Per-host isolation (set by the IDE extension via CONTINUE_INDEX_HOST):
+  // different IDE hosts bundle their own native sqlite3 builds, and sharing
+  // one WAL database across processes with different sqlite builds corrupts
+  // the shared -shm WAL-index (SQLITE_IOERR). Each host gets its own index
+  // directory instead.
+  const host = process.env.CONTINUE_INDEX_HOST?.toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  if (!host) {
+    // CLI / tests / standalone core: keep the legacy shared directory
+    if (!fs.existsSync(legacyIndexPath)) {
+      fs.mkdirSync(legacyIndexPath);
+    }
+    return legacyIndexPath;
   }
-  return indexPath;
+
+  const hostIndexPath = path.join(globalPath, `index-${host}`);
+  if (!fs.existsSync(hostIndexPath) && fs.existsSync(legacyIndexPath)) {
+    try {
+      // One-time migration: the first isolated host claims the legacy index
+      // so it doesn't re-index (and re-pay embeddings) from scratch.
+      fs.renameSync(legacyIndexPath, hostIndexPath);
+    } catch {
+      // Another host won the race, or the directory is in use — start fresh
+    }
+  }
+  if (!fs.existsSync(hostIndexPath)) {
+    fs.mkdirSync(hostIndexPath);
+  }
+  return hostIndexPath;
 }
 
 export function getGlobalContextFilePath(): string {

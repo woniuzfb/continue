@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as path from "node:path";
 
 import plimit from "p-limit";
 import { open, type Database } from "sqlite";
 import sqlite3 from "sqlite3";
 
 import { FileStatsMap, IndexTag, IndexingProgressUpdate } from "../index.js";
-import { getIndexSqlitePath } from "../util/paths.js";
+import { getIndexFolderPath, getIndexSqlitePath } from "../util/paths.js";
 
 import {
   CodebaseIndex,
@@ -20,9 +21,38 @@ export type DatabaseConnection = Database<sqlite3.Database>;
 
 export class SqliteDb {
   static db: DatabaseConnection | null = null;
+  private static openError: unknown = null;
+
+  /**
+   * Close the current connection and clear any cached open failure.
+   * Called on shutdown (to checkpoint WAL cleanly) and before the index
+   * files are deleted (force reindex).
+   */
+  static async close() {
+    if (SqliteDb.db) {
+      try {
+        await SqliteDb.db.close();
+      } catch {
+        // Ignore close errors — the handle may already be unusable
+      }
+      SqliteDb.db = null;
+    }
+    SqliteDb.openError = null;
+  }
 
   private static async createTables(db: DatabaseConnection) {
-    await db.exec("PRAGMA journal_mode=WAL;");
+    try {
+      await db.exec("PRAGMA journal_mode=WAL;");
+    } catch (e) {
+      // Enabling WAL requires exclusive access; another process may hold the
+      // database. If WAL is already active we can proceed safely.
+      const mode = (await db.get("PRAGMA journal_mode;")) as
+        | { journal_mode: string }
+        | undefined;
+      if (mode?.journal_mode?.toLowerCase() !== "wal") {
+        throw e;
+      }
+    }
 
     await db.exec(
       `CREATE TABLE IF NOT EXISTS tag_catalog (
@@ -90,19 +120,41 @@ export class SqliteDb {
   private static indexSqlitePath = getIndexSqlitePath();
 
   static async get() {
+    if (SqliteDb.openError) {
+      // Opening failed earlier in this session — rethrow immediately instead
+      // of hammering the file (repeated open/pragmas against a locked or
+      // corrupt WAL spin the CPU and can freeze the extension host).
+      throw SqliteDb.openError;
+    }
     if (SqliteDb.db && fs.existsSync(SqliteDb.indexSqlitePath)) {
       return SqliteDb.db;
     }
 
     SqliteDb.indexSqlitePath = getIndexSqlitePath();
-    SqliteDb.db = await open({
-      filename: SqliteDb.indexSqlitePath,
-      driver: sqlite3.Database,
-    });
+    try {
+      const db = await open({
+        filename: SqliteDb.indexSqlitePath,
+        driver: sqlite3.Database,
+      });
+      SqliteDb.db = db;
 
-    await SqliteDb.db.exec("PRAGMA busy_timeout = 3000;");
+      await db.exec("PRAGMA busy_timeout = 15000;");
 
-    await SqliteDb.createTables(SqliteDb.db);
+      await SqliteDb.createTables(db);
+    } catch (e) {
+      // Cache the failure and drop any half-open handle so callers fail fast
+      // (e.g. SQLITE_IOERR on a contended WAL). SqliteDb.close() clears it.
+      SqliteDb.openError = e;
+      if (SqliteDb.db) {
+        try {
+          await SqliteDb.db.close();
+        } catch {
+          // Ignore close errors
+        }
+        SqliteDb.db = null;
+      }
+      throw e;
+    }
 
     return SqliteDb.db;
   }
@@ -543,46 +595,88 @@ export function truncateSqliteLikePattern(input: string, safety: number = 100) {
   return truncateToLastNBytes(input, SQLITE_MAX_LIKE_PATTERN_LENGTH - safety);
 }
 
+const INDEX_LOCK_FILENAME = "indexing.lock";
+// The holder refreshes the lock file mtime every 5s (see CodebaseIndexer);
+// if it stops doing so for longer than this, the lock is considered stale.
+const INDEX_LOCK_STALE_MS = 10_000;
+
+/**
+ * Cross-process single-writer lock for the indexing pipeline.
+ *
+ * Implemented as an O_EXCL lock file instead of the previous sqlite table
+ * row: reading a table-based lock requires opening the very database whose
+ * contention it guards against (bootstrap paradox), and an INSERT could not
+ * actually prevent two windows from both "holding" the lock. The lock file
+ * is acquired atomically by the filesystem before sqlite is ever touched.
+ */
 export class IndexLock {
-  private static getLockTableName() {
-    return "indexing_lock";
+  private static lockFilePath(): string {
+    return path.join(getIndexFolderPath(), INDEX_LOCK_FILENAME);
   }
 
   static async isLocked(): Promise<
-    { locked: boolean; dirs: string; timestamp: number } | undefined | undefined
+    { locked: boolean; dirs: string; timestamp: number } | undefined
   > {
-    const db = await SqliteDb.get();
-    const row = (await db.get(
-      `SELECT locked, dirs, timestamp FROM ${IndexLock.getLockTableName()} WHERE locked = ?`,
-      true,
-    )) as { locked: boolean; dirs: string; timestamp: number } | undefined;
-    return row;
+    try {
+      const stats = fs.statSync(IndexLock.lockFilePath());
+      let dirs = "";
+      try {
+        dirs = fs.readFileSync(IndexLock.lockFilePath(), "utf8");
+      } catch {
+        // Lock file removed between stat and read — treat as unlocked
+        return undefined;
+      }
+      return { locked: true, dirs, timestamp: stats.mtimeMs };
+    } catch {
+      return undefined;
+    }
   }
 
+  /**
+   * Acquire the lock atomically (O_EXCL). If another process holds it, wait
+   * until it releases or its heartbeat goes stale.
+   */
   static async lock(dirs: string) {
-    const db = await SqliteDb.get();
-    await db.run(
-      `INSERT INTO ${IndexLock.getLockTableName()} (locked, timestamp, dirs) VALUES (?, ?, ?)`,
-      true,
-      Date.now(),
-      dirs,
-    );
+    let waitCount = 0;
+    while (true) {
+      try {
+        fs.writeFileSync(IndexLock.lockFilePath(), dirs, { flag: "wx" });
+        return;
+      } catch (e: any) {
+        if (e?.code !== "EEXIST") {
+          throw e;
+        }
+        const locked = await IndexLock.isLocked();
+        if (locked && Date.now() - locked.timestamp > INDEX_LOCK_STALE_MS) {
+          // Holder died without releasing — take over
+          try {
+            fs.unlinkSync(IndexLock.lockFilePath());
+          } catch {
+            // Another waiter already took it over — keep waiting
+          }
+          continue;
+        }
+        waitCount++;
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
   }
 
   static async updateTimestamp() {
-    const db = await SqliteDb.get();
-    await db.run(
-      `UPDATE ${IndexLock.getLockTableName()} SET timestamp = ? where locked = ?`,
-      Date.now(),
-      true,
-    );
+    // Heartbeat: refresh the lock file mtime so waiters can detect staleness
+    try {
+      const now = new Date();
+      fs.utimesSync(IndexLock.lockFilePath(), now, now);
+    } catch {
+      // Lock file no longer exists — nothing to update
+    }
   }
 
   static async unlock() {
-    const db = await SqliteDb.get();
-    await db.run(
-      `DELETE FROM ${IndexLock.getLockTableName()} WHERE locked = ?`,
-      true,
-    );
+    try {
+      fs.unlinkSync(IndexLock.lockFilePath());
+    } catch {
+      // Already unlocked
+    }
   }
 }

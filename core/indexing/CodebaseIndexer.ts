@@ -24,7 +24,11 @@ import { CodeSnippetsCodebaseIndex } from "./CodeSnippetsIndex.js";
 import { embedModelsAreEqual } from "./docs/DocsService.js";
 import { FullTextSearchCodebaseIndex } from "./FullTextSearchCodebaseIndex.js";
 import { LanceDbIndex } from "./LanceDbIndex.js";
-import { getComputeDeleteAddRemove, IndexLock } from "./refreshIndex.js";
+import {
+  getComputeDeleteAddRemove,
+  IndexLock,
+  SqliteDb,
+} from "./refreshIndex.js";
 import {
   CodebaseIndex,
   IndexResultType,
@@ -123,6 +127,10 @@ export class CodebaseIndexer {
   async clearIndexes() {
     const sqliteFilepath = getIndexSqlitePath();
     const lanceDbFolder = getLanceDbPath();
+
+    // Close the connection and clear any cached open failure so get() will
+    // re-open against the freshly created database afterwards
+    await SqliteDb.close();
 
     try {
       await fs.unlink(sqliteFilepath);

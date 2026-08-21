@@ -358,21 +358,27 @@ void (async () => {
     );
   });
 
-  // Copied here as well for the VS Code test suite
+  // Copied here as well for the VS Code test suite.
+  // Sourced from the canonical copy in out/build (not re-copied from
+  // core/node_modules) so the two node_sqlite3.node files can never diverge
+  // when out/build is refreshed via a different script (e.g. utils.js).
   await new Promise((resolve, reject) => {
-    ncp(
-      path.join(__dirname, "../../../core/node_modules/sqlite3/build"),
-      path.join(__dirname, "../out"),
-      { dereference: true },
-      (error) => {
-        if (error) {
-          console.warn("[error] Error copying sqlite3 files", error);
-          reject(error);
-        } else {
-          resolve();
-        }
-      },
-    );
+    try {
+      const canonical = path.join(
+        __dirname,
+        "../out/build/Release/node_sqlite3.node",
+      );
+      const testCopy = path.join(__dirname, "../out/Release/node_sqlite3.node");
+      fs.mkdirSync(path.dirname(testCopy), { recursive: true });
+      if (fs.existsSync(testCopy)) {
+        fs.rmSync(testCopy); // remove potentially stale copy
+      }
+      fs.copyFileSync(canonical, testCopy);
+      resolve();
+    } catch (error) {
+      console.warn("[error] Error copying sqlite3 files", error);
+      reject(error);
+    }
   });
 
   // Copy node_modules for pre-built binaries

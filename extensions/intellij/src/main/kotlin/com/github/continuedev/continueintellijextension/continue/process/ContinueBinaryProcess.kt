@@ -32,6 +32,10 @@ class ContinueBinaryProcess(
 
         val builder = ProcessBuilder(path)
         builder.environment() += ProxySettings.getSettings().toContinueEnvVars()
+        // Isolate index storage per host family: all JetBrains IDEs run the same
+        // bundled core binary (same sqlite3 build), but must not share WAL
+        // databases with other hosts (VS Code, Cursor, ...) using different builds.
+        builder.environment()["CONTINUE_INDEX_HOST"] = "jetbrains"
         return builder
             .directory(File(path).parentFile)
             .start()
