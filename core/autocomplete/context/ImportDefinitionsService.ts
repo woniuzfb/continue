@@ -65,16 +65,19 @@ export class ImportDefinitionsService {
       return null;
     }
 
-    const ast = parser.parse(fileContents, undefined, {
-      includedRanges: [
-        {
-          startIndex: 0,
-          endIndex: 10_000,
-          startPosition: { row: 0, column: 0 },
-          endPosition: { row: 100, column: 0 },
-        },
-      ],
-    });
+    // Parse only the head of the file (imports live at the top), cut at the
+    // end of the last complete statement. NEVER let the parser see input that
+    // ends mid-expression: an EOF inside e.g. the condition of an `else if`
+    // drives tree-sitter's error recovery into an infinite loop (100% CPU,
+    // freezing the extension host). Minimal repro against web-tree-sitter
+    // 0.21.0: `{ if (a) { b(); } else if (q`
+    const parseLimit = Math.min(fileContents.length, 10_000);
+    let sliceEnd = parseLimit;
+    if (parseLimit < fileContents.length) {
+      const stmtEnd = fileContents.lastIndexOf(";\n", parseLimit);
+      sliceEnd = stmtEnd >= 0 ? stmtEnd + 2 : 0;
+    }
+    const ast = parser.parse(fileContents.slice(0, sliceEnd));
     const language = getFullLanguageName(filepath);
     const query = await getQueryForFile(
       filepath,
