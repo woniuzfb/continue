@@ -74,7 +74,7 @@ describe("ChatDescriber", () => {
       );
 
       expect(result).toBe(
-        ChatDescriber.prompt + "First question" + "\n" + message,
+        ChatDescriber.prompt + "First question" + "\n\n" + message,
       );
     });
 
@@ -101,7 +101,7 @@ describe("ChatDescriber", () => {
       expect(result).toBe(
         ChatDescriber.prompt +
           "Look at this:\n[file: src/a.py]Then answer" +
-          "\n" +
+          "\n\n" +
           message,
       );
     });
