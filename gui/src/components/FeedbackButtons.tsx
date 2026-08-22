@@ -22,10 +22,15 @@ export function FeedbackButtons({ item }: FeedbackButtonsProps) {
     if (item.promptLogs?.length) {
       for (const promptLog of item.promptLogs) {
         const { modelTitle, modelProvider, ...logData } = promptLog;
+        // promptDelta is a disk-only encoding detail — never send it as
+        // telemetry. Loaded sessions always have the full prompt restored,
+        // so "" is just a type-level fallback for broken chains.
+        delete logData.promptDelta;
         ideMessenger.post("devdata/log", {
           name: "chatFeedback",
           data: {
             ...logData,
+            prompt: logData.prompt ?? "",
             completionOptions: {}, // TODO delete completionOptions from @continuedev/config-yaml
             modelProvider: modelProvider || "unknown",
             modelName: modelTitle,

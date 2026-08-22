@@ -326,7 +326,9 @@ export const streamNormalInput = createAsyncThunk<
           extra.ideMessenger.post("devdata/log", {
             name: "chatInteraction",
             data: {
-              prompt: next.value.prompt,
+              // Runtime logs always carry the full prompt; "" only satisfies
+              // the devdata schema at the type level.
+              prompt: next.value.prompt ?? "",
               completion: next.value.completion,
               modelProvider: selectedChatModel.underlyingProviderName,
               modelName: selectedChatModel.title,

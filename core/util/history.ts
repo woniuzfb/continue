@@ -13,6 +13,10 @@ import {
   getSessionsFolderPath,
   getSessionsListPath,
 } from "./paths.js";
+import {
+  decodePromptLogDeltas,
+  encodePromptLogDeltas,
+} from "./promptLogDelta.js";
 function safeParseArray<T>(
   value: string,
   errorMessage: string = "Error parsing array",
@@ -342,6 +346,9 @@ export class HistoryManager {
       // 同上：content.imageUrl 的 base64 与 editorState 里的副本重复，
       // 旧文件里的重复载荷在加载时剥除（见 stripContentImageUrlParts 注释）
       stripContentImageUrlParts(session.history);
+      // 重建差分编码的 promptLog（见 promptLogDelta.ts）：磁盘上的
+      // promptDelta 在此恢复为完整 prompt，运行时下游无需感知磁盘格式。
+      decodePromptLogDeltas(session.history);
       return session;
     } catch (e) {
       console.log(`Error loading session: ${e}`);
@@ -484,6 +491,10 @@ export class HistoryManager {
     // 同上：content.imageUrl 与 editorState 重复存图，落盘只留 editorState
     // 那份（见 stripContentImageUrlParts 注释）。幂等。
     stripContentImageUrlParts(finalHistory);
+
+    // promptLog 增量落盘（见 promptLogDelta.ts）：对前一条 prompt 做前后缀
+    // 差分，消除滚动上下文的平方级重复存储。加载时由 load() 重建。
+    encodePromptLogDeltas(finalHistory);
 
     const orderedSession: Session = {
       sessionId: session.sessionId,

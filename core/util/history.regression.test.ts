@@ -35,6 +35,16 @@ function msg(role: "user" | "assistant", text: string): ChatHistoryItem {
   };
 }
 
+function assistantWithPromptLog(text: string, prompt: string): ChatHistoryItem {
+  return {
+    message: { role: "assistant", content: text },
+    contextItems: [],
+    promptLogs: [
+      { modelTitle: "m", modelProvider: "local", prompt, completion: "ok" },
+    ],
+  };
+}
+
 function readDisk(sessionId: string): Session {
   return JSON.parse(fs.readFileSync(getSessionFilePath(sessionId), "utf8"));
 }
@@ -307,6 +317,278 @@ describe("HistoryManager truncated-history save (regression)", () => {
     // Completion and model metadata are preserved.
     expect(log.completion).toBe("ok");
     expect(log.modelTitle).toBe("m");
+  });
+});
+
+describe("HistoryManager promptLog delta encoding", () => {
+  afterEach(() => {
+    historyManager.clearAll();
+  });
+
+  it("delta-encodes consecutive promptLogs on save and reconstructs on load", async () => {
+    const sessionId = uuidv4();
+    // Rolling-context prompts: each round appends to the previous prompt.
+    const base = "<system>sys</system>\n" + "X".repeat(20000);
+    const p1 = base;
+    const p2 = base + "\n<assistant>first answer</assistant>\n";
+    const p3 = p2 + "\n<user>follow up</user>\n";
+    await historyManager.save({
+      sessionId,
+      title: "delta test",
+      workspaceDirectory: "ws",
+      history: [
+        msg("user", "q"),
+        assistantWithPromptLog("a1", p1),
+        assistantWithPromptLog("a2", p2),
+        assistantWithPromptLog("a3", p3),
+      ],
+    });
+
+    const onDisk = readDisk(sessionId);
+    const l1 = onDisk.history[1].promptLogs![0];
+    const l2 = onDisk.history[2].promptLogs![0];
+    const l3 = onDisk.history[3].promptLogs![0];
+    // First log has no base: keeps the full prompt.
+    expect(l1.prompt).toBe(p1);
+    expect(l1.promptDelta).toBeUndefined();
+    // Subsequent logs: delta form, middle far smaller than the full prompt.
+    expect(l2.prompt).toBeUndefined();
+    expect(l2.promptDelta!.middle).toBe(
+      "\n<assistant>first answer</assistant>\n",
+    );
+    expect(l3.promptDelta!.middle).toBe("\n<user>follow up</user>\n");
+    // File size win: 3 x 20KB prompts collapse to ~1 full copy + 2 tiny diffs.
+    const raw = fs.readFileSync(getSessionFilePath(sessionId), "utf8");
+    expect(raw.length).toBeLessThan(p1.length * 2);
+
+    // load() reconstructs full prompts and strips the delta fields.
+    const loaded = historyManager.load(sessionId);
+    expect(loaded.history[1].promptLogs![0].prompt).toBe(p1);
+    expect(loaded.history[2].promptLogs![0].prompt).toBe(p2);
+    expect(loaded.history[3].promptLogs![0].prompt).toBe(p3);
+    expect(loaded.history[2].promptLogs![0].promptDelta).toBeUndefined();
+  });
+
+  it("keeps the full prompt when delta encoding would not save enough", async () => {
+    const sessionId = uuidv4();
+    // Two prompts with no shared prefix: the diff "middle" is as big as the
+    // prompt itself, so the full form must be kept.
+    const unrelated1 = "A".repeat(400);
+    const unrelated2 = "B".repeat(400);
+    await historyManager.save({
+      sessionId,
+      title: "no-delta test",
+      workspaceDirectory: "ws",
+      history: [
+        msg("user", "q"),
+        assistantWithPromptLog("a1", unrelated1),
+        assistantWithPromptLog("a2", unrelated2),
+      ],
+    });
+
+    const onDisk = readDisk(sessionId);
+    const l2 = onDisk.history[2].promptLogs![0];
+    expect(l2.prompt).toBe(unrelated2);
+    expect(l2.promptDelta).toBeUndefined();
+  });
+
+  it("degrades to prompt-less logs (no throw) when the delta base is broken", async () => {
+    const sessionId = uuidv4();
+    const base = "Y".repeat(20000);
+    const p1 = base;
+    const p2 = base + "\nround1";
+    await historyManager.save({
+      sessionId,
+      title: "broken chain",
+      workspaceDirectory: "ws",
+      history: [
+        msg("user", "q"),
+        assistantWithPromptLog("a1", p1),
+        assistantWithPromptLog("a2", p2),
+      ],
+    });
+
+    // Corrupt the file the way an external edit would: drop the message
+    // carrying the delta's base prompt.
+    const onDisk = readDisk(sessionId);
+    onDisk.history.splice(1, 1);
+    fs.writeFileSync(
+      getSessionFilePath(sessionId),
+      JSON.stringify(onDisk, undefined, 2),
+    );
+
+    const loaded = historyManager.load(sessionId);
+    expect(loaded.history).toHaveLength(2);
+    // The orphaned delta cannot be reconstructed: prompt is dropped, but
+    // loading must not throw and the chat content is intact.
+    expect(loaded.history[1].promptLogs![0].prompt).toBeUndefined();
+    expect(loaded.history[1].message.content).toBe("a2");
+  });
+
+  it("re-encodes a consistent chain when a lazy tail merges with a delta-encoded disk head", async () => {
+    const sessionId = uuidv4();
+    const base = "S".repeat(20000);
+    const p1 = base;
+    const p2 = base + "\nround1";
+    const p3 = base + "\nround1\nround2";
+    await historyManager.save({
+      sessionId,
+      title: "lazy merge delta",
+      workspaceDirectory: "ws",
+      history: [
+        msg("user", "u1"),
+        assistantWithPromptLog("a1", p1),
+        msg("user", "u2"),
+        assistantWithPromptLog("a2", p2),
+      ],
+    });
+
+    // On disk, a2's log is now in delta form.
+    const diskBefore = readDisk(sessionId);
+    expect(diskBefore.history[3].promptLogs![0].promptDelta).toBeDefined();
+
+    // Lazy-loaded view: the frozen head (4 items, including the delta-form
+    // a2) comes from disk; the in-memory tail carries a NEW full-form log.
+    await historyManager.save({
+      sessionId,
+      title: "lazy merge delta",
+      workspaceDirectory: "ws",
+      history: [assistantWithPromptLog("a3", p3)],
+      historyTruncated: true,
+      historyLoadedOffset: 4,
+    });
+
+    // The merged chain must be re-encoded consistently: load() returns the
+    // exact original prompts for all three logs.
+    const loaded = historyManager.load(sessionId);
+    expect(loaded.history).toHaveLength(5);
+    expect(loaded.history[1].promptLogs![0].prompt).toBe(p1);
+    expect(loaded.history[3].promptLogs![0].prompt).toBe(p2);
+    expect(loaded.history[4].promptLogs![0].prompt).toBe(p3);
+    for (const item of loaded.history) {
+      for (const log of item.promptLogs ?? []) {
+        expect(log.promptDelta).toBeUndefined();
+      }
+    }
+  });
+
+  it("survives deleting a middle assistant message: remaining logs re-diff against the new base", async () => {
+    const sessionId = uuidv4();
+    const base = "Z".repeat(20000);
+    const p1 = base;
+    const p2 = base + "\nround1";
+    const p3 = base + "\nround1\nround2";
+    await historyManager.save({
+      sessionId,
+      title: "delete middle",
+      workspaceDirectory: "ws",
+      history: [
+        msg("user", "u1"),
+        assistantWithPromptLog("a1", p1),
+        msg("user", "u2"),
+        assistantWithPromptLog("a2", p2),
+        msg("user", "u3"),
+        assistantWithPromptLog("a3", p3),
+      ],
+    });
+
+    // GUI deleteMessage path: the in-memory history (full-form prompts, as
+    // produced by load()) drops a2's assistant+user pair, then save().
+    const inMemory = historyManager.load(sessionId);
+    inMemory.history.splice(3, 2);
+    await historyManager.save(inMemory);
+
+    // load() must reconstruct the surviving logs exactly — p3 now diffs
+    // against p1 (the middle's removal is absorbed into its delta).
+    const loaded = historyManager.load(sessionId);
+    expect(loaded.history).toHaveLength(4);
+    expect(loaded.history[1].promptLogs![0].prompt).toBe(p1);
+    expect(loaded.history[3].promptLogs![0].prompt).toBe(p3);
+  });
+
+  it("survives edit-and-resend: truncated tail plus a fresh full-form log re-encodes cleanly", async () => {
+    const sessionId = uuidv4();
+    const base = "W".repeat(20000);
+    const p1 = base;
+    const p2 = base + "\nround1";
+    await historyManager.save({
+      sessionId,
+      title: "edit resend",
+      workspaceDirectory: "ws",
+      history: [
+        msg("user", "u1"),
+        assistantWithPromptLog("a1", p1),
+        msg("user", "u2"),
+        assistantWithPromptLog("a2", p2),
+      ],
+    });
+
+    // GUI resumeStream path: load() gives full-form prompts, everything
+    // after the edited message is dropped from memory, a new assistant
+    // turn appends with a brand-new full prompt.
+    const inMemory = historyManager.load(sessionId);
+    inMemory.history = inMemory.history.slice(0, 3); // keep u1,a1,u2
+    const p2prime = base + "\nround1-EDITED";
+    inMemory.history.push(assistantWithPromptLog("a2'", p2prime));
+    await historyManager.save(inMemory);
+
+    const loaded = historyManager.load(sessionId);
+    expect(loaded.history).toHaveLength(4);
+    expect(loaded.history[1].promptLogs![0].prompt).toBe(p1);
+    expect(loaded.history[3].promptLogs![0].prompt).toBe(p2prime);
+    // The stale pre-edit prompt is gone entirely.
+    const allPrompts = loaded.history
+      .flatMap((i) => i.promptLogs ?? [])
+      .map((l) => l.prompt);
+    expect(allPrompts).not.toContain(p2);
+  });
+
+  it("edit-and-resend with follow-up rounds: the whole re-forked chain re-encodes exactly", async () => {
+    const sessionId = uuidv4();
+    const base = "R".repeat(20000);
+    const p1 = base;
+    const p2 = base + "\nround1";
+    const p3 = base + "\nround1\nround2";
+    await historyManager.save({
+      sessionId,
+      title: "edit resend with tail",
+      workspaceDirectory: "ws",
+      history: [
+        msg("user", "u1"),
+        assistantWithPromptLog("a1", p1),
+        msg("user", "u2"),
+        assistantWithPromptLog("a2", p2),
+        msg("user", "u3"),
+        assistantWithPromptLog("a3", p3),
+      ],
+    });
+
+    // GUI resumeStream: slice(0, index+1) drops EVERYTHING after the edited
+    // message — old p2's AND p3's logs vanish from memory together, then a
+    // fresh assistant turn (p2') is appended.
+    const inMemory = historyManager.load(sessionId);
+    inMemory.history = inMemory.history.slice(0, 3); // keep u1,a1,u2
+    const p2prime = base + "\nround1-EDITED";
+    inMemory.history.push(assistantWithPromptLog("a2'", p2prime));
+    await historyManager.save(inMemory);
+
+    // The conversation continues on the new fork: another round (p3') is
+    // streamed and saved (second save on top of a delta-encoded disk file).
+    const round2 = historyManager.load(sessionId);
+    const p3prime = p2prime + "\nround2-NEW";
+    round2.history.push(msg("user", "u3'"));
+    round2.history.push(assistantWithPromptLog("a3'", p3prime));
+    await historyManager.save(round2);
+
+    // Final load: every prompt on the re-forked chain reconstructs exactly;
+    // the old p2/p3 from the abandoned fork are gone entirely.
+    const loaded = historyManager.load(sessionId);
+    const prompts = loaded.history
+      .flatMap((i) => i.promptLogs ?? [])
+      .map((l) => l.prompt);
+    expect(prompts).toEqual([p1, p2prime, p3prime]);
+    expect(prompts).not.toContain(p2);
+    expect(prompts).not.toContain(p3);
   });
 });
 

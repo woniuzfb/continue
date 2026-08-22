@@ -504,10 +504,41 @@ export interface SymbolWithRange extends RangeInFile {
 
 export type FileSymbolMap = Record<string, SymbolWithRange[]>;
 
+/**
+ * Delta encoding for persisted promptLogs (disk format only).
+ * Consecutive prompts in a session share a long rolling prefix, so storing
+ * full snapshots made session files grow quadratically. On disk, each log
+ * after the first may store its prompt as a diff against the previous log's
+ * prompt; applyPromptDelta-style reconstruction happens on load.
+ */
+export interface PromptLogDelta {
+  /** Length of the prefix shared with the base prompt. */
+  prefixLen: number;
+  /** Length of the suffix shared with the base prompt. */
+  suffixLen: number;
+  /** Replacement for base[prefixLen .. base.length - suffixLen). */
+  middle: string;
+  /** O(1) integrity guards describing the base prompt this diff was made against. */
+  baseLength: number;
+  baseHead: string;
+  baseTail: string;
+}
+
 export interface PromptLog {
   modelTitle: string;
   modelProvider: string;
-  prompt: string;
+  /**
+   * Full rendered prompt. Always present at runtime; on disk, present only
+   * when delta encoding isn't beneficial (first log of a session, rewritten
+   * prompts, small prompts). Mutually exclusive with promptDelta.
+   */
+  prompt?: string;
+  /**
+   * Disk-only delta form: apply to the previous PromptLog's prompt (in
+   * session-history order) to reconstruct this log's full prompt.
+   * Reconstructed by HistoryManager.load(); runtime code never sees it.
+   */
+  promptDelta?: PromptLogDelta;
   completion: string;
 }
 

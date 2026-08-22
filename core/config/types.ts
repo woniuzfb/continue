@@ -381,11 +381,21 @@ declare global {
 
   export type FileSymbolMap = Record<string, SymbolWithRange[]>;
 
+  export interface PromptLogDelta {
+    prefixLen: number;
+    suffixLen: number;
+    middle: string;
+    baseLength: number;
+    baseHead: string;
+    baseTail: string;
+  }
+
   export interface PromptLog {
     modelTitle: string;
     modelProvider: string;
     completionOptions: CompletionOptions;
-    prompt: string;
+    prompt?: string;
+    promptDelta?: PromptLogDelta;
     completion: string;
   }
 
