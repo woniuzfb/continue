@@ -39,6 +39,50 @@ function readDisk(sessionId: string): Session {
   return JSON.parse(fs.readFileSync(getSessionFilePath(sessionId), "utf8"));
 }
 
+function userWithImage(
+  text: string,
+  base64: string,
+  editorState: unknown = undefined,
+): ChatHistoryItem {
+  return {
+    message: {
+      role: "user",
+      content: [
+        { type: "text", text },
+        {
+          type: "imageUrl",
+          imageUrl: { url: `data:image/jpeg;base64,${base64}` },
+        },
+      ],
+    },
+    contextItems: [],
+    ...(editorState === undefined ? {} : { editorState }),
+  };
+}
+
+/** editorState 中等价于一张内联图的 TipTap 节点（含完整 base64 src）。 */
+function imageEditorState(base64: string): any {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "看下这张图" },
+          {
+            type: "image",
+            attrs: {
+              src: `data:image/jpeg;base64,${base64}`,
+              alt: "None",
+              title: "None",
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
 describe("HistoryManager truncated-history save (regression)", () => {
   afterEach(() => {
     historyManager.clearAll();
@@ -263,5 +307,124 @@ describe("HistoryManager truncated-history save (regression)", () => {
     // Completion and model metadata are preserved.
     expect(log.completion).toBe("ok");
     expect(log.modelTitle).toBe("m");
+  });
+});
+
+describe("HistoryManager inline-image persistence slimming (regression)", () => {
+  afterEach(() => {
+    historyManager.clearAll();
+  });
+
+  it("strips the duplicate base64 from content.imageUrl when editorState holds the image", async () => {
+    const sessionId = uuidv4();
+    const base64 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5"; // ~48 chars
+    await historyManager.save({
+      sessionId,
+      title: "image slim",
+      workspaceDirectory: "ws",
+      history: [
+        userWithImage("看下这张图", base64, imageEditorState(base64)),
+        msg("assistant", "收到"),
+      ],
+    });
+
+    // 磁盘：base64 载荷只应出现一次（editorState 里），content 里只剩前缀。
+    const raw = fs.readFileSync(getSessionFilePath(sessionId), "utf8");
+    const occurrences = raw.split(base64).length - 1;
+    expect(occurrences).toBe(1);
+    const disk = JSON.parse(raw);
+    const contentUrl = disk.history[0].message.content[1].imageUrl.url;
+    expect(contentUrl).toBe("data:image/jpeg;base64,");
+    expect(disk.history[0].editorState.content[0].content[1].attrs.src).toBe(
+      `data:image/jpeg;base64,${base64}`,
+    );
+
+    // load()：content 的标记保留 "data:" 前缀（构造历史上下文的过滤条件
+    // 依赖它），editorState 的完整副本原样还原（渲染/编辑重发的数据源）。
+    const loaded = historyManager.load(sessionId);
+    const part = (loaded.history[0].message.content as any[])[1];
+    expect(part.type).toBe("imageUrl");
+    expect(part.imageUrl.url.startsWith("data:")).toBe(true);
+    expect(part.imageUrl.url).toBe("data:image/jpeg;base64,");
+    expect(loaded.history[0].editorState.content[0].content[1].attrs.src).toBe(
+      `data:image/jpeg;base64,${base64}`,
+    );
+  });
+
+  it("keeps the full base64 when there is no editorState (content is the only copy)", async () => {
+    const sessionId = uuidv4();
+    const base64 = "WFlaMTIzNDU2Nzg5MDEyMzQ1Njc4OTA=";
+    await historyManager.save({
+      sessionId,
+      title: "no editorState",
+      workspaceDirectory: "ws",
+      history: [userWithImage("只有 content", base64)],
+    });
+
+    const loaded = historyManager.load(sessionId);
+    const part = (loaded.history[0].message.content as any[])[1];
+    expect(part.imageUrl.url).toBe(`data:image/jpeg;base64,${base64}`);
+  });
+
+  it("leaves non-data: image URLs (e.g. https) untouched", async () => {
+    const sessionId = uuidv4();
+    const url = "https://example.com/cat.png";
+    const item = userWithImage(
+      "远程图",
+      "ignored",
+      imageEditorState("ignored"),
+    );
+    (item.message.content as any[])[1].imageUrl.url = url;
+    await historyManager.save({
+      sessionId,
+      title: "remote image",
+      workspaceDirectory: "ws",
+      history: [item],
+    });
+
+    const loaded = historyManager.load(sessionId);
+    const part = (loaded.history[0].message.content as any[])[1];
+    expect(part.imageUrl.url).toBe(url);
+  });
+
+  it("is idempotent across save/load cycles", async () => {
+    const sessionId = uuidv4();
+    const base64 = "aXNpbWFnaW5lYmFzZTY0cGF5bG9hZA==";
+    await historyManager.save({
+      sessionId,
+      title: "idempotent",
+      workspaceDirectory: "ws",
+      history: [userWithImage("x", base64, imageEditorState(base64))],
+    });
+    // 第二轮：load → 再 save（模拟 GUI 的持续保存），体积与形态不变。
+    const first = fs.readFileSync(getSessionFilePath(sessionId), "utf8");
+    const reloaded = historyManager.load(sessionId);
+    await historyManager.save(reloaded);
+    const second = fs.readFileSync(getSessionFilePath(sessionId), "utf8");
+    expect(second).toBe(first);
+  });
+
+  it("slims legacy fat files on load (migration path)", async () => {
+    // 直接落一个“旧版本”文件：content 与 editorState 双份完整 base64。
+    const sessionId = uuidv4();
+    const base64 = "bGVnYWN5ZGF0YWJhc2U2NGR1cGxpY2F0ZQ==";
+    const fat: Session = {
+      sessionId,
+      title: "legacy fat",
+      workspaceDirectory: "ws",
+      history: [userWithImage("老文件", base64, imageEditorState(base64))],
+    };
+    fs.writeFileSync(
+      getSessionFilePath(sessionId),
+      JSON.stringify(fat),
+      "utf8",
+    );
+
+    const loaded = historyManager.load(sessionId);
+    const part = (loaded.history[0].message.content as any[])[1];
+    expect(part.imageUrl.url).toBe("data:image/jpeg;base64,");
+    expect(loaded.history[0].editorState.content[0].content[1].attrs.src).toBe(
+      `data:image/jpeg;base64,${base64}`,
+    );
   });
 });

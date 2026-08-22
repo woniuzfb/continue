@@ -127,6 +127,37 @@ function stripAttachedFileContent(history: Session["history"] | undefined) {
   }
 }
 
+// 会话持久化瘦身（结构化图片 part）：user 消息 content 里的 imageUrl base64
+// 与 editorState 里的 image src 是同一张图的两份拷贝（content 的 imageUrl
+// part 本就发送时从 editorState 派生）。落盘后 content 那份无人消费——
+// 渲染/编辑重发/Resubmit 全部走 editorState（Chat.tsx 的
+// `editorState ?? content` 兜底、StreamError.tsx 的 resubmit），而构造
+// LLM 历史上下文时 data: imageUrl part 会被整体过滤
+// （gui constructMessages.ts）。因此只在 editorState 存在（图片在编辑器
+// 状态里仍是完整副本）时剥离 base64 载荷；剥离后保留 "data:<mime>;base64,"
+// 前缀，确保上述过滤条件（startsWith("data:")）继续命中。幂等。
+function stripContentImageUrlParts(history: Session["history"] | undefined) {
+  if (!history) return;
+  for (const item of history) {
+    if (item.message.role !== "user") continue;
+    if (item.editorState == null) continue; // content 是图片唯一副本，不可剥
+    if (!Array.isArray(item.message.content)) continue;
+    item.message.content = item.message.content.map((part) => {
+      if (part.type !== "imageUrl") return part;
+      const url = part.imageUrl?.url;
+      if (typeof url !== "string" || !url.startsWith("data:")) return part;
+      const payloadStart = url.indexOf(";base64,");
+      if (payloadStart === -1) return part;
+      const after = payloadStart + ";base64,".length;
+      if (url.length <= after) return part; // 已剥离过
+      return {
+        ...part,
+        imageUrl: { ...part.imageUrl, url: url.slice(0, after) },
+      };
+    });
+  }
+}
+
 // 运行时守护不变量，防止未来有人调参数时不慎打破 STALE < TIMEOUT。
 if (SESSION_LOCK_STALE_MS >= SESSION_LOCK_TIMEOUT_MS) {
   throw new Error(
@@ -308,6 +339,9 @@ export class HistoryManager {
       // 加载瘦身（见 stripAttachedFileContent 注释）：旧文件迁移前仍是肥的，
       // 剥离后再返回，避免 100MB+ 块体灌进 IPC 与 webview 堆
       stripAttachedFileContent(session.history);
+      // 同上：content.imageUrl 的 base64 与 editorState 里的副本重复，
+      // 旧文件里的重复载荷在加载时剥除（见 stripContentImageUrlParts 注释）
+      stripContentImageUrlParts(session.history);
       return session;
     } catch (e) {
       console.log(`Error loading session: ${e}`);
@@ -447,6 +481,9 @@ export class HistoryManager {
     // 写盘瘦身（见 stripAttachedFileContent 注释）：覆盖合并后的完整 history
     // （含从磁盘读回的冻结头部），块体不落盘。幂等，重复剥离无副作用。
     stripAttachedFileContent(finalHistory);
+    // 同上：content.imageUrl 与 editorState 重复存图，落盘只留 editorState
+    // 那份（见 stripContentImageUrlParts 注释）。幂等。
+    stripContentImageUrlParts(finalHistory);
 
     const orderedSession: Session = {
       sessionId: session.sessionId,
