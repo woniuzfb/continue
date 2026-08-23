@@ -18,7 +18,7 @@ if (!fs.existsSync("build")) {
 
 const isPreRelease = args.includes("--pre-release");
 
-const command = isPreRelease
+let command = isPreRelease
   ? "npx @vscode/vsce package --out ./build --pre-release --no-dependencies" // --yarn"
   : "npx @vscode/vsce package --out ./build --no-dependencies"; // --yarn";
 
