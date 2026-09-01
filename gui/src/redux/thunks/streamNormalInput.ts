@@ -273,6 +273,25 @@ export const streamNormalInput = createAsyncThunk<
       applyStreamUpdatesToHistory(bgCache!, messages);
     };
 
+    // 流结束收尾：无论正常完成、被中止还是中途失败，都要把“流所属会话”的
+    // streaming 状态收掉。abortStream reducer 只 abort controller、不复位
+    // isStreaming，而下面若干提前退出路径也不经过 setInactive——漏掉收尾时：
+    //  - 活动会话：isStreaming 卡在 true，StepContainer 的 showResponseActions
+    //    依赖 !isStreaming，最后一条回复气泡下方的操作按钮会永久消失；
+    //  - 后台会话：LRU 缓存副本残留 isStreaming:true，切回该 tab 时
+    //    restoreCachedSession 恢复出卡住的状态，按钮同样消失。
+    const finalizeStreamEnd = () => {
+      const s = getState().session;
+      if (s.id === streamSessionId && s.isStreaming) {
+        dispatch(setInactive());
+      }
+      // 同步缓存副本（只在残留 streaming 标记时写，避免用陈旧快照覆盖新缓存）
+      const cached = getCachedSession(streamSessionId);
+      if (cached?.isStreaming) {
+        setCachedSession(streamSessionId, { ...cached, isStreaming: false });
+      }
+    };
+
     try {
       let gen = extra.ideMessenger.llmStreamChat(
         {
@@ -372,6 +391,10 @@ export const streamNormalInput = createAsyncThunk<
           );
         }
       } else {
+        // 中途失败上抛（由 streamThunkWrapper 弹错误框/重试）：wrapper 的
+        // cancelStream 只作用于当前活动会话，这里先对流所属会话收尾，
+        // 否则后台失败时其缓存副本会残留 isStreaming:true
+        finalizeStreamEnd();
         throw e;
       }
     }
@@ -380,15 +403,15 @@ export const streamNormalInput = createAsyncThunk<
     // 1. Mark generating tool calls as generated
     const state1 = getState();
     if (streamAborter.signal.aborted) {
+      // 流被中止（如其他会话取消时统一 abort、单独派发 abortStream 等）：
+      // 必须收尾 streaming 状态，否则气泡下方操作按钮永久消失
+      finalizeStreamEnd();
       unregisterStreamAborter(streamAborter);
       return;
     }
     if (state1.session.id !== streamSessionId || !state1.session.isStreaming) {
-      // 会话已切走：跳过工具执行，标记缓存会话结束（后台流完成）
-      const cached = getCachedSession(streamSessionId);
-      if (cached) {
-        setCachedSession(streamSessionId, { ...cached, isStreaming: false });
-      }
+      // 会话已切走：跳过工具执行，收尾缓存会话的 streaming 状态（后台流完成）
+      finalizeStreamEnd();
       unregisterStreamAborter(streamAborter);
       return;
     }
@@ -408,6 +431,7 @@ export const streamNormalInput = createAsyncThunk<
     // 2. Pre-process args to catch invalid args before checking policies
     const state2 = getState();
     if (streamAborter.signal.aborted || !state2.session.isStreaming) {
+      finalizeStreamEnd();
       unregisterStreamAborter(streamAborter);
       return;
     }
@@ -417,6 +441,7 @@ export const streamNormalInput = createAsyncThunk<
     // 3. Security check: evaluate updated policies based on args
     const state3 = getState();
     if (streamAborter.signal.aborted || !state3.session.isStreaming) {
+      finalizeStreamEnd();
       unregisterStreamAborter(streamAborter);
       return;
     }
@@ -449,6 +474,7 @@ export const streamNormalInput = createAsyncThunk<
       if (builtInReadonlyAutoApproved.length > 0) {
         const state4 = getState();
         if (streamAborter.signal.aborted || !state4.session.isStreaming) {
+          finalizeStreamEnd();
           unregisterStreamAborter(streamAborter);
           return;
         }
@@ -473,6 +499,7 @@ export const streamNormalInput = createAsyncThunk<
       const state4 = getState();
       const generatedCalls4 = selectPendingToolCalls(state4);
       if (streamAborter.signal.aborted || !state4.session.isStreaming) {
+        finalizeStreamEnd();
         unregisterStreamAborter(streamAborter);
         return;
       }

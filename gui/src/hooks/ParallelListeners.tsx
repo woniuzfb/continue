@@ -13,10 +13,8 @@ import {
 } from "../redux/slices/profilesSlice";
 import {
   addContextItemsAtIndex,
-  newSession,
   setHasReasoningEnabled,
   setIsSessionMetadataLoading,
-  setMode,
 } from "../redux/slices/sessionSlice";
 import { setTTSActive } from "../redux/slices/uiSlice";
 
@@ -89,7 +87,9 @@ function ParallelListeners() {
         chatModel?.completionOptions?.reasoning === false;
       // LLM: prefix models default to reasoning disabled unless the user
       // has explicitly toggled it on for this model.
-      const isLLMPrefix = chatModel?.model?.startsWith("LLM:");
+      const isLLMPrefix =
+        chatModel?.model?.startsWith("LLM:") ||
+        chatModel?.model?.startsWith("openrouter:");
       const userReasoningPref = chatModel?.title
         ? reasoningSettings[chatModel.title]
         : undefined;

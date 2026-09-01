@@ -560,6 +560,15 @@ export function Chat() {
               inProgress={index === history.length - 1 && isStreaming}
               signature={message.signature}
             />
+            {index === history.length - 1 && !isStreaming && (
+              <StepContainer
+                actionsOnly
+                index={index}
+                isLast={true}
+                item={item}
+                latestSummaryIndex={latestSummaryIndex}
+              />
+            )}
           </div>
         );
       }

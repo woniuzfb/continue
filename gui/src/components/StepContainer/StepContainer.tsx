@@ -16,6 +16,7 @@ interface StepContainerProps {
   index: number;
   isLast: boolean;
   latestSummaryIndex?: number;
+  actionsOnly?: boolean;
 }
 
 export default function StepContainer(props: StepContainerProps) {
@@ -34,9 +35,19 @@ export default function StepContainer(props: StepContainerProps) {
   const historyItemAfterThis = useAppSelector(
     (state) => state.session.history[props.index + 1],
   );
+  // 只有当工具调用仍在进行（generating/generated/calling）时才隐藏按钮。
+  // 流被中断后，clearDanglingMessages 会把悬空的工具调用标记为 canceled/errored，
+  // 此时 toolCallStates 仍是非空数组，若直接判断 truthy 会导致按钮永久消失。
+  const hasActiveToolCalls = !!props.item.toolCallStates?.some(
+    (toolCall) =>
+      toolCall.status === "generating" ||
+      toolCall.status === "generated" ||
+      toolCall.status === "calling",
+  );
+
   const showResponseActions =
     (props.isLast || historyItemAfterThis?.message.role === "user") &&
-    !(props.isLast && (isStreaming || props.item.toolCallStates));
+    !(props.isLast && (isStreaming || hasActiveToolCalls));
 
   useEffect(() => {
     if (!isStreaming) {
@@ -76,33 +87,35 @@ export default function StepContainer(props: StepContainerProps) {
 
   return (
     <div className="w-full max-w-full">
-      <div
-        className={`bg-background min-w-0 max-w-full p-1 px-1.5 ${isBeforeLatestSummary ? "opacity-35" : ""}`}
-      >
-        {uiConfig?.displayRawMarkdown ? (
-          <pre className="text-2xs max-w-full overflow-x-auto whitespace-pre-wrap break-words p-4">
-            {renderChatMessage(props.item.message)}
-          </pre>
-        ) : (
-          <>
-            {props.item.reasoning?.text?.trim() && (
-              <ThinkingBlockPeek
-                content={props.item.reasoning.text}
-                index={props.index}
-                prevItem={props.index > 0 ? props.item : null}
-                inProgress={!props.item.reasoning?.endAt}
-              />
-            )}
+      {!props.actionsOnly && (
+        <div
+          className={`bg-background min-w-0 max-w-full p-1 px-1.5 ${isBeforeLatestSummary ? "opacity-35" : ""}`}
+        >
+          {uiConfig?.displayRawMarkdown ? (
+            <pre className="text-2xs max-w-full overflow-x-auto whitespace-pre-wrap break-words p-4">
+              {renderChatMessage(props.item.message)}
+            </pre>
+          ) : (
+            <>
+              {props.item.reasoning?.text?.trim() && (
+                <ThinkingBlockPeek
+                  content={props.item.reasoning.text}
+                  index={props.index}
+                  prevItem={props.index > 0 ? props.item : null}
+                  inProgress={!props.item.reasoning?.endAt}
+                />
+              )}
 
-            <StyledMarkdownPreview
-              isRenderingInStepContainer
-              source={stripImages(props.item.message.content)}
-              itemIndex={props.index}
-            />
-          </>
-        )}
-        {props.isLast && <ThinkingIndicator historyItem={props.item} />}
-      </div>
+              <StyledMarkdownPreview
+                isRenderingInStepContainer
+                source={stripImages(props.item.message.content)}
+                itemIndex={props.index}
+              />
+            </>
+          )}
+          {props.isLast && <ThinkingIndicator historyItem={props.item} />}
+        </div>
+      )}
 
       {showResponseActions && (
         <div
@@ -120,7 +133,7 @@ export default function StepContainer(props: StepContainerProps) {
       )}
 
       {/* Show compaction indicator for the latest summary */}
-      {isLatestSummary && (
+      {!props.actionsOnly && isLatestSummary && (
         <div className="mx-1.5 my-5">
           <div className="flex items-center">
             <div className="border-border flex-1 border-t border-solid"></div>
@@ -133,7 +146,9 @@ export default function StepContainer(props: StepContainerProps) {
       )}
 
       {/* ConversationSummary is outside the dimmed container so it's always at full opacity */}
-      <ConversationSummary item={props.item} index={props.index} />
+      {!props.actionsOnly && (
+        <ConversationSummary item={props.item} index={props.index} />
+      )}
     </div>
   );
 }
