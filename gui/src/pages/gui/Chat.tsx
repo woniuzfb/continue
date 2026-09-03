@@ -6,7 +6,8 @@ import {
 } from "@heroicons/react/24/outline";
 import { Editor, JSONContent } from "@tiptap/react";
 import { ChatHistoryItem, InputModifiers } from "core";
-import { renderChatMessage } from "core/util/messageContent";
+import { renderChatMessage, stripImages } from "core/util/messageContent";
+import { processEditorContent } from "../../components/mainInput/TipTapEditor/utils/processEditorContent";
 import {
   useCallback,
   useContext,
@@ -474,12 +475,32 @@ export function Chat() {
                     // Copy the user's typed text only: strip everything from
                     // the synthetic "Files attached by the user:" marker on
                     // (the attachment <file_content> blocks) so the clipboard
-                    // doesn't get the attachment payload.
-                    const text = renderChatMessage(message);
+                    // doesn't get the attachment payload. trimEnd (not trim)
+                    // so a fully-indented message keeps its first-line indent.
+                    //
+                    // Prefer text re-derived from editorState: it is the same
+                    // source the bubble renders (pre-wrap), so the clipboard
+                    // matches the bubble exactly, including indentation, and
+                    // it also repairs older messages whose message.content was
+                    // persisted after per-paragraph trimStart stripped the
+                    // indentation. Slash-command messages fall back to
+                    // message.content since their content holds the resolved
+                    // prompt, not the raw typed text.
+                    const hasPromptBlock =
+                      editorState?.content?.some(
+                        (p: JSONContent) => p.type === "prompt-block",
+                      ) ?? false;
+                    const text =
+                      editorState && !hasPromptBlock
+                        ? stripImages(processEditorContent(editorState).parts)
+                        : renderChatMessage(message);
                     const marker = text.indexOf(
                       "\n\nFiles attached by the user:",
                     );
-                    return (marker >= 0 ? text.slice(0, marker) : text).trim();
+                    return (marker >= 0
+                      ? text.slice(0, marker)
+                      : text
+                    ).trimEnd();
                   }}
                   clipboardIconClassName="h-3.5 w-3.5 text-gray-400"
                   checkIconClassName="h-3.5 w-3.5 text-green-400"

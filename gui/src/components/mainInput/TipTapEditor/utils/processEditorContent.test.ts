@@ -76,6 +76,32 @@ describe("processEditorContent", () => {
     expect(result.selectedCode).toEqual([]);
   });
 
+  test("processEditorContent preserves per-paragraph leading indentation", () => {
+    // 行首缩进是有语义的(贴代码/YAML), 不能被 trimStart 吃掉
+    const editorState: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "  def foo():" }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "    return 42" }],
+        },
+      ],
+    };
+
+    const result = processEditorContent(editorState);
+
+    expect(result.parts).toEqual([
+      {
+        type: "text",
+        text: "  def foo():\n    return 42",
+      },
+    ]);
+  });
+
   test("processEditorContent should detect slash commands", () => {
     const editorState: JSONContent = {
       type: "doc",
@@ -765,6 +791,31 @@ describe("paste with empty lines", () => {
       type: "text",
       text: "A\n\nB",
     });
+
+    editor.destroy();
+  });
+
+  test("parseClipboardText + processEditorContent preserves pasted indentation end-to-end", () => {
+    // 粘贴缩进文本后, 发送内容必须保留每行行首缩进
+    const editor = createTestEditor();
+    const view = editor.view;
+
+    const clipboardText = "check this:\n    def foo():\n        return 42";
+
+    const slice = parseClipboardText(
+      clipboardText,
+      view.state.doc.resolve(0),
+      view,
+    );
+    view.dispatch(view.state.tr.replaceSelection(slice));
+
+    const result = processEditorContent(editor.getJSON());
+    expect(result.parts).toEqual([
+      {
+        type: "text",
+        text: "check this:\n    def foo():\n        return 42",
+      },
+    ]);
 
     editor.destroy();
   });

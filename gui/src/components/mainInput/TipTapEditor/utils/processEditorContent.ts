@@ -27,6 +27,10 @@ function resolvePromptBlock(p: JSONContent): string | undefined {
 function resolveParagraph(p: JSONContent): [string, GetContextRequest[]] {
   const contextRequests: GetContextRequest[] = [];
 
+  // No trimStart here: leading whitespace is meaningful indentation (pasted
+  // code / YAML). Stripping it desynced the user bubble (rendered from
+  // editorState with pre-wrap) from message.content, so the copy button lost
+  // the indentation the user actually typed.
   const text = (p.content || [])
     .map((child) => {
       switch (child.type) {
@@ -46,8 +50,7 @@ function resolveParagraph(p: JSONContent): [string, GetContextRequest[]] {
           return "";
       }
     })
-    .join("")
-    .trimStart();
+    .join("");
 
   return [text, contextRequests];
 }
