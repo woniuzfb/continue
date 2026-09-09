@@ -5,12 +5,12 @@ import { selectSessionById } from "../selectors/sessions";
 import { ensureMessageIds } from "../util/messageIds";
 import {
   markSessionPersisted,
+  markSessionSaveFailed,
+  markSessionSaving,
   clearSessionConversationSummary,
   setSessionConversationSummary,
   setSessionFirstTurn,
   setSessionPagination,
-  setSessionPersistenceState,
-  SessionPersistenceState,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { createAndActivateSession } from "./sessionActivation";
@@ -34,21 +34,6 @@ type PendingSave = {
 
 const pendingSaves = new Map<string, PendingSave>();
 const runningSaves = new Map<string, Promise<void>>();
-
-function persistenceState(
-  sessionId: string,
-  getState: () => any,
-): SessionPersistenceState {
-  const session = selectSessionById(getState(), sessionId);
-  return (
-    session?.persistence ?? {
-      state: "clean",
-      revision: 0,
-      persistedRevision: 0,
-      hasPersistedBaseline: false,
-    }
-  );
-}
 
 function buildSessionPayload(
   sessionId: string,
@@ -88,27 +73,20 @@ async function performSave(
     return;
   }
 
-  const base = persistenceState(sessionId, getState);
-  dispatch(
-    setSessionPersistenceState({
-      sessionId,
-      persistence: { ...base, state: "saving" },
-    }),
-  );
+  // Incremental updates only: a snapshot taken here would roll back any
+  // revision bumped by a chunk / tool result arriving during the request
+  // (方案.md §七.5).
+  dispatch(markSessionSaving({ sessionId }));
 
   const result = await extra.ideMessenger.request("history/save", payload);
 
   if (result.status === "error") {
     dispatch(
-      setSessionPersistenceState({
+      markSessionSaveFailed({
         sessionId,
-        persistence: {
-          ...base,
-          state: "failed",
-          error: {
-            code: result.errorCode ?? "SESSION_SAVE_FAILED",
-            message: result.error,
-          },
+        error: {
+          code: result.errorCode ?? "SESSION_SAVE_FAILED",
+          message: result.error,
         },
       }),
     );

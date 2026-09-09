@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
 import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
-import { initialSessionRuntime } from "../slices/sessionsSlice";
+import {
+  initialSessionRuntime,
+  markSessionDirty,
+} from "../slices/sessionsSlice";
 import { resetSessionSaveQueues, saveSession } from "./sessionPersistence";
 
 function item(
@@ -131,6 +134,50 @@ describe("sessionPersistence.saveSession", () => {
     expect(request.mock.calls.length).toBeLessThanOrEqual(2);
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.persistence?.state).toBe("clean");
+  });
+
+  it("does not roll back a revision bumped while the save was in flight", async () => {
+    const store = makeStore();
+    const before = selectSessionById(store.getState() as any, "s1")!;
+    expect(before.persistence?.revision).toBe(2);
+
+    // Hold the save open so a new change can arrive while it is in flight.
+    let resolveSave: ((value: any) => void) | undefined;
+    store.mockIdeMessenger.request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    ) as any;
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await vi.waitFor(() => {
+      expect(resolveSave).toBeDefined();
+    });
+
+    // A stream chunk / tool result arrives during the request.
+    store.dispatch(markSessionDirty({ sessionId: "s1" }));
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.persistence?.revision,
+    ).toBe(3);
+
+    resolveSave!({
+      status: "error",
+      error: "disk full",
+      errorCode: "SESSION_SAVE_FAILED",
+      done: true,
+    });
+    await expect(save).rejects.toThrow("disk full");
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    // The failure path must not restore the pre-request snapshot.
+    expect(session.persistence).toMatchObject({
+      state: "failed",
+      revision: 3,
+      persistedRevision: 0,
+    });
+    expect(session.persistence?.error?.message).toBe("disk full");
+    expect(session.dirty).toBe(true);
   });
 
   it("is a no-op for a session that has no runtime", async () => {

@@ -91,6 +91,16 @@ export type ContextMetricsMeta = {
   schemaVersion: number;
 };
 
+/** Persistence defaults shared by the reducers below (方案.md §七.1). */
+function initialPersistenceState(): SessionPersistenceState {
+  return {
+    state: "clean",
+    revision: 0,
+    persistedRevision: 0,
+    hasPersistedBaseline: false,
+  };
+}
+
 export type SessionRuntimeState = {
   id: string;
   title: string;
@@ -831,6 +841,43 @@ export const sessionsSlice = createSlice({
       }
     },
     /**
+     * 方案.md §七.5/§七.7: async save results must update the *current*
+     * persistence incrementally. Writing a snapshot captured before the await
+     * would roll `revision` back to the value it had when the request started,
+     * discarding changes that arrived while the save was in flight.
+     */
+    markSessionSaving: (
+      state,
+      action: PayloadAction<{ sessionId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const persistence = session.persistence ?? initialPersistenceState();
+      session.persistence = { ...persistence, state: "saving" };
+    },
+    markSessionSaveFailed: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        error: NonNullable<SessionPersistenceState["error"]>;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const persistence = session.persistence ?? initialPersistenceState();
+      // revision / persistedRevision / hasPersistedBaseline come from the
+      // current state, never from the request that failed.
+      session.persistence = {
+        ...persistence,
+        state: "failed",
+        error: action.payload.error,
+      };
+    },
+    /**
      * Marks a session dirty and advances the save-queue revision (方案.md
      * §七.1/§七.3): `revision` is what the per-session save queue compares to
      * decide whether a newer snapshot is still pending.
@@ -1290,6 +1337,8 @@ export const {
   prependSessionHistory,
   setSessionHistoryLoading,
   trimSessionHistoryWindow,
+  markSessionSaveFailed,
+  markSessionSaving,
   setSessionPersistenceState,
   markSessionDirty,
   markSessionPersisted,
