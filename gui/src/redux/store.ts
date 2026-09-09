@@ -79,7 +79,14 @@ const migrations: MigrationManifest = {
   },
   // v1 -> v2 (方案.md §五.23): the persisted shape becomes the tab projection
   // plus the catalog pointer. Runtime state is never persisted.
-  "1": (state) => migratePersistedStateToV2(state) as any,
+  //
+  // redux-persist runs a migration keyed `k` only when
+  // `inboundVersion < k <= version` (createMigrate). Registering the v1 -> v2
+  // migration under `1` therefore never ran for a v1 snapshot — a real v1 boot
+  // kept the legacy `session`/`tabs` shape and restored nothing. It must be
+  // keyed `2`, which also covers v0 snapshots (the `"0"` migration runs first
+  // and produces the v1 shape this one consumes).
+  "2": (state) => migratePersistedStateToV2(state) as any,
 };
 
 const persistConfig = {
@@ -102,9 +109,22 @@ const normalizedReducer = (
 ) => {
   const next = rootReducer(state, action);
   if (action.type === "persist/REHYDRATE") {
+    // 方案.md §五.23: the rehydrated payload lives on `action.payload`, NOT in
+    // the state produced by the base reducer (no slice handles REHYDRATE —
+    // redux-persist normally merges the payload in the stateReconciler). Since
+    // this guard replaces the two session slices itself, it must read the
+    // payload directly; doing it from `next` silently dropped every persisted
+    // tab on boot.
+    const inbound = (action as { payload?: unknown }).payload as
+      | { sessions?: unknown; sessionCatalog?: unknown }
+      | undefined;
+    if (!inbound || typeof inbound !== "object") {
+      return next;
+    }
     const rehydrated = normalizePersistedSessionsState({
-      sessions: (next as any).sessions,
-      sessionCatalog: (next as any).sessionCatalog,
+      sessions: (inbound.sessions as any) ?? (next as any).sessions,
+      sessionCatalog:
+        (inbound.sessionCatalog as any) ?? (next as any).sessionCatalog,
     });
     return {
       ...next,
