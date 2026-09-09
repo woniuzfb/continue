@@ -155,6 +155,61 @@ describe("loadSessionRuntime", () => {
     });
   });
 
+  it("restores the disk metrics snapshot and recomputes only on activation", async () => {
+    const store = makeStore(
+      {
+        ...emptySessions(),
+        tabOrder: ["s1"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Chat 1", loadState: "unloaded" },
+        },
+      },
+      { lazy: true, modelTitle: "model-a" },
+    );
+    store.mockIdeMessenger.responses["history/loadPage"] = {
+      items: [item("u1", "user", "hi")],
+      firstTurnItems: [item("u1", "user", "hi")],
+      hasMore: false,
+      total: 1,
+      session: {
+        title: "Chat 1",
+        mode: "chat",
+        workspaceDirectory: "ws",
+        contextMetrics: {
+          didPrune: false,
+          contextPercentage: 0.25,
+          inputTokens: 25,
+          contextLength: 100,
+        },
+      },
+    } as any;
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    // Loading alone restores the persisted snapshot without compiling.
+    await run(store, loadSessionRuntime({ sessionId: "s1" }));
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.contextMetrics?.contextPercentage).toBe(0.25);
+    expect(request).not.toHaveBeenCalledWith(
+      "llm/compileChat",
+      expect.anything(),
+    );
+
+    // Activation has no comparable snapshot meta yet, so the gate recomputes
+    // once and stores the identity for the next activation (方案.md §五.16).
+    await run(store, activateSessionTab({ sessionId: "s1" }));
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "llm/compileChat",
+        expect.anything(),
+      );
+    });
+    await vi.waitFor(() => {
+      const after = selectSessionById(store.getState() as any, "s1")!;
+      expect(after.contextMetricsMeta?.modelIdentity).toBe("model-a");
+    });
+  });
+
   it("keeps the descriptor and creates no runtime when loading fails", async () => {
     const store = makeStore({
       ...emptySessions(),

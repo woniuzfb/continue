@@ -180,6 +180,40 @@ describe("sessionPersistence.saveSession", () => {
     expect(session.dirty).toBe(true);
   });
 
+  it("keeps the newer revision when a save succeeds after a concurrent change", async () => {
+    const store = makeStore();
+    let resolveSave: ((value: any) => void) | undefined;
+    store.mockIdeMessenger.request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    ) as any;
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await vi.waitFor(() => {
+      expect(resolveSave).toBeDefined();
+    });
+    store.dispatch(markSessionDirty({ sessionId: "s1" }));
+
+    resolveSave!({
+      status: "success",
+      content: { firstTurnItems: [], totalHistoryCount: 2 },
+      done: true,
+    });
+    await save;
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    // The response only confirms revision 2; the change made during the save
+    // (revision 3) must stay pending instead of being marked clean.
+    expect(session.persistence).toMatchObject({
+      state: "pending",
+      revision: 3,
+      persistedRevision: 2,
+    });
+    expect(session.dirty).toBe(true);
+  });
+
   it("is a no-op for a session that has no runtime", async () => {
     const store = makeStore();
     const request = vi.spyOn(store.mockIdeMessenger, "request");
