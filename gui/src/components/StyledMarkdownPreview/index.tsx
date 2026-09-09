@@ -36,6 +36,12 @@ import { fixDoubleDollarNewLineLatex } from "./utils/fixDoubleDollarLatex";
 import { patchNestedMarkdown } from "./utils/patchNestedMarkdown";
 import { replaceSingleDollarOutsideCode } from "./utils/replaceSingleDollarOutsideCode";
 import { remarkTables } from "./utils/remarkTables";
+import {
+  selectActiveHistory,
+  selectActiveIsStreaming,
+  selectActiveSessionId,
+  selectActiveSymbols,
+} from "../../redux/selectors/sessionView";
 
 const StyledMarkdown = styled.div<{
   fontSize?: number;
@@ -202,7 +208,7 @@ const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
   //   未命中 → MarkdownPipeline 完整路径,算完回填缓存
   const uiConfig = useAppSelector(selectUIConfig);
   const renderInlineLatex = uiConfig?.renderInlineLatex ?? false;
-  const sessionId = useAppSelector((state) => state.session.id);
+  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
 
   const artifactKey = useMemo(() => {
     // 与 MarkdownPipeline 的 preprocessedSource 保持一致(键的一部分)
@@ -286,8 +292,8 @@ const MarkdownPipeline = memo(function MarkdownPipeline(
   // The logic here is to get file names from
   // 1. Context items found in past messages
   // 2. Toolbar Codeblocks found in past messages
-  const history = useAppSelector((state) => state.session.history);
-  const allSymbols = useAppSelector((state) => state.session.symbols);
+  const history = useAppSelector((state) => selectActiveHistory(state));
+  const allSymbols = useAppSelector((state) => selectActiveSymbols(state));
   const pastFileInfo = useMemo(() => {
     const index = props.itemIndex;
     if (index === undefined) {
@@ -331,8 +337,8 @@ const MarkdownPipeline = memo(function MarkdownPipeline(
     return source;
   }, [props.source, props.renderInlineLatex]);
 
-  const isSessionStreaming = useAppSelector(
-    (state) => state.session.isStreaming,
+  const isSessionStreaming = useAppSelector((state) =>
+    selectActiveIsStreaming(state),
   );
 
   const [reactContent, setMarkdownSource] = useRemark({

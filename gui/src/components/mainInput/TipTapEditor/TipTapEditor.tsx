@@ -38,6 +38,7 @@ import "./TipTapEditor.css";
 import { createEditorConfig, getPlaceholderText } from "./utils/editorConfig";
 import { handleImageFile } from "./utils/imageUtils";
 import { useEditorEventHandlers } from "./utils/keyHandlers";
+import { selectActiveIsStreaming } from "../../../redux/selectors/sessionView";
 
 /** Cap for packing a single binary attachment (~112 MB of raw data). Larger
  * files would freeze the webview; fall back to the legacy text attach. */
@@ -202,7 +203,7 @@ function TipTapEditorInner(props: TipTapEditorProps) {
     (state) =>
       (state.config.config.ui?.attachmentSplitThresholdMB ?? 1) * 1024 * 1024,
   );
-  const isStreaming = useAppSelector((state) => state.session.isStreaming);
+  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
   const historyLength = useAppSelector((store) => store.session.history.length);
   const isInEdit = useAppSelector((store) => store.session.isInEdit);
   const mainEditorDraft = useAppSelector(

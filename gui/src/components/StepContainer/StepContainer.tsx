@@ -10,6 +10,10 @@ import StyledMarkdownPreview from "../StyledMarkdownPreview";
 import ConversationSummary from "./ConversationSummary";
 import ResponseActions from "./ResponseActions";
 import ThinkingIndicator from "./ThinkingIndicator";
+import {
+  selectActiveHistory,
+  selectActiveIsStreaming,
+} from "../../redux/selectors/sessionView";
 
 interface StepContainerProps {
   item: ChatHistoryItem;
@@ -22,7 +26,7 @@ interface StepContainerProps {
 export default function StepContainer(props: StepContainerProps) {
   const dispatch = useDispatch();
   const [isTruncated, setIsTruncated] = useState(false);
-  const isStreaming = useAppSelector((state) => state.session.isStreaming);
+  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
   const uiConfig = useAppSelector(selectUIConfig);
 
   // Calculate dimming and indicator state based on latest summary index
@@ -33,7 +37,7 @@ export default function StepContainer(props: StepContainerProps) {
     latestSummaryIndex !== -1 && props.index === latestSummaryIndex;
 
   const historyItemAfterThis = useAppSelector(
-    (state) => state.session.history[props.index + 1],
+    (state) => selectActiveHistory(state)[props.index + 1],
   );
   // 只有当工具调用仍在进行（generating/generated/calling）时才隐藏按钮。
   // 流被中断后，clearDanglingMessages 会把悬空的工具调用标记为 canceled/errored，

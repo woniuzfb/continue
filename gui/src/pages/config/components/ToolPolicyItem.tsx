@@ -19,6 +19,7 @@ import {
 import { useFontSize } from "../../../components/ui/font";
 import { useAppSelector } from "../../../redux/hooks";
 import { addTool, setToolPolicy } from "../../../redux/slices/uiSlice";
+import { selectActiveMode } from "../../../redux/selectors/sessionView";
 
 interface ToolPolicyItemProps {
   tool: Tool;
@@ -32,7 +33,7 @@ export function ToolPolicyItem(props: ToolPolicyItemProps) {
     (state) => state.ui.toolSettings[props.tool.function.name],
   );
   const [isExpanded, setIsExpanded] = useState(false);
-  const mode = useAppSelector((state) => state.session.mode);
+  const mode = useAppSelector((state) => selectActiveMode(state));
 
   useEffect(() => {
     if (!policy) {

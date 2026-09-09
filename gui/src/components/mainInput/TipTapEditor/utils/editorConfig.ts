@@ -30,6 +30,7 @@ import {
   getSlashCommandDropdownOptions,
 } from "./getSuggestion";
 import { handleImageFile } from "./imageUtils";
+import { selectActiveIsStreaming } from "../../../../redux/selectors/sessionView";
 
 export function getPlaceholderText(
   placeholder: TipTapEditorProps["placeholder"],
@@ -113,7 +114,7 @@ export function createEditorConfig(options: {
 
   const { getSubmenuContextItems } = useSubmenuContextProviders();
   const defaultModel = useAppSelector(selectSelectedChatModel);
-  const isStreaming = useAppSelector((state) => state.session.isStreaming);
+  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
   const useActiveFile = useAppSelector(selectUseActiveFile);
   const historyLength = useAppSelector((store) => store.session.history.length);
   const codeToEdit = useAppSelector((store) => store.editModeState.codeToEdit);

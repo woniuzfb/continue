@@ -2,6 +2,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { loadMoreHistory } from "../../redux/thunks/loadMoreHistory";
 import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionSlice";
+import {
+  selectActiveHasMoreHistory,
+  selectActiveIsHistoryLoading,
+  selectActiveIsStreaming,
+} from "../../redux/selectors/sessionView";
 
 /**
  * Only reset scroll state when a new user message is added to the chat.
@@ -49,13 +54,13 @@ export const useAutoScroll = (
   suppressAutoScrollRef?: React.MutableRefObject<boolean>,
 ) => {
   const dispatch = useAppDispatch();
-  const hasMoreHistory = useAppSelector(
-    (state) => state.session.hasMoreHistory,
+  const hasMoreHistory = useAppSelector((state) =>
+    selectActiveHasMoreHistory(state),
   );
-  const isHistoryLoading = useAppSelector(
-    (state) => state.session.isHistoryLoading,
+  const isHistoryLoading = useAppSelector((state) =>
+    selectActiveIsHistoryLoading(state),
   );
-  const isStreaming = useAppSelector((state) => state.session.isStreaming);
+  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
 
   const [userHasScrolled, setUserHasScrolled] = useState(false);
   const numUserMsgs = useMemo(() => getNumUserMsgs(history), [history.length]);

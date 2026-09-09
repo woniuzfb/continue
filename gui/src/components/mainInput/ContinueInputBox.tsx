@@ -20,6 +20,7 @@ import { TipTapEditor } from "./TipTapEditor";
 import { InputBoxDiv } from "./TipTapEditor/components/StyledComponents";
 import { getUserInputStaticHtml } from "./userInputHtmlCache";
 import { AttachmentMeta, AttachedFile } from "./types";
+import { selectActiveIsStreaming } from "../../redux/selectors/sessionView";
 
 interface ContinueInputBoxProps {
   isLastUserInput: boolean;
@@ -67,7 +68,7 @@ const EDIT_ALLOWED_SLASH_COMMAND_SOURCES: SlashCommandSource[] = [
 ];
 
 function ContinueInputBox(props: ContinueInputBoxProps) {
-  const isStreaming = useAppSelector((state) => state.session.isStreaming);
+  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
   const ideMessenger = useContext(IdeMessengerContext);
   const availableSlashCommands = useAppSelector(
     selectSlashCommandComboBoxInputs,

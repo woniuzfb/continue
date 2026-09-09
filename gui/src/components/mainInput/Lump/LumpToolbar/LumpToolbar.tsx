@@ -21,6 +21,11 @@ import { PendingApplyStatesToolbar } from "./PendingApplyStatesToolbar";
 import { PendingToolCallToolbar } from "./PendingToolCallToolbar";
 import { StreamingToolbar } from "./StreamingToolbar";
 import { TtsActiveToolbar } from "./TtsActiveToolbar";
+import {
+  selectActiveCodeBlockApplyStates,
+  selectActiveIsInEdit,
+  selectActiveIsStreaming,
+} from "../../../../redux/selectors/sessionView";
 
 // Keyboard shortcut detection utilities
 const isExecuteToolCallShortcut = (event: KeyboardEvent) => {
@@ -50,8 +55,8 @@ export function LumpToolbar() {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
   const ttsActive = useAppSelector((state) => state.ui.ttsActive);
-  const isStreaming = useAppSelector((state) => state.session.isStreaming);
-  const isInEdit = useAppSelector((state) => state.session.isInEdit);
+  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
+  const isInEdit = useAppSelector((state) => selectActiveIsInEdit(state));
   const jetbrains = isJetBrains();
   const pendingToolCalls = useAppSelector(selectPendingToolCalls);
   const firstPendingToolCall = useAppSelector(selectFirstPendingToolCall);
@@ -59,7 +64,7 @@ export function LumpToolbar() {
     (state) => state.editModeState.applyState,
   );
   const applyStates = useAppSelector(
-    (state) => state.session.codeBlockApplyStates.states,
+    (state) => selectActiveCodeBlockApplyStates(state).states,
   );
   const pendingApplyStates = applyStates.filter(
     (state) => state.status === "done",

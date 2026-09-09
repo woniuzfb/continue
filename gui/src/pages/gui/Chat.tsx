@@ -63,6 +63,13 @@ import { EmptyChatBody } from "./EmptyChatBody";
 import { ExploreDialogWatcher } from "./ExploreDialogWatcher";
 import { useAutoScroll } from "./useAutoScroll";
 import { loadMoreHistory } from "../../redux/thunks/loadMoreHistory";
+import {
+  selectActiveHistory,
+  selectActiveIsHistoryLoading,
+  selectActiveIsStreaming,
+  selectActiveSessionId,
+  selectLastSessionId,
+} from "../../redux/selectors/sessionView";
 
 // Helper function to find the index of the latest conversation summary
 function findLatestSummaryIndex(history: ChatHistoryItem[]): number {
@@ -120,8 +127,8 @@ export function Chat() {
   const showSessionTabs = useAppSelector(
     (store) => store.config.config.ui?.showSessionTabs,
   );
-  const isStreaming = useAppSelector((state) => state.session.isStreaming);
-  const sessionId = useAppSelector((state) => state.session.id);
+  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
+  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
   const [stepsOpen] = useState<(boolean | undefined)[]>([]);
   const mainTextInputRef = useRef<HTMLInputElement>(null);
   const stepsDivRef = useRef<HTMLDivElement>(null);
@@ -133,9 +140,9 @@ export function Chat() {
   // Increments on every jump; a stale jump's timeout must not release the
   // suppression while a newer jump is still in flight.
   const jumpTokenRef = useRef(0);
-  const history = useAppSelector((state) => state.session.history);
-  const isHistoryLoading = useAppSelector(
-    (state) => state.session.isHistoryLoading,
+  const history = useAppSelector((state) => selectActiveHistory(state));
+  const isHistoryLoading = useAppSelector((state) =>
+    selectActiveIsHistoryLoading(state),
   );
   const showChatScrollbar = useAppSelector(
     (state) => state.config.config.ui?.showChatScrollbar,
@@ -143,7 +150,7 @@ export function Chat() {
   const codeToEdit = useAppSelector((state) => state.editModeState.codeToEdit);
   const isInEdit = useAppSelector((store) => store.session.isInEdit);
 
-  const lastSessionId = useAppSelector((state) => state.session.lastSessionId);
+  const lastSessionId = useAppSelector((state) => selectLastSessionId(state));
   const hasDismissedExploreDialog = useAppSelector(
     (state) => state.ui.hasDismissedExploreDialog,
   );
@@ -497,9 +504,8 @@ export function Chat() {
                     const marker = text.indexOf(
                       "\n\nFiles attached by the user:",
                     );
-                    return (marker >= 0
-                      ? text.slice(0, marker)
-                      : text
+                    return (
+                      marker >= 0 ? text.slice(0, marker) : text
                     ).trimEnd();
                   }}
                   clipboardIconClassName="h-3.5 w-3.5 text-gray-400"

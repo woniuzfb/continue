@@ -6,14 +6,18 @@ import { useMainEditor } from "../../../components/mainInput/TipTapEditor";
 import { ToolbarButtonWithTooltip } from "../../../components/StyledMarkdownPreview/StepContainerPreToolbar/ToolbarButtonWithTooltip";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { truncateHistoryToMessage } from "../../../redux/slices/sessionSlice";
+import {
+  selectActiveHistory,
+  selectActiveIsStreaming,
+} from "../../../redux/selectors/sessionView";
 
 export function ToolTruncateHistoryIcon({
   historyIndex,
 }: {
   historyIndex: number;
 }) {
-  const isStreaming = useAppSelector((state) => state.session.isStreaming);
-  const history = useAppSelector((state) => state.session.history);
+  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
+  const history = useAppSelector((state) => selectActiveHistory(state));
   const lastMessageIndex = useMemo(() => {
     return findLastIndex(history, (item) => !chatMessageIsEmpty(item.message));
   }, [history]);

@@ -25,6 +25,10 @@ import { CreateFileButton } from "./CreateFileButton";
 import { FileInfo } from "./FileInfo";
 import { InsertButton } from "./InsertButton";
 import { RunInTerminalButton } from "./RunInTerminalButton";
+import {
+  selectActiveCodeBlockApplyStates,
+  selectActiveHistory,
+} from "../../../redux/selectors/sessionView";
 
 export interface StepContainerPreToolbarProps {
   showToolCallStatusIcon?: boolean;
@@ -61,10 +65,12 @@ export function StepContainerPreToolbar({
 }: StepContainerPreToolbarProps) {
   const ideMessenger = useContext(IdeMessengerContext);
   // 只订阅长度而非整个 history 数组：旧实现让每个代码块（长会话
-  // 400+ 个）都订阅 state.session.history，会话内任何 mutation
+  // 400+ 个）都订阅 selectActiveHistory(state)，会话内任何 mutation
   // （流式 chunk、symbols 更新等）都会使全部代码块重跑选择器并
   // 因数组引用变化而重渲染。
-  const historyLength = useAppSelector((state) => state.session.history.length);
+  const historyLength = useAppSelector(
+    (state) => selectActiveHistory(state).length,
+  );
   const [isExpanded, setIsExpanded] = useState(expanded ?? true);
 
   const [relativeFilepathUri, setRelativeFilepathUri] = useState<string | null>(
@@ -74,7 +80,7 @@ export function StepContainerPreToolbar({
   const [isLoadingFileExists, setIsLoadingFileExists] = useState(false);
 
   const nextCodeBlockIndex = useAppSelector(
-    (state) => state.session.codeBlockApplyStates.curIndex,
+    (state) => selectActiveCodeBlockApplyStates(state).curIndex,
   );
 
   const applyState = useAppSelector((state) =>

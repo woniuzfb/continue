@@ -10,6 +10,11 @@ import { useCompactConversation } from "../../util/compactConversation";
 import { FeedbackButtons } from "../FeedbackButtons";
 import { CopyIconButton } from "../gui/CopyIconButton";
 import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
+import {
+  selectActiveContextPercentage,
+  selectActiveHistory,
+  selectActiveIsPruned,
+} from "../../redux/selectors/sessionView";
 
 export interface ResponseActionsProps {
   isTruncated: boolean;
@@ -28,11 +33,11 @@ export default function ResponseActions({
   onDelete,
   isLast,
 }: ResponseActionsProps) {
-  const contextPercentage = useAppSelector(
-    (state) => state.session.contextPercentage,
+  const contextPercentage = useAppSelector((state) =>
+    selectActiveContextPercentage(state),
   );
-  const isPruned = useAppSelector((state) => state.session.isPruned);
-  const history = useAppSelector((state) => state.session.history);
+  const isPruned = useAppSelector((state) => selectActiveIsPruned(state));
+  const history = useAppSelector((state) => selectActiveHistory(state));
   const excludeThinkingFromCopy = useAppSelector(
     (state) => state.config.config?.ui?.excludeThinkingFromCopy ?? true,
   );

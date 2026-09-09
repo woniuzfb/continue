@@ -14,6 +14,11 @@ import {
 import { AppDispatch, RootState } from "../../redux/store";
 import { loadSession, saveCurrentSession } from "../../redux/thunks/session";
 import { varWithFallback } from "../../styles/theme";
+import {
+  selectActiveHistory,
+  selectActiveSessionId,
+  selectActiveTitle,
+} from "../../redux/selectors/sessionView";
 
 // Haven't set up theme colors for tabs yet
 // Will keep it simple and choose from existing ones. Comments show vars we could use
@@ -129,12 +134,14 @@ const TabBarSpace = styled.div`
 
 export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
   const dispatch = useDispatch<AppDispatch>();
-  const currentSessionId = useSelector((state: RootState) => state.session.id);
-  const currentSessionTitle = useSelector(
-    (state: RootState) => state.session.title,
+  const currentSessionId = useSelector((state: RootState) =>
+    selectActiveSessionId(state),
+  );
+  const currentSessionTitle = useSelector((state: RootState) =>
+    selectActiveTitle(state),
   );
   const hasHistory = useSelector(
-    (state: RootState) => state.session.history.length > 0,
+    (state: RootState) => selectActiveHistory(state).length > 0,
   );
   const tabs = useSelector((state: RootState) => state.tabs.tabs);
 

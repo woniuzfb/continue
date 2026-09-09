@@ -26,6 +26,10 @@ import ConfirmationDialog from "../dialogs/ConfirmationDialog";
 import { Button } from "../ui";
 import { HistoryTableRow } from "./HistoryTableRow";
 import { groupSessionsByDate, parseDate } from "./util";
+import {
+  selectAllSessionMetadata,
+  selectIsSessionMetadataLoading,
+} from "../../redux/selectors/sessionView";
 
 export function History() {
   const dispatch = useAppDispatch();
@@ -47,11 +51,11 @@ export function History() {
     }),
   ).current;
 
-  const allSessionMetadata = useAppSelector(
-    (state) => state.session.allSessionMetadata,
+  const allSessionMetadata = useAppSelector((state) =>
+    selectAllSessionMetadata(state),
   );
-  const isSessionMetadataLoading = useAppSelector(
-    (state) => state.session.isSessionMetadataLoading,
+  const isSessionMetadataLoading = useAppSelector((state) =>
+    selectIsSessionMetadataLoading(state),
   );
 
   useEffect(() => {

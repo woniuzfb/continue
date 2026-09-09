@@ -35,6 +35,7 @@ import { isJetBrains } from "../util";
 import { setLocalStorage } from "../util/localStorage";
 import { migrateLocalStorage } from "../util/migrateLocalStorage";
 import { useWebviewListener } from "./useWebviewListener";
+import { selectActiveSessionId } from "../redux/selectors/sessionView";
 
 function ParallelListeners() {
   const dispatch = useAppDispatch();
@@ -50,7 +51,7 @@ function ParallelListeners() {
   const hasDoneInitialConfigLoad = useRef(false);
 
   // Load symbols for chat on any session change
-  const sessionId = useAppSelector((state) => state.session.id);
+  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
   const lastSessionId = useAppSelector((store) => store.session.lastSessionId);
   const [initialSessionId] = useState(sessionId || lastSessionId);
 

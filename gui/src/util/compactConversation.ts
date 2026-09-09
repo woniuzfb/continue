@@ -8,16 +8,23 @@ import {
 } from "../redux/slices/sessionSlice";
 import { saveCurrentSession } from "../redux/thunks/session";
 import { loadFullHistory } from "../redux/thunks/loadFullHistory";
+import {
+  selectActiveHistoryLoadedOffset,
+  selectActiveHistoryTruncated,
+  selectActiveSessionId,
+} from "../redux/selectors/sessionView";
 
 export const useCompactConversation = () => {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
-  const currentSessionId = useAppSelector((state) => state.session.id);
-  const historyTruncated = useAppSelector(
-    (state) => state.session.historyTruncated,
+  const currentSessionId = useAppSelector((state) =>
+    selectActiveSessionId(state),
+  );
+  const historyTruncated = useAppSelector((state) =>
+    selectActiveHistoryTruncated(state),
   );
   const historyLoadedOffset = useAppSelector(
-    (state) => state.session.historyLoadedOffset ?? 0,
+    (state) => selectActiveHistoryLoadedOffset(state) ?? 0,
   );
 
   return async (index: number) => {
@@ -86,11 +93,11 @@ export const useCompactConversation = () => {
 
 export const useDeleteCompaction = () => {
   const dispatch = useAppDispatch();
-  const historyTruncated = useAppSelector(
-    (state) => state.session.historyTruncated,
+  const historyTruncated = useAppSelector((state) =>
+    selectActiveHistoryTruncated(state),
   );
   const historyLoadedOffset = useAppSelector(
-    (state) => state.session.historyLoadedOffset ?? 0,
+    (state) => selectActiveHistoryLoadedOffset(state) ?? 0,
   );
 
   return async (index: number) => {

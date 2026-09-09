@@ -20,6 +20,7 @@ import {
 import { isShareSessionSupported } from "../../util";
 import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
 import { ToolTip } from "../gui/Tooltip";
+import { selectActiveSessionId } from "../../redux/selectors/sessionView";
 
 const shareSessionSupported = isShareSessionSupported();
 
@@ -42,7 +43,9 @@ export function HistoryTableRow({
   const [sessionTitleEditValue, setSessionTitleEditValue] = useState(
     sessionMetadata.title,
   );
-  const currentSessionId = useAppSelector((state) => state.session.id);
+  const currentSessionId = useAppSelector((state) =>
+    selectActiveSessionId(state),
+  );
 
   useEffect(() => {
     setSessionTitleEditValue(sessionMetadata.title);
