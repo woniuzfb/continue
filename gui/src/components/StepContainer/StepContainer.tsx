@@ -11,10 +11,10 @@ import ConversationSummary from "./ConversationSummary";
 import ResponseActions from "./ResponseActions";
 import ThinkingIndicator from "./ThinkingIndicator";
 import {
-  selectActiveHistory,
-  selectActiveIsStreaming,
-  selectActiveSessionId,
+  useSessionHistory,
+  useSessionIsStreaming,
 } from "../../redux/selectors/sessionView";
+import { useSessionId } from "../mainInput/TipTapEditor/SessionScope";
 
 interface StepContainerProps {
   item: ChatHistoryItem;
@@ -26,10 +26,10 @@ interface StepContainerProps {
 
 export default function StepContainer(props: StepContainerProps) {
   const dispatch = useDispatch();
-  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
-  const activeHistory = useAppSelector((state) => selectActiveHistory(state));
+  const sessionId = useSessionId();
+  const activeHistory = useSessionHistory();
   const [isTruncated, setIsTruncated] = useState(false);
-  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
+  const isStreaming = useSessionIsStreaming();
   const uiConfig = useAppSelector(selectUIConfig);
 
   // Calculate dimming and indicator state based on latest summary index
@@ -39,9 +39,7 @@ export default function StepContainer(props: StepContainerProps) {
   const isLatestSummary =
     latestSummaryIndex !== -1 && props.index === latestSummaryIndex;
 
-  const historyItemAfterThis = useAppSelector(
-    (state) => selectActiveHistory(state)[props.index + 1],
-  );
+  const historyItemAfterThis = useSessionHistory()[props.index + 1];
   // 只有当工具调用仍在进行（generating/generated/calling）时才隐藏按钮。
   // 流被中断后，clearDanglingMessages 会把悬空的工具调用标记为 canceled/errored，
   // 此时 toolCallStates 仍是非空数组，若直接判断 truthy 会导致按钮永久消失。

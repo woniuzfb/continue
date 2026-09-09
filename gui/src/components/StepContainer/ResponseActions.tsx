@@ -11,9 +11,8 @@ import { FeedbackButtons } from "../FeedbackButtons";
 import { CopyIconButton } from "../gui/CopyIconButton";
 import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
 import {
-  selectActiveContextPercentage,
-  selectActiveHistory,
-  selectActiveIsPruned,
+  useSessionContextMetricsFields,
+  useSessionHistory,
 } from "../../redux/selectors/sessionView";
 
 export interface ResponseActionsProps {
@@ -33,11 +32,9 @@ export default function ResponseActions({
   onDelete,
   isLast,
 }: ResponseActionsProps) {
-  const contextPercentage = useAppSelector((state) =>
-    selectActiveContextPercentage(state),
-  );
-  const isPruned = useAppSelector((state) => selectActiveIsPruned(state));
-  const history = useAppSelector((state) => selectActiveHistory(state));
+  const { contextPercentage, isPruned } = useSessionContextMetricsFields();
+
+  const history = useSessionHistory();
   const excludeThinkingFromCopy = useAppSelector(
     (state) => state.config.config?.ui?.excludeThinkingFromCopy ?? true,
   );

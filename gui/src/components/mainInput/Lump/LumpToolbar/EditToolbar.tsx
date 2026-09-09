@@ -5,17 +5,18 @@ import { useAppDispatch, useAppSelector } from "../../../../redux/hooks";
 import { exitEdit } from "../../../../redux/thunks/edit";
 import { getEditFilenameAndRangeText } from "../../util";
 import {
-  selectActiveCodeToEdit,
-  selectActiveMode,
+  useSessionEditState,
+  useSessionMode,
 } from "../../../../redux/selectors/sessionView";
 
 export function EditToolbar() {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
-  const mode = useAppSelector((state) => selectActiveMode(state));
-  const codeToEdit = useAppSelector(
-    (state) => selectActiveCodeToEdit(state)[0],
-  );
+  const mode = useSessionMode();
+  const codeToEdit = useSessionEditState()?.codeToEdit[0];
+  if (!codeToEdit) {
+    return null;
+  }
 
   const handleBackClick = async () => {
     void dispatch(exitEdit({}));

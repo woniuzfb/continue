@@ -4,13 +4,11 @@ import { useAppDispatch, useAppSelector } from "../../../../redux/hooks";
 import { exitEdit } from "../../../../redux/thunks/edit";
 import AcceptRejectDiffButtons from "../../../AcceptRejectDiffButtons";
 import { useMainEditor } from "../../TipTapEditor";
-import { selectActiveEditApplyState } from "../../../../redux/selectors/sessionView";
+import { useSessionEditState } from "../../../../redux/selectors/sessionView";
 
 export function EditOutcomeToolbar() {
   const dispatch = useAppDispatch();
-  const editApplyState = useAppSelector((state) =>
-    selectActiveEditApplyState(state),
-  );
+  const editApplyState = useSessionEditState()?.applyState;
   const { mainEditor } = useMainEditor();
   const ideMessenger = useContext(IdeMessengerContext);
 

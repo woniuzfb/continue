@@ -13,10 +13,8 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
 import { setActiveSessionModeAndSave } from "../../redux/thunks/sessionChanges";
-import {
-  selectActiveMode,
-  selectActiveSessionId,
-} from "../../redux/selectors/sessionView";
+import { useSessionMode } from "../../redux/selectors/sessionView";
+import { useSessionId } from "../mainInput/TipTapEditor/SessionScope";
 import { getFontSize, getMetaKeyLabel } from "../../util";
 import { ToolTip } from "../gui/Tooltip";
 import { useMainEditor } from "../mainInput/TipTapEditor";
@@ -25,8 +23,8 @@ import { ModeIcon } from "./ModeIcon";
 
 export function ModeSelect() {
   const dispatch = useAppDispatch();
-  const sessionId = useAppSelector(selectActiveSessionId);
-  const mode = useAppSelector((store) => selectActiveMode(store));
+  const sessionId = useSessionId();
+  const mode = useSessionMode();
   const selectedModel = useAppSelector(selectSelectedChatModel);
 
   const isGoodAtAgentMode = useMemo(() => {

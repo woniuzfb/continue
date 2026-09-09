@@ -31,10 +31,10 @@ import {
 } from "./getSuggestion";
 import { handleImageFile } from "./imageUtils";
 import {
-  selectActiveCodeToEdit,
-  selectActiveHistory,
-  selectActiveIsInEdit,
-  selectActiveIsStreaming,
+  useSessionEditState,
+  useSessionHistory,
+  useSessionIsInEdit,
+  useSessionIsStreaming,
 } from "../../../../redux/selectors/sessionView";
 
 export function getPlaceholderText(
@@ -119,13 +119,11 @@ export function createEditorConfig(options: {
 
   const { getSubmenuContextItems } = useSubmenuContextProviders();
   const defaultModel = useAppSelector(selectSelectedChatModel);
-  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
+  const isStreaming = useSessionIsStreaming();
   const useActiveFile = useAppSelector(selectUseActiveFile);
-  const historyLength = useAppSelector(
-    (store) => selectActiveHistory(store).length,
-  );
-  const codeToEdit = useAppSelector((state) => selectActiveCodeToEdit(state));
-  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
+  const historyLength = useSessionHistory().length;
+  const codeToEdit = useSessionEditState()?.codeToEdit ?? [];
+  const isInEdit = useSessionIsInEdit();
   const isInEditRef = useUpdatingRef(isInEdit);
 
   const inSubmenuRef = useRef<string | undefined>(undefined);

@@ -1,35 +1,34 @@
 import React from "react";
-import { Provider, useStore } from "react-redux";
 import { useAppSelector } from "../../redux/hooks";
 import {
   selectActiveSessionId,
   selectTabOrder,
 } from "../../redux/selectors/sessions";
-import { getSessionScopedStore } from "../../redux/sessionScopedStore";
-import type { RootState } from "../../redux/store";
 import { MainEditorProvider } from "../../components/mainInput/TipTapEditor";
+import { SessionScope } from "../../components/mainInput/TipTapEditor/SessionScope";
 import { Chat } from "./Chat";
 
 /**
  * 方案.md §九.1/§九.2: every open tab stays mounted with its own editor and its
- * own session view. `display: none` keeps the inactive trees out of layout and
+ * own session scope. `display: none` keeps inactive trees out of layout and
  * paint without unmounting them, so undo stacks, selections and plugin state
- * survive a tab switch. Each tree reads a session-scoped store facade, so its
- * selectors only ever see that tab's session.
+ * survive a tab switch.
+ *
+ * The session identity is passed explicitly: a `SessionScope` carries the
+ * `sessionId` (never a faked Redux store), every session-scoped selector reads
+ * `sessionsById[sessionId]`, and every action/thunk still carries the id in its
+ * payload. `activeSessionId` keeps exactly one real meaning: the visible tab.
  */
 
 const MemoizedChat = React.memo(Chat);
 
 function SessionTab({ sessionId }: { sessionId: string }) {
-  const realStore = useStore<RootState>();
-  const scopedStore = getSessionScopedStore(realStore, sessionId);
-
   return (
-    <Provider store={scopedStore as any}>
+    <SessionScope sessionId={sessionId}>
       <MainEditorProvider sessionId={sessionId}>
         <MemoizedChat />
       </MainEditorProvider>
-    </Provider>
+    </SessionScope>
   );
 }
 

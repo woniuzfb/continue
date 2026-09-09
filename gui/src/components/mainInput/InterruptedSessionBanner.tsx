@@ -1,10 +1,12 @@
-import { useAppDispatch, useAppSelector } from "../../redux/hooks";
-import { selectActiveSessionId } from "../../redux/selectors/sessionView";
+import { useAppDispatch } from "../../redux/hooks";
+
 import {
   dismissInterruptedSession,
   retryInterruptedSession,
 } from "../../redux/thunks/sessionInterruption";
 import { Button } from "../ui";
+import { useSessionId } from "./TipTapEditor/SessionScope";
+import { useSessionInterrupted } from "../../redux/selectors/sessionView";
 
 /**
  * Restart recovery entry (方案.md §八): a loaded session whose turn was cut off
@@ -13,12 +15,10 @@ import { Button } from "../ui";
  */
 export default function InterruptedSessionBanner() {
   const dispatch = useAppDispatch();
-  const sessionId = useAppSelector(selectActiveSessionId);
-  const interrupted = useAppSelector((state) =>
-    sessionId ? state.sessions.sessionsById[sessionId]?.interrupted : undefined,
-  );
+  const sessionId = useSessionId();
+  const interrupted = useSessionInterrupted();
 
-  if (!sessionId || !interrupted) {
+  if (!interrupted) {
     return null;
   }
 

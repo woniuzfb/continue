@@ -10,7 +10,7 @@ import { AppDispatch } from "../../../redux/store";
 
 import { CodeBlock, PromptBlock } from "./extensions";
 import { insertCurrentFileContextMention } from "./utils/insertCurrentFileContextMention";
-import { selectActiveIsInEdit } from "../../../redux/selectors/sessionView";
+import { useSessionIsInEdit } from "../../../redux/selectors/sessionView";
 import { saveActiveSession } from "../../../redux/thunks/sessionPersistence";
 import { openSessionTab } from "../../../redux/thunks/sessionLifecycle";
 
@@ -40,7 +40,7 @@ export function useMainEditorWebviewListeners({
   const useCurrentFileAsContext = useAppSelector(
     (state) => state.config.config.experimental?.useCurrentFileAsContext,
   );
-  const isInEdit = useAppSelector((state) => selectActiveIsInEdit(state));
+  const isInEdit = useSessionIsInEdit();
 
   useWebviewListener(
     "isContinueInputFocused",

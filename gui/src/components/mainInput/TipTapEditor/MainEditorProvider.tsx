@@ -13,7 +13,6 @@ import { setSessionMainEditorContentTrigger } from "../../../redux/slices/sessio
 import { useMainEditorWebviewListeners } from "./useMainEditorWebviewListeners";
 
 import { useStore } from "react-redux";
-import { realStoreOf } from "../../../redux/sessionScopedStore";
 import type { RootState } from "../../../redux/store";
 
 /**
@@ -171,7 +170,7 @@ export const MainEditorProvider: React.FC<{
 export const useMainEditor = (): MainEditorContextType => {
   const context = useContext(MainEditorContext);
   const realActiveSessionId = useAppSelector(
-    (state) => realStoreOf(useStore())?.getState?.().sessions.activeSessionId,
+    (state) => state.sessions.activeSessionId,
   );
   // eslint-disable-next-line react-hooks/rules-of-hooks
   useSyncExternalStore(

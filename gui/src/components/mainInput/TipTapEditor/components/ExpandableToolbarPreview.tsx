@@ -16,7 +16,7 @@ import {
 import { useAppSelector } from "../../../../redux/hooks";
 import { getFontSize } from "../../../../util";
 import HeaderButtonWithToolTip from "../../../gui/HeaderButtonWithToolTip";
-import { selectActiveNewestToolbarPreviewForInput } from "../../../../redux/selectors/sessionView";
+import { useSessionNewestToolbarPreviewForInput } from "../../../../redux/selectors/sessionView";
 
 const MAX_PREVIEW_HEIGHT = 100;
 const MAX_EXPANED_PREVIEW_HEIGHT = MAX_PREVIEW_HEIGHT * 3;
@@ -98,7 +98,7 @@ export function ExpandableToolbarPreview(props: ExpandableToolbarPreviewProps) {
   // Get toolbar visibility state from Redux if inputId and itemId are provided
   const newestCodeblockForInputId = useAppSelector((store) =>
     props.inputId
-      ? selectActiveNewestToolbarPreviewForInput(store)[props.inputId]
+      ? useSessionNewestToolbarPreviewForInput()[props.inputId]
       : undefined,
   );
 

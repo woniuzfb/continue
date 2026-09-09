@@ -13,7 +13,8 @@ import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { updateSelectedModelByRole } from "../../redux/thunks/updateSelectedModelByRole";
 import { setSessionChatModelAndSave } from "../../redux/thunks/sessionChanges";
-import { selectActiveSessionId } from "../../redux/selectors/sessionView";
+import { useSessionIsInEdit } from "../../redux/selectors/sessionView";
+import { useSessionId } from "../mainInput/TipTapEditor/SessionScope";
 import { getMetaKeyLabel, isMetaEquivalentKeyPressed } from "../../util";
 import { CONFIG_ROUTES } from "../../util/navigation";
 import {
@@ -25,7 +26,6 @@ import {
   useFontSize,
 } from "../ui";
 import { Divider } from "../ui/Divider";
-import { selectActiveIsInEdit } from "../../redux/selectors/sessionView";
 
 interface ModelOptionProps {
   option: Option;
@@ -124,10 +124,8 @@ function ModelSelect() {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
 
-  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
-  const activeSessionId = useAppSelector((state) =>
-    selectActiveSessionId(state),
-  );
+  const isInEdit = useSessionIsInEdit();
+  const activeSessionId = useSessionId();
   const config = useAppSelector((state) => state.config.config);
   const isConfigLoading = useAppSelector((state) => state.config.loading);
   const buttonRef = useRef<HTMLButtonElement>(null);

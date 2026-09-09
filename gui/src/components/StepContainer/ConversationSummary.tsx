@@ -3,11 +3,12 @@ import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/solid";
 import { ChatHistoryItem } from "core";
 import { useState } from "react";
 import { useAppSelector } from "../../redux/hooks";
-import { selectActiveCompactionLoading } from "../../redux/selectors/sessionView";
+
 import { useDeleteCompaction } from "../../util/compactConversation";
 import { AnimatedEllipsis } from "../AnimatedEllipsis";
 import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
 import StyledMarkdownPreview from "../StyledMarkdownPreview";
+import { useSessionCompactionLoading } from "../../redux/selectors/sessionView";
 
 interface ConversationSummaryProps {
   item: ChatHistoryItem;
@@ -17,9 +18,7 @@ interface ConversationSummaryProps {
 export default function ConversationSummary(props: ConversationSummaryProps) {
   const [open, setOpen] = useState(true);
   const messageId = (props.item.message as { id?: string }).id;
-  const isLoading = useAppSelector((state) =>
-    selectActiveCompactionLoading(state, messageId),
-  );
+  const isLoading = useSessionCompactionLoading(messageId);
   const deleteCompaction = useDeleteCompaction();
 
   if (!props.item.conversationSummary && !isLoading) {

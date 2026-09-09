@@ -1,3 +1,5 @@
+import { useAppSelector } from "../hooks";
+import { useSessionId } from "../../components/mainInput/TipTapEditor/SessionScope";
 import type { RootState } from "../store";
 import type { SessionRuntimeState } from "../slices/sessionsSlice";
 
@@ -11,6 +13,22 @@ import type { SessionRuntimeState } from "../slices/sessionsSlice";
 
 function activeRuntime(state: RootState): SessionRuntimeState | undefined {
   const sessionId = state.sessions.activeSessionId;
+  return sessionId ? state.sessions.sessionsById[sessionId] : undefined;
+}
+
+/** History of an explicit session (方案.md §九.0). */
+export function selectActiveHistoryOf(
+  state: RootState,
+  sessionId: string,
+): SessionRuntimeState["history"] {
+  return state.sessions.sessionsById[sessionId]?.history ?? EMPTY_HISTORY;
+}
+
+/** Runtime of an explicit session (方案.md §九.0). */
+export function activeRuntimeOf(
+  state: RootState,
+  sessionId: string,
+): SessionRuntimeState | undefined {
   return sessionId ? state.sessions.sessionsById[sessionId] : undefined;
 }
 
@@ -151,3 +169,227 @@ export const selectAllSessionMetadata = (state: RootState) =>
 
 export const selectIsSessionMetadataLoading = (state: RootState): boolean =>
   state.sessionCatalog.isLoading;
+
+// ── Session-scoped hooks (方案.md §九.0) ────────────────────────────────
+// Every component inside a <SessionScope> uses these instead of the
+// `selectActive*` functions: they read sessionsById[sessionId] for the tree's
+// own session and never depend on the global active tab.
+
+export function useSessionRuntime() {
+  const sessionId = useSessionId();
+  return useAppSelector((state) => activeRuntimeOf(state, sessionId));
+}
+
+export function useSessionHistory() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.history ?? EMPTY_HISTORY,
+  );
+}
+
+export function useSessionIsStreaming(): boolean {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.stream.status === "streaming",
+  );
+}
+
+export function useSessionMode() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.mode ?? "chat",
+  );
+}
+
+export function useSessionIsInEdit(): boolean {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.isInEdit ?? false,
+  );
+}
+
+export function useSessionCodeBlockApplyStates() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) =>
+      activeRuntimeOf(state, sessionId)?.codeBlockApplyStates ??
+      EMPTY_APPLY_STATES,
+  );
+}
+
+export function useSessionSymbols() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.symbols ?? EMPTY_SYMBOLS,
+  );
+}
+
+export function useSessionInlineErrorMessage() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.inlineErrorMessage,
+  );
+}
+
+export function useSessionContextMetricsFields() {
+  const sessionId = useSessionId();
+  return useAppSelector((state) => {
+    const session = activeRuntimeOf(state, sessionId);
+    return {
+      isPruned: session?.isPruned,
+      contextPercentage: session?.contextPercentage,
+      contextInputTokens: session?.contextInputTokens,
+      contextLength: session?.contextLength,
+      contextMetrics: session?.contextMetrics,
+    };
+  });
+}
+
+export function useSessionEditState() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.editState,
+  );
+}
+
+export function useSessionPagination() {
+  const sessionId = useSessionId();
+  return useAppSelector((state) => {
+    const session = activeRuntimeOf(state, sessionId);
+    return (
+      session?.pagination ?? {
+        truncated: false,
+        loadedOffset: 0,
+        hasMore: false,
+        loading: false,
+        requestGeneration: 0,
+        persistPending: false,
+      }
+    );
+  });
+}
+
+export function useSessionPersistence() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.persistence,
+  );
+}
+
+export function useSessionInterrupted(): boolean {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.interrupted ?? false,
+  );
+}
+
+export function useSessionPendingApprovalCount(): number {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.pendingApprovalCount ?? 0,
+  );
+}
+
+export function useSessionMainEditorDraft() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.mainEditorDraft,
+  );
+}
+
+export function useSessionMainEditorContentTrigger() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.mainEditorContentTrigger,
+  );
+}
+
+export function useSessionMainEditorAttachmentsRestore() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.mainEditorAttachmentsRestore,
+  );
+}
+
+export function useSessionNewestToolbarPreviewForInput() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) =>
+      activeRuntimeOf(state, sessionId)?.newestToolbarPreviewForInput ??
+      EMPTY_PREVIEWS,
+  );
+}
+
+export function useSessionChatModelTitle() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.chatModelTitle,
+  );
+}
+
+export function useSessionHasReasoningEnabled() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.hasReasoningEnabled,
+  );
+}
+
+export function useSessionHistoryTruncated(): boolean {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.pagination.truncated ?? false,
+  );
+}
+
+export function useSessionHistoryLoadedOffset(): number {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.pagination.loadedOffset ?? 0,
+  );
+}
+
+export function useSessionHasMoreHistory(): boolean {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.pagination.hasMore ?? false,
+  );
+}
+
+export function useSessionIsHistoryLoading(): boolean {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.pagination.loading ?? false,
+  );
+}
+
+export function useSessionCompactionLoading(messageId: string | undefined) {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) =>
+      !!messageId &&
+      !!activeRuntimeOf(state, sessionId)?.compactionLoading[messageId],
+  );
+}
+
+export function useSessionScrollState() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.scrollState,
+  );
+}
+
+export function useSessionDontMergeReplyBubbles(): boolean {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.dontMergeReplyBubbles ?? true,
+  );
+}
+
+export function useSessionDontMergeHistoricalReplyBubbles(): boolean {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) =>
+      activeRuntimeOf(state, sessionId)?.dontMergeHistoricalReplyBubbles ??
+      true,
+  );
+}

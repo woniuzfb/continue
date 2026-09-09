@@ -2,18 +2,17 @@ import { useContext } from "react";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { setSessionInlineError } from "../../redux/slices/sessionsSlice";
-import { selectActiveSessionId } from "../../redux/selectors/sessionView";
-import { selectActiveInlineErrorMessage } from "../../redux/selectors/sessionView";
+
+import { useSessionInlineErrorMessage } from "../../redux/selectors/sessionView";
+import { useSessionId } from "./TipTapEditor/SessionScope";
 
 export type InlineErrorMessageType = "out-of-context";
 
 export default function InlineErrorMessage() {
   const dispatch = useAppDispatch();
-  const sessionId = useAppSelector(selectActiveSessionId);
+  const sessionId = useSessionId();
   const ideMessenger = useContext(IdeMessengerContext);
-  const inlineErrorMessage = useAppSelector((state) =>
-    selectActiveInlineErrorMessage(state),
-  );
+  const inlineErrorMessage = useSessionInlineErrorMessage();
   if (inlineErrorMessage === "out-of-context") {
     return (
       <div

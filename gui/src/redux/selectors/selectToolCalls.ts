@@ -83,3 +83,58 @@ export const selectDoneApplyStates = createSelector(
   [selectCompatApplyStates],
   (states) => states.filter((applyState) => applyState.status === "done"),
 );
+
+// ── Explicit-session variants (方案.md §九.0) ──────────────────────────
+
+const historyOf = (state: RootState, sessionId: string) =>
+  state.sessions.sessionsById[sessionId]?.history ?? [];
+
+const applyStatesOf = (state: RootState, sessionId: string) =>
+  state.sessions.sessionsById[sessionId]?.codeBlockApplyStates.states ?? [];
+
+export const selectPendingToolCallsForSession = (
+  state: RootState,
+  sessionId: string,
+) => findAllCurToolCallsByStatus(historyOf(state, sessionId), "generated");
+
+export const selectDoneApplyStatesForSession = (
+  state: RootState,
+  sessionId: string,
+) =>
+  applyStatesOf(state, sessionId).filter(
+    (applyState) => applyState.status === "done",
+  );
+
+export const selectToolCallByIdForSession = (
+  state: RootState,
+  sessionId: string,
+  toolCallId: string,
+) => findToolCallById(historyOf(state, sessionId), toolCallId);
+
+export const selectApplyStateByStreamIdForSession = (
+  state: RootState,
+  sessionId: string,
+  streamId: string,
+) =>
+  applyStatesOf(state, sessionId).findLast(
+    (applyState) => applyState.streamId === streamId,
+  );
+
+export const selectApplyStateByToolCallIdForSession = (
+  state: RootState,
+  sessionId: string,
+  toolCallId: string,
+) =>
+  applyStatesOf(state, sessionId).findLast(
+    (applyState) => applyState.toolCallId === toolCallId,
+  );
+
+export const selectCurrentToolCallsForSession = (
+  state: RootState,
+  sessionId: string,
+) => findAllCurToolCalls(historyOf(state, sessionId));
+
+export const selectFirstPendingToolCallForSession = (
+  state: RootState,
+  sessionId: string,
+) => selectPendingToolCallsForSession(state, sessionId)[0] || undefined;

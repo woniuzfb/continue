@@ -169,6 +169,7 @@ export const submitSessionInput = createAsyncThunk<
           content,
           legacyCommandWithInput,
         } = await resolveEditorContent({
+          sessionId,
           editorState,
           modifiers,
           ideMessenger: extra.ideMessenger,

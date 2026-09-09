@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
 import { initialSessionRuntime } from "../../redux/slices/sessionsSlice";
 import SessionSaveErrorBanner from "./SessionSaveErrorBanner";
+import { SessionScope } from "./TipTapEditor/SessionScope";
 
 function makeStore(persistenceState: "clean" | "failed") {
   const s1 = initialSessionRuntime("s1", "Chat 1", {
@@ -41,7 +42,9 @@ describe("SessionSaveErrorBanner", () => {
     const store = makeStore("failed");
     render(
       <Provider store={store}>
-        <SessionSaveErrorBanner />
+        <SessionScope sessionId="s1">
+          <SessionSaveErrorBanner />
+        </SessionScope>
       </Provider>,
     );
 
@@ -53,7 +56,9 @@ describe("SessionSaveErrorBanner", () => {
     const store = makeStore("clean");
     const { container } = render(
       <Provider store={store}>
-        <SessionSaveErrorBanner />
+        <SessionScope sessionId="s1">
+          <SessionSaveErrorBanner />
+        </SessionScope>
       </Provider>,
     );
 

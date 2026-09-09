@@ -70,16 +70,23 @@ import { ExploreDialogWatcher } from "./ExploreDialogWatcher";
 import { useAutoScroll } from "./useAutoScroll";
 
 import {
-  selectActiveCodeToEdit,
-  selectActiveHasMoreHistory,
-  selectActiveHistory,
-  selectActiveIsHistoryLoading,
-  selectActiveIsInEdit,
-  selectActiveIsStreaming,
-  selectActiveMode,
-  selectActiveSessionId,
+  selectActiveHistoryOf,
   selectLastSessionId,
+  useSessionEditState,
+  useSessionHistory,
+  useSessionIsInEdit,
+  useSessionIsStreaming,
+  useSessionMode,
+  useSessionPagination,
 } from "../../redux/selectors/sessionView";
+import {
+  useIsVisibleSession,
+  useSessionId,
+} from "../../components/mainInput/TipTapEditor/SessionScope";
+import {
+  selectDoneApplyStatesForSession,
+  selectPendingToolCallsForSession,
+} from "../../redux/selectors/selectToolCalls";
 
 // Helper function to find the index of the latest conversation summary
 function findLatestSummaryIndex(history: ChatHistoryItem[]): number {
@@ -137,8 +144,11 @@ export function Chat() {
   const showSessionTabs = useAppSelector(
     (store) => store.config.config.ui?.showSessionTabs,
   );
-  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
-  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
+  // 方案.md §九.0: this tree belongs to one session; every read is scoped to it.
+  const sessionId = useSessionId();
+  const isStreaming = useSessionIsStreaming();
+  const mode = useSessionMode();
+  const visible = useIsVisibleSession();
   const [stepsOpen] = useState<(boolean | undefined)[]>([]);
   const mainTextInputRef = useRef<HTMLInputElement>(null);
   const stepsDivRef = useRef<HTMLDivElement>(null);
@@ -150,15 +160,13 @@ export function Chat() {
   // Increments on every jump; a stale jump's timeout must not release the
   // suppression while a newer jump is still in flight.
   const jumpTokenRef = useRef(0);
-  const history = useAppSelector((state) => selectActiveHistory(state));
-  const isHistoryLoading = useAppSelector((state) =>
-    selectActiveIsHistoryLoading(state),
-  );
+  const history = useSessionHistory();
+  const isHistoryLoading = useSessionPagination().loading;
   const showChatScrollbar = useAppSelector(
     (state) => state.config.config.ui?.showChatScrollbar,
   );
-  const codeToEdit = useAppSelector((state) => selectActiveCodeToEdit(state));
-  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
+  const codeToEdit = useSessionEditState()?.codeToEdit ?? [];
+  const isInEdit = useSessionIsInEdit();
 
   const lastSessionId = useAppSelector((state) => selectLastSessionId(state));
   const hasDismissedExploreDialog = useAppSelector(
@@ -203,13 +211,19 @@ export function Chat() {
       attachments?: AttachedFile[],
     ): Promise<boolean> => {
       const stateSnapshot = reduxStore.getState();
-      const latestPendingToolCalls = selectPendingToolCalls(stateSnapshot);
-      const latestPendingApplyStates = selectDoneApplyStates(stateSnapshot);
-      const isCurrentlyInEdit = selectActiveIsInEdit(stateSnapshot);
-      const codeToEditSnapshot = selectActiveCodeToEdit(stateSnapshot);
+      const latestPendingToolCalls = selectPendingToolCallsForSession(
+        stateSnapshot,
+        sessionId,
+      );
+      const latestPendingApplyStates = selectDoneApplyStatesForSession(
+        stateSnapshot,
+        sessionId,
+      );
+      const isCurrentlyInEdit = isInEdit;
+      const codeToEditSnapshot = codeToEdit;
       const selectedModelByRole =
         stateSnapshot.config.config.selectedModelByRole;
-      const currentMode = selectActiveMode(stateSnapshot);
+      const currentMode = mode;
 
       // Cancel all pending tool calls
       latestPendingToolCalls.forEach((toolCallState) => {
@@ -246,7 +260,7 @@ export function Chat() {
       } else {
         const sendPromise = dispatch(
           submitSessionInput({
-            sessionId: selectActiveSessionId(reduxStore.getState()),
+            sessionId,
             editorState,
             modifiers,
             index,
@@ -295,7 +309,7 @@ export function Chat() {
     async (data) => {
       // Update tool call output in Redux store
       const state = reduxStore.getState();
-      const targetSessionId = selectActiveSessionId(state);
+      const targetSessionId = sessionId;
       const target = targetSessionId
         ? findSessionToolCallTarget(
             state.sessions.sessionsById[targetSessionId]?.history ?? [],
@@ -334,7 +348,7 @@ export function Chat() {
    */
   const jumpToNextUserMessage = useCallback(
     (currentMessageId: string) => {
-      const h = selectActiveHistory(reduxStore.getState());
+      const h = selectActiveHistoryOf(reduxStore.getState(), sessionId);
       const idx = h.findIndex((item) => item.message.id === currentMessageId);
       if (idx < 0) {
         // Stale message id (history was replaced): nothing to jump to.
@@ -382,7 +396,7 @@ export function Chat() {
         // Stale message id (history was replaced): never load pages just to
         // jump; abort instead.
         if (
-          !selectActiveHistory(reduxStore.getState()).some(
+          !selectActiveHistoryOf(reduxStore.getState(), sessionId).some(
             (item) => item.message.id === currentMessageId,
           )
         ) {
@@ -391,7 +405,7 @@ export function Chat() {
         // Always read the freshest history: prepends shift indices, so the
         // current message's position must be recomputed on every call.
         const findTarget = (): string | undefined => {
-          const h = selectActiveHistory(reduxStore.getState());
+          const h = selectActiveHistoryOf(reduxStore.getState(), sessionId);
           const idx = h.findIndex(
             (item) => item.message.id === currentMessageId,
           );
@@ -404,29 +418,35 @@ export function Chat() {
         };
 
         let target = findTarget();
-        let prevLength = selectActiveHistory(reduxStore.getState()).length;
+        let prevLength = selectActiveHistoryOf(
+          reduxStore.getState(),
+          sessionId,
+        ).length;
         // Load pages of earlier history until the target shows up. Guarded by
         // hasMoreHistory / isHistoryLoading; stops if a load makes no progress
         // (failure or empty page) so it can never spin forever.
         while (!target) {
           const state = reduxStore.getState();
-          if (selectActiveIsHistoryLoading(state)) {
+          if (state.sessions.sessionsById[sessionId]?.pagination.loading) {
             await new Promise((r) => setTimeout(r, 100));
             continue;
           }
-          if (!selectActiveHasMoreHistory(state)) {
+          if (!state.sessions.sessionsById[sessionId]?.pagination.hasMore) {
             break;
           }
           await dispatch(
             loadMoreHistoryThunk({
-              sessionId: selectActiveSessionId(state),
+              sessionId,
               requestGeneration:
-                state.sessions.sessionsById[selectActiveSessionId(state)]
-                  ?.pagination.requestGeneration ?? 0,
+                state.sessions.sessionsById[sessionId]?.pagination
+                  .requestGeneration ?? 0,
             }),
           );
           target = findTarget();
-          const len = selectActiveHistory(reduxStore.getState()).length;
+          const len = selectActiveHistoryOf(
+            reduxStore.getState(),
+            sessionId,
+          ).length;
           if (len === prevLength) {
             break;
           }

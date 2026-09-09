@@ -1,7 +1,8 @@
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
-import { selectActiveSessionId } from "../../redux/selectors/sessionView";
+
 import { retrySessionSave } from "../../redux/thunks/sessionPersistence";
 import { Button } from "../ui";
+import { useSessionId } from "./TipTapEditor/SessionScope";
 
 /**
  * Save-failure recovery entry (方案.md §七.7): a failed save keeps the runtime,
@@ -10,7 +11,7 @@ import { Button } from "../ui";
  */
 export default function SessionSaveErrorBanner() {
   const dispatch = useAppDispatch();
-  const sessionId = useAppSelector(selectActiveSessionId);
+  const sessionId = useSessionId();
   const persistence = useAppSelector((state) =>
     sessionId ? state.sessions.sessionsById[sessionId]?.persistence : undefined,
   );

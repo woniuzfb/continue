@@ -22,7 +22,7 @@ import {
 } from "react";
 import { IdeMessengerContext } from "../../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
-import { selectActiveSessionId } from "../../../redux/selectors/sessionView";
+import { useSessionId } from "../../../components/mainInput/TipTapEditor/SessionScope";
 import { submitSessionInput } from "../../../redux/thunks/sessionSubmit";
 
 /**
@@ -97,7 +97,7 @@ export function McpAppRenderer({
 }) {
   const ideMessenger = useContext(IdeMessengerContext);
   const dispatch = useAppDispatch();
-  const sessionId = useAppSelector(selectActiveSessionId);
+  const sessionId = useSessionId();
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const appBridgeRef = useRef<AppBridge | null>(null);
   const [iframeHeight, setIframeHeight] = useState(300);

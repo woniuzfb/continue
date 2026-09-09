@@ -39,11 +39,11 @@ import { createEditorConfig, getPlaceholderText } from "./utils/editorConfig";
 import { handleImageFile } from "./utils/imageUtils";
 import { useEditorEventHandlers } from "./utils/keyHandlers";
 import {
-  selectActiveHistory,
-  selectActiveIsInEdit,
-  selectActiveIsStreaming,
-  selectActiveMainEditorAttachmentsRestore,
-  selectActiveMainEditorDraft,
+  useSessionHistory,
+  useSessionIsInEdit,
+  useSessionIsStreaming,
+  useSessionMainEditorAttachmentsRestore,
+  useSessionMainEditorDraft,
 } from "../../../redux/selectors/sessionView";
 
 /** Cap for packing a single binary attachment (~112 MB of raw data). Larger
@@ -212,14 +212,10 @@ function TipTapEditorInner(props: TipTapEditorProps) {
   // 方案.md §九: the editor belongs to its provider's session, never to the
   // "active" session resolved at callback time.
   const sessionId = mainEditorContext.sessionId;
-  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
-  const historyLength = useAppSelector(
-    (store) => selectActiveHistory(store).length,
-  );
-  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
-  const mainEditorDraft = useAppSelector((store) =>
-    selectActiveMainEditorDraft(store),
-  );
+  const isStreaming = useSessionIsStreaming();
+  const historyLength = useSessionHistory().length;
+  const isInEdit = useSessionIsInEdit();
+  const mainEditorDraft = useSessionMainEditorDraft();
 
   // For the main input, fall back to any persisted draft so that text entered
   // before navigating away (e.g. to /history or /config) is restored when the
@@ -233,9 +229,7 @@ function TipTapEditorInner(props: TipTapEditorProps) {
   // the rolled-back user message's attachments here (paths + contents) when
   // the send failed/canceled before the assistant received anything. If the
   // user already picked new files meanwhile, keep those instead.
-  const attachmentsRestore = useAppSelector((store) =>
-    selectActiveMainEditorAttachmentsRestore(store),
-  );
+  const attachmentsRestore = useSessionMainEditorAttachmentsRestore();
   useEffect(() => {
     if (!props.isMainInput || !attachmentsRestore?.length) {
       return;

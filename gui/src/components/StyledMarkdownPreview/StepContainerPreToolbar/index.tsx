@@ -26,9 +26,9 @@ import { FileInfo } from "./FileInfo";
 import { InsertButton } from "./InsertButton";
 import { RunInTerminalButton } from "./RunInTerminalButton";
 import {
-  selectActiveCodeBlockApplyStates,
-  selectActiveHistory,
-  selectActiveIsStreaming,
+  useSessionCodeBlockApplyStates,
+  useSessionHistory,
+  useSessionIsStreaming,
 } from "../../../redux/selectors/sessionView";
 
 export interface StepContainerPreToolbarProps {
@@ -69,9 +69,7 @@ export function StepContainerPreToolbar({
   // 400+ 个）都订阅 selectActiveHistory(state)，会话内任何 mutation
   // （流式 chunk、symbols 更新等）都会使全部代码块重跑选择器并
   // 因数组引用变化而重渲染。
-  const historyLength = useAppSelector(
-    (state) => selectActiveHistory(state).length,
-  );
+  const historyLength = useSessionHistory().length;
   const [isExpanded, setIsExpanded] = useState(expanded ?? true);
 
   const [relativeFilepathUri, setRelativeFilepathUri] = useState<string | null>(
@@ -80,9 +78,7 @@ export function StepContainerPreToolbar({
   const [fileExists, setFileExists] = useState<boolean | null>(null);
   const [isLoadingFileExists, setIsLoadingFileExists] = useState(false);
 
-  const nextCodeBlockIndex = useAppSelector(
-    (state) => selectActiveCodeBlockApplyStates(state).curIndex,
-  );
+  const nextCodeBlockIndex = useSessionCodeBlockApplyStates().curIndex;
 
   const applyState = useAppSelector((state) =>
     selectApplyStateByStreamId(state, codeBlockStreamId),
@@ -130,7 +126,7 @@ export function StepContainerPreToolbar({
   const hasFileExtension =
     relativeFilepath && /\.[0-9a-z]+$/i.test(relativeFilepath);
 
-  const isStreaming = useAppSelector((store) => selectActiveIsStreaming(store));
+  const isStreaming = useSessionIsStreaming();
 
   const isLastItem = itemIndex === historyLength - 1;
 

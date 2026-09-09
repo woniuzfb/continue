@@ -12,16 +12,14 @@ import {
 import { stripImages } from "core/util/messageContent";
 import { IIdeMessenger } from "../../../../context/IdeMessenger";
 import { setSessionGatheringContext } from "../../../../redux/slices/sessionsSlice";
-import {
-  selectActiveMode,
-  selectActiveSessionId,
-} from "../../../../redux/selectors/sessionView";
 import { RootState } from "../../../../redux/store";
 import { processEditorContent } from "./processEditorContent";
 import { renderSlashCommandPrompt } from "./renderSlashCommand";
 import { GetContextRequest } from "./types";
 
 interface ResolveEditorContentInput {
+  /** 方案.md §九.0: the owning session is explicit, never the active one. */
+  sessionId: string;
   editorState: JSONContent;
   modifiers: InputModifiers;
   ideMessenger: IIdeMessenger;
@@ -48,6 +46,7 @@ interface ResolveEditorContentOutput {
  * Context items are appended to the top of the prompt and then referenced within the input
  */
 export async function resolveEditorContent({
+  sessionId,
   editorState,
   modifiers,
   ideMessenger,
@@ -84,13 +83,11 @@ export async function resolveEditorContent({
     contextRequests.length > 0;
 
   if (shouldGatherContext) {
-    const sessionId = selectActiveSessionId(getState());
-    if (sessionId) {
-      dispatch(setSessionGatheringContext({ sessionId, gathering: true }));
-    }
+    dispatch(setSessionGatheringContext({ sessionId, gathering: true }));
   }
 
   const selectedContextItems = await gatherContextItems({
+    sessionId,
     contextRequests,
     modifiers,
     ideMessenger,
@@ -101,10 +98,7 @@ export async function resolveEditorContent({
   });
 
   if (shouldGatherContext) {
-    const sessionId = selectActiveSessionId(getState());
-    if (sessionId) {
-      dispatch(setSessionGatheringContext({ sessionId, gathering: false }));
-    }
+    dispatch(setSessionGatheringContext({ sessionId, gathering: false }));
   }
 
   return {
@@ -119,6 +113,7 @@ export async function resolveEditorContent({
  * Gathers context items from various sources
  */
 async function gatherContextItems({
+  sessionId,
   contextRequests,
   modifiers,
   ideMessenger,
@@ -127,6 +122,7 @@ async function gatherContextItems({
   selectedCode,
   getState,
 }: {
+  sessionId: string;
   contextRequests: GetContextRequest[];
   modifiers: InputModifiers;
   ideMessenger: IIdeMessenger;
@@ -155,7 +151,8 @@ async function gatherContextItems({
   );
   const contextItems: ContextItemWithId[] = [];
 
-  const isInAgentMode = selectActiveMode(getState()) === "agent";
+  const isInAgentMode =
+    (getState().sessions.sessionsById[sessionId]?.mode ?? "chat") === "agent";
 
   // Build all context requests in parallel to minimize first-token latency
   // (previously each provider was fetched sequentially, 3+ IPC round-trips).

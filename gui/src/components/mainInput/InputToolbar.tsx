@@ -19,11 +19,11 @@ import { selectUseActiveFile } from "../../redux/selectors";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
 import { setActiveSessionReasoningAndSave } from "../../redux/thunks/sessionChanges";
 import {
-  selectActiveCodeToEdit,
-  selectActiveHasReasoningEnabled,
-  selectActiveIsInEdit,
-  selectActiveSessionId,
+  useSessionEditState,
+  useSessionHasReasoningEnabled,
+  useSessionIsInEdit,
 } from "../../redux/selectors/sessionView";
+import { useSessionId } from "./TipTapEditor/SessionScope";
 import { setReasoningSetting } from "../../redux/slices/uiSlice";
 import { exitEdit } from "../../redux/thunks/edit";
 import { getMetaKeyLabel, isMetaEquivalentKeyPressed } from "../../util";
@@ -65,16 +65,14 @@ interface InputToolbarProps {
 
 function InputToolbar(props: InputToolbarProps) {
   const dispatch = useAppDispatch();
-  const sessionId = useAppSelector(selectActiveSessionId);
+  const sessionId = useSessionId();
   const ideMessenger = useContext(IdeMessengerContext);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const defaultModel = useAppSelector(selectSelectedChatModel);
   const useActiveFile = useAppSelector(selectUseActiveFile);
-  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
-  const codeToEdit = useAppSelector((state) => selectActiveCodeToEdit(state));
-  const hasReasoningEnabled = useAppSelector((store) =>
-    selectActiveHasReasoningEnabled(store),
-  );
+  const isInEdit = useSessionIsInEdit();
+  const codeToEdit = useSessionEditState()?.codeToEdit ?? [];
+  const hasReasoningEnabled = useSessionHasReasoningEnabled();
   const isEnterDisabled =
     props.disabled || (isInEdit && codeToEdit.length === 0);
 

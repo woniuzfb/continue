@@ -5,6 +5,7 @@ import { PropsWithChildren } from "react";
 import { Provider } from "react-redux";
 import { MemoryRouter, RouterProps } from "react-router-dom";
 import { MainEditorProvider } from "../../components/mainInput/TipTapEditor";
+import { SessionScope } from "../../components/mainInput/TipTapEditor/SessionScope";
 import { AuthProvider } from "../../context/Auth";
 import { IdeMessengerProvider } from "../../context/IdeMessenger";
 import { MockIdeMessenger } from "../../context/MockIdeMessenger";
@@ -77,10 +78,12 @@ export async function renderWithProviders(
       <IdeMessengerProvider messenger={ideMessenger}>
         <Provider store={store}>
           <AuthProvider>
-            <MainEditorProvider sessionId={seedSessionId}>
-              {children}
-              <ParallelListeners />
-            </MainEditorProvider>
+            <SessionScope sessionId={seedSessionId}>
+              <MainEditorProvider sessionId={seedSessionId}>
+                {children}
+                <ParallelListeners />
+              </MainEditorProvider>
+            </SessionScope>
           </AuthProvider>
         </Provider>
       </IdeMessengerProvider>

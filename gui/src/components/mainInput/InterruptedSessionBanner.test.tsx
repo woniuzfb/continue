@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
 import { initialSessionRuntime } from "../../redux/slices/sessionsSlice";
 import InterruptedSessionBanner from "./InterruptedSessionBanner";
+import { SessionScope } from "./TipTapEditor/SessionScope";
 
 function makeStore(interrupted: boolean) {
   const s1 = initialSessionRuntime("s1", "Chat 1", { interrupted });
@@ -24,7 +25,9 @@ describe("InterruptedSessionBanner", () => {
     const store = makeStore(true);
     render(
       <Provider store={store}>
-        <InterruptedSessionBanner />
+        <SessionScope sessionId="s1">
+          <InterruptedSessionBanner />
+        </SessionScope>
       </Provider>,
     );
 
@@ -36,7 +39,9 @@ describe("InterruptedSessionBanner", () => {
     const store = makeStore(false);
     const { container } = render(
       <Provider store={store}>
-        <InterruptedSessionBanner />
+        <SessionScope sessionId="s1">
+          <InterruptedSessionBanner />
+        </SessionScope>
       </Provider>,
     );
 

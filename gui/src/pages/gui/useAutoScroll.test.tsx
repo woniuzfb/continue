@@ -7,6 +7,7 @@ import { useAppSelector } from "../../redux/hooks";
 import { createMockStore, getEmptyRootState } from "../../util/test/mockStore";
 import { initialSessionRuntime } from "../../redux/slices/sessionsSlice";
 import { useAutoScroll } from "./useAutoScroll";
+import { SessionScope } from "../../components/mainInput/TipTapEditor/SessionScope";
 
 /**
  * Session-isolated scroll position regression tests.
@@ -140,7 +141,9 @@ describe("useAutoScroll session-isolated scroll positions", () => {
       {
         initialProps: { sessionId: initialSessionId, userMsgCount: 4 },
         wrapper: ({ children }) => (
-          <Provider store={store}>{children}</Provider>
+          <Provider store={store}>
+            <SessionScope sessionId={initialSessionId}>{children}</SessionScope>
+          </Provider>
         ),
       },
     );
@@ -285,7 +288,10 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
     element = new ShrinkwrapScrollElement();
   });
 
-  function mountLazy(initialHistoryCount: number) {
+  function mountLazy(
+    initialHistoryCount: number,
+    activeSessionIdOverride?: string,
+  ) {
     const state = getEmptyRootState() as any;
     const history = diskItems(initialHistoryCount).map((it: any) => ({
       ...it,
@@ -317,6 +323,9 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
         }),
       },
     };
+    if (activeSessionIdOverride) {
+      state.sessions.activeSessionId = activeSessionIdOverride;
+    }
     const store = createMockStore(state);
     element.historyLength = initialHistoryCount;
     // Sync the fake height with the store as pages are prepended.
@@ -343,7 +352,9 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
       },
       {
         wrapper: ({ children }) => (
-          <Provider store={store}>{children}</Provider>
+          <Provider store={store}>
+            <SessionScope sessionId="lazy-session">{children}</SessionScope>
+          </Provider>
         ),
       },
     );
@@ -430,7 +441,8 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
   });
 
   it("does not fill the viewport or page while the session is hidden", async () => {
-    const { store } = mountLazy(2);
+    // Another session is visible before this tree mounts: it stays hidden.
+    const { store } = mountLazy(2, "other-session");
     const handler = vi.fn(() => ({
       items: [],
       firstTurnItems: [],
@@ -440,11 +452,6 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
     }));
     store.mockIdeMessenger.responseHandlers["history/loadPage"] =
       handler as any;
-    // Another session is visible: this tree is mounted but hidden.
-    store.dispatch({
-      type: "sessions/setActiveSessionId",
-      payload: { sessionId: "other-session" },
-    });
 
     await settle();
 

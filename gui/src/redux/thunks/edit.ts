@@ -69,6 +69,7 @@ export const streamEditThunk = createAsyncThunk<
           );
 
           const { selectedContextItems, content } = await resolveEditorContent({
+            sessionId,
             editorState,
             modifiers: {
               noContext: true,

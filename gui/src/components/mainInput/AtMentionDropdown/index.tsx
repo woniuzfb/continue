@@ -35,7 +35,8 @@ import HeaderButtonWithToolTip from "../../gui/HeaderButtonWithToolTip";
 import { Button } from "../../ui";
 import { NAMED_ICONS } from "../icons";
 import type { ComboBoxItem, ComboBoxItemType } from "../types";
-import { selectActiveMode } from "../../../redux/selectors/sessionView";
+import { selectSessionById } from "../../../redux/selectors/sessions";
+import { useSessionId } from "../TipTapEditor/SessionScope";
 
 export function getIconFromDropdownItem(
   id: string | undefined,
@@ -161,10 +162,11 @@ const formatFileSize = (fileSize: number) => {
 
 const AtMentionDropdown = forwardRef((props: AtMentionDropdownProps, ref) => {
   const dispatch = useDispatch();
+  const sessionId = useSessionId();
 
   const ideMessenger = useContext(IdeMessengerContext);
   const isInAgentMode = useAppSelector(
-    (store) => selectActiveMode(store) === "agent",
+    (state) => selectSessionById(state, sessionId)?.mode === "agent",
   );
 
   const [selectedIndex, setSelectedIndex] = useState(0);

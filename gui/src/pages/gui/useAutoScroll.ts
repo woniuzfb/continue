@@ -5,9 +5,9 @@ import type { RootState } from "../../redux/store";
 import { loadMoreHistory as loadMoreHistoryThunk } from "../../redux/thunks/sessionPaging";
 import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionHistory";
 import {
-  selectActiveHasMoreHistory,
-  selectActiveIsHistoryLoading,
-  selectActiveIsStreaming,
+  useSessionHasMoreHistory,
+  useSessionIsHistoryLoading,
+  useSessionIsStreaming,
 } from "../../redux/selectors/sessionView";
 
 /**
@@ -57,13 +57,9 @@ export const useAutoScroll = (
 ) => {
   const dispatch = useAppDispatch();
   const store = useStore<RootState>();
-  const hasMoreHistory = useAppSelector((state) =>
-    selectActiveHasMoreHistory(state),
-  );
-  const isHistoryLoading = useAppSelector((state) =>
-    selectActiveIsHistoryLoading(state),
-  );
-  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
+  const hasMoreHistory = useSessionHasMoreHistory();
+  const isHistoryLoading = useSessionIsHistoryLoading();
+  const isStreaming = useSessionIsStreaming();
 
   const [userHasScrolled, setUserHasScrolled] = useState(false);
   const numUserMsgs = useMemo(() => getNumUserMsgs(history), [history.length]);

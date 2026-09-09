@@ -4,23 +4,25 @@ import { findLastIndex } from "core/util/findLast";
 import { useMemo } from "react";
 import { useMainEditor } from "../../../components/mainInput/TipTapEditor";
 import { ToolbarButtonWithTooltip } from "../../../components/StyledMarkdownPreview/StepContainerPreToolbar/ToolbarButtonWithTooltip";
-import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
+import { useAppDispatch } from "../../../redux/hooks";
+import { useSessionId } from "../../../components/mainInput/TipTapEditor/SessionScope";
 import { useStore } from "react-redux";
 import type { RootState } from "../../../redux/store";
 import { truncateHistoryAfterMessageId } from "../../../redux/slices/sessionsSlice";
-import { selectActiveSessionId } from "../../../redux/selectors/sessionView";
 import {
-  selectActiveHistory,
-  selectActiveIsStreaming,
+  useSessionHistory,
+  useSessionIsStreaming,
 } from "../../../redux/selectors/sessionView";
+import {} from "../../../redux/selectors/sessionView";
 
 export function ToolTruncateHistoryIcon({
   historyIndex,
 }: {
   historyIndex: number;
 }) {
-  const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
-  const history = useAppSelector((state) => selectActiveHistory(state));
+  const sessionId = useSessionId();
+  const isStreaming = useSessionIsStreaming();
+  const history = useSessionHistory();
   const lastMessageIndex = useMemo(() => {
     return findLastIndex(history, (item) => !chatMessageIsEmpty(item.message));
   }, [history]);
@@ -44,7 +46,7 @@ export function ToolTruncateHistoryIcon({
         if (messageId) {
           dispatch(
             truncateHistoryAfterMessageId({
-              sessionId: selectActiveSessionId(store.getState()),
+              sessionId,
               messageId,
             }),
           );

@@ -3,11 +3,8 @@ import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { useCompactConversation } from "../../util/compactConversation";
 import { ToolTip } from "../gui/Tooltip";
 import {
-  selectActiveContextInputTokens,
-  selectActiveContextLength,
-  selectActiveContextPercentage,
-  selectActiveHistory,
-  selectActiveIsPruned,
+  useSessionContextMetricsFields,
+  useSessionHistory,
 } from "../../redux/selectors/sessionView";
 import { saveActiveSession } from "../../redux/thunks/sessionPersistence";
 
@@ -22,23 +19,17 @@ function formatTokens(tokens: number): string {
 
 const ContextStatus = () => {
   const dispatch = useAppDispatch();
-  const contextPercentage = useAppSelector((state) =>
-    selectActiveContextPercentage(state),
-  );
+  const { contextPercentage, isPruned } = useSessionContextMetricsFields();
   const selectedChatModel = useAppSelector(
     (state) => state.config.config.selectedModelByRole.chat?.model,
   );
   const previousHistoryLength = useRef<number | null>(null);
   const previousSelectedChatModel = useRef<string | null>(null);
-  const history = useAppSelector((state) => selectActiveHistory(state));
+  const history = useSessionHistory();
   const percent = Math.round((contextPercentage ?? 0) * 100);
-  const isPruned = useAppSelector((state) => selectActiveIsPruned(state));
-  const contextInputTokens = useAppSelector((state) =>
-    selectActiveContextInputTokens(state),
-  );
-  const contextLength = useAppSelector((state) =>
-    selectActiveContextLength(state),
-  );
+
+  const { contextInputTokens, contextLength } =
+    useSessionContextMetricsFields();
 
   const isDifferentModelAndSameHistory = useMemo(() => {
     if (!selectedChatModel) return false;
