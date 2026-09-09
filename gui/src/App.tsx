@@ -1,6 +1,5 @@
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import Layout from "./components/Layout";
-import { MainEditorProvider } from "./components/mainInput/TipTapEditor";
 import { SubmenuContextProvidersProvider } from "./context/SubmenuContextProviders";
 import { VscThemeProvider } from "./context/VscTheme";
 import ParallelListeners from "./hooks/ParallelListeners";
@@ -11,8 +10,6 @@ import History from "./pages/history";
 import Stats from "./pages/stats";
 import ThemePage from "./styles/ThemePage";
 import { ROUTES } from "./util/navigation";
-import { useAppSelector } from "./redux/hooks";
-import { selectActiveSessionId } from "./redux/selectors/sessionView";
 
 const router = createMemoryRouter([
   {
@@ -53,19 +50,11 @@ const router = createMemoryRouter([
   most of which interact with redux etc.
 */
 function App() {
-  const activeSessionId = useAppSelector((state) =>
-    selectActiveSessionId(state),
-  );
   return (
     <VscThemeProvider>
-      <MainEditorProvider
-        key={activeSessionId ?? "no-session"}
-        sessionId={activeSessionId ?? ""}
-      >
-        <SubmenuContextProvidersProvider>
-          <RouterProvider router={router} />
-        </SubmenuContextProvidersProvider>
-      </MainEditorProvider>
+      <SubmenuContextProvidersProvider>
+        <RouterProvider router={router} />
+      </SubmenuContextProvidersProvider>
       <ParallelListeners />
     </VscThemeProvider>
   );

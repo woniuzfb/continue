@@ -29,7 +29,6 @@ import ContinueInputBox from "../../components/mainInput/ContinueInputBox";
 import { AttachmentMeta, AttachedFile } from "../../components/mainInput/types";
 import { useOnboardingCard } from "../../components/OnboardingCard";
 import StepContainer from "../../components/StepContainer";
-import { TabBar } from "../../components/TabBar/TabBar";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useWebviewListener } from "../../hooks/useWebviewListener";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
@@ -669,7 +668,6 @@ export function Chat() {
 
   return (
     <>
-      {!!showSessionTabs && !isInEdit && <TabBar ref={tabsRef} />}
       {widget}
 
       <StepsDiv

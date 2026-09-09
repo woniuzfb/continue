@@ -6,12 +6,14 @@ import React, {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { setSessionMainEditorContentTrigger } from "../../../redux/slices/sessionsSlice";
 import { useMainEditorWebviewListeners } from "./useMainEditorWebviewListeners";
 
 import { useStore } from "react-redux";
+import { realStoreOf } from "../../../redux/sessionScopedStore";
 import type { RootState } from "../../../redux/store";
 
 /**
@@ -41,7 +43,30 @@ const initialState: MainEditorContextType = {
   onEnterRef: { current: () => {} },
 };
 
-const MainEditorContext = createContext<MainEditorContextType>(initialState);
+const MainEditorContext = createContext<MainEditorContextType | null>(null);
+
+/**
+ * 方案.md §九.0: the shell (Layout, dialogs) is outside every per-tab provider,
+ * so it resolves the *active* tab's editor through this registry. The active
+ * provider publishes itself here; `useMainEditor` falls back to it.
+ */
+const activeEditors = new Map<string, MainEditorContextType>();
+let registryVersion = 0;
+const registryListeners = new Set<() => void>();
+
+function publishActiveEditor(
+  sessionId: string,
+  value: MainEditorContextType,
+): void {
+  activeEditors.set(sessionId, value);
+  registryVersion++;
+  registryListeners.forEach((listener) => listener());
+}
+
+function subscribeRegistry(listener: () => void): () => void {
+  registryListeners.add(listener);
+  return () => registryListeners.delete(listener);
+}
 
 /**
  * Provider component that maintains a reference to the main editor
@@ -121,6 +146,17 @@ export const MainEditorProvider: React.FC<{
     onEnterRef,
   };
 
+  // Publish only for the session the real store considers active, so the shell
+  // resolves the visible tab's editor.
+  const isRealActive = useAppSelector(
+    (state) => state.sessions.activeSessionId === sessionId,
+  );
+  useEffect(() => {
+    if (isRealActive) {
+      publishActiveEditor(sessionId, value);
+    }
+  }, [isRealActive, sessionId, mainEditor, inputId]);
+
   return (
     <MainEditorContext.Provider value={value}>
       {children}
@@ -129,7 +165,25 @@ export const MainEditorProvider: React.FC<{
 };
 
 /**
- * Hook to access the main editor context
+ * Hook to access the main editor context. Inside a per-tab provider it returns
+ * that tab's editor; in the shell it returns the active tab's editor.
  */
-export const useMainEditor = (): MainEditorContextType =>
-  useContext(MainEditorContext);
+export const useMainEditor = (): MainEditorContextType => {
+  const context = useContext(MainEditorContext);
+  const realActiveSessionId = useAppSelector(
+    (state) => realStoreOf(useStore())?.getState?.().sessions.activeSessionId,
+  );
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useSyncExternalStore(
+    subscribeRegistry,
+    () => registryVersion,
+    () => registryVersion,
+  );
+  if (context) {
+    return context;
+  }
+  return (
+    (realActiveSessionId && activeEditors.get(realActiveSessionId)) ||
+    initialState
+  );
+};
