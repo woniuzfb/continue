@@ -12,7 +12,6 @@ import {
   applySessionToolCallUpdate,
   findSessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
-import { applyForEditTool } from "./handleApplyStateUpdate";
 import { continueToolLoop } from "./sessionTools";
 
 /**
@@ -269,14 +268,16 @@ export function applyEditToolChanges(
   },
   payload: ApplyToFilePayload & { toolCallId: string },
 ): void {
-  // The sessionized tool loop passes its own sessionId. The legacy tool loop
-  // does not, so fall back to the visible session whenever it has a runtime —
-  // apply state must live in exactly one place (方案.md §五.20).
+  // Apply state lives in exactly one place (方案.md §五.20): the session
+  // runtime. Without a runtime there is no owner to write to.
   const sessionId =
     api.sessionId ?? api.getState?.()?.sessions?.activeSessionId ?? undefined;
-  if (sessionId) {
-    void api.dispatch(applySessionForEditTool({ ...payload, sessionId }));
-  } else {
-    void api.dispatch(applyForEditTool(payload));
+  if (!sessionId) {
+    console.warn(
+      "applyEditToolChanges: no session runtime for",
+      payload.toolCallId,
+    );
+    return;
   }
+  void api.dispatch(applySessionForEditTool({ ...payload, sessionId }));
 }

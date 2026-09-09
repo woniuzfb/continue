@@ -1,7 +1,7 @@
 import { ContinueErrorReason } from "core/util/errors";
 import * as ideUtils from "core/util/ideUtils";
 import { beforeEach, describe, expect, it, Mock, vi } from "vitest";
-import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
+import { applyEditToolChanges } from "../../redux/thunks/sessionApplyState";
 import { ClientToolExtras } from "./callClientTool";
 import { singleFindAndReplaceImpl } from "./singleFindAndReplaceImpl";
 vi.mock("uuid", () => ({
@@ -12,20 +12,21 @@ vi.mock("core/util/ideUtils", () => ({
   resolveRelativePathInDir: vi.fn(),
 }));
 
-vi.mock("../../redux/thunks/handleApplyStateUpdate", () => ({
-  applyForEditTool: vi.fn(),
+vi.mock("../../redux/thunks/sessionApplyState", () => ({
+  applySessionForEditTool: vi.fn(),
+  applyEditToolChanges: vi.fn(),
 }));
 
 describe("singleFindAndReplaceImpl", () => {
   let mockExtras: ClientToolExtras;
   let mockResolveRelativePathInDir: Mock;
-  let mockApplyForEditTool: Mock;
+  let mockApplyEditToolChanges: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();
 
     mockResolveRelativePathInDir = vi.mocked(ideUtils.resolveRelativePathInDir);
-    mockApplyForEditTool = vi.mocked(applyForEditTool);
+    mockApplyEditToolChanges = vi.mocked(applyEditToolChanges);
 
     mockExtras = {
       getState: vi.fn(() => ({
@@ -198,13 +199,16 @@ describe("singleFindAndReplaceImpl", () => {
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
       // Check that the dispatch was called with the applyForEditTool thunk
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: "Hi there\nThis is a test file\nGoodbye world",
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockApplyEditToolChanges).toHaveBeenCalledWith(
+        expect.objectContaining({ dispatch: expect.anything() }),
+        {
+          streamId: "test-uuid",
+          toolCallId: "tool-call-id",
+          text: "Hi there\nThis is a test file\nGoodbye world",
+          filepath: "/test/file.txt",
+          isSearchAndReplace: true,
+        },
+      );
     });
 
     it("should throw error if old_string appears multiple times and replace_all is false", async () => {
@@ -242,13 +246,16 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: "Hello universe\nThis is a test file\nGoodbye universe",
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockApplyEditToolChanges).toHaveBeenCalledWith(
+        expect.objectContaining({ dispatch: expect.anything() }),
+        {
+          streamId: "test-uuid",
+          toolCallId: "tool-call-id",
+          text: "Hello universe\nThis is a test file\nGoodbye universe",
+          filepath: "/test/file.txt",
+          isSearchAndReplace: true,
+        },
+      );
     });
 
     it("should handle empty new_string (deletion)", async () => {
@@ -264,13 +271,16 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: "world\nThis is a test file",
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockApplyEditToolChanges).toHaveBeenCalledWith(
+        expect.objectContaining({ dispatch: expect.anything() }),
+        {
+          streamId: "test-uuid",
+          toolCallId: "tool-call-id",
+          text: "world\nThis is a test file",
+          filepath: "/test/file.txt",
+          isSearchAndReplace: true,
+        },
+      );
     });
 
     it("should handle special characters in strings", async () => {
@@ -288,13 +298,16 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: 'const regex = /[a-z]+/g;\nconst text = "Hi $universe"',
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockApplyEditToolChanges).toHaveBeenCalledWith(
+        expect.objectContaining({ dispatch: expect.anything() }),
+        {
+          streamId: "test-uuid",
+          toolCallId: "tool-call-id",
+          text: 'const regex = /[a-z]+/g;\nconst text = "Hi $universe"',
+          filepath: "/test/file.txt",
+          isSearchAndReplace: true,
+        },
+      );
     });
 
     it("should preserve whitespace and indentation", async () => {
@@ -312,13 +325,16 @@ describe("singleFindAndReplaceImpl", () => {
 
       await singleFindAndReplaceImpl(args, "tool-call-id", mockExtras);
 
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "tool-call-id",
-        text: "function test() {\n    const value = 'new';\n    return value;\n}",
-        filepath: "/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockApplyEditToolChanges).toHaveBeenCalledWith(
+        expect.objectContaining({ dispatch: expect.anything() }),
+        {
+          streamId: "test-uuid",
+          toolCallId: "tool-call-id",
+          text: "function test() {\n    const value = 'new';\n    return value;\n}",
+          filepath: "/test/file.txt",
+          isSearchAndReplace: true,
+        },
+      );
     });
   });
 

@@ -40,7 +40,6 @@ import { extractAttachmentsFromMessage } from "../../components/mainInput/util/a
 import { toolCallCtxItemToCtxItemWithId } from "../../pages/gui/ToolCallDiv/utils";
 import { addToolCallDeltaToState, isEditTool } from "../../util/toolCallState";
 import { RootState } from "../store";
-import { streamResponseThunk } from "../thunks/streamResponse";
 import { findChatHistoryItemByToolCallId, findToolCallById } from "../util";
 
 /**
@@ -289,15 +288,6 @@ export function deleteCachedSession(sessionId: string): void {
  * 切换会话不再 abort 旧流的 controller（旧流转入后台继续跑）；
  * 只有用户主动取消（abortStream / cancelStream）时才统一 abort 所有在跑流。
  */
-const activeStreamAborters = new Set<AbortController>();
-
-export function registerStreamAborter(aborter: AbortController): void {
-  activeStreamAborters.add(aborter);
-}
-
-export function unregisterStreamAborter(aborter: AbortController): void {
-  activeStreamAborters.delete(aborter);
-}
 
 type SessionState = {
   lastSessionId?: string;
@@ -1079,12 +1069,8 @@ export const sessionSlice = createSlice({
       state.isStreaming = false;
     },
     abortStream: (state) => {
-      // 取消所有仍在跑的流（包括切到其他会话后在后台继续的），
-      // 再重置当前会话的 controller。
-      for (const aborter of activeStreamAborters) {
-        aborter.abort();
-      }
-      activeStreamAborters.clear();
+      // 只作用于当前会话的 controller：全局 abort-all 已由
+      // stopSessionStream({sessionId, requestId}) 取代（方案.md §五.11）。
       state.streamAborter.abort();
       state.streamAborter = new AbortController();
     },
@@ -1648,9 +1634,7 @@ export const sessionSlice = createSlice({
       return curHistoryItem?.isGatheringContext || false;
     },
   },
-  extraReducers: (builder) => {
-    addPassthroughCases(builder, [streamResponseThunk]);
-  },
+  extraReducers: (builder) => {},
 });
 
 function addPassthroughCases(

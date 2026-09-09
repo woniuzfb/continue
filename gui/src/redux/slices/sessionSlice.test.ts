@@ -9,10 +9,8 @@ import {
   ChatHistoryItemWithMessageId,
   mergeSplitReplies,
   newSession,
-  registerStreamAborter,
   restoreCachedSession,
   sessionSlice,
-  unregisterStreamAborter,
 } from "./sessionSlice";
 
 // Mock dependencies
@@ -1099,19 +1097,14 @@ describe("background streaming (session switch)", () => {
     expect(newState.isStreaming).toBe(true);
   });
 
-  it("abortStream aborts all registered stream aborters", () => {
+  it("abortStream aborts only the current session's controller", () => {
     const state = createState();
-    const aborter1 = new AbortController();
-    const aborter2 = new AbortController();
-    registerStreamAborter(aborter1);
-    registerStreamAborter(aborter2);
-    try {
-      sessionSlice.reducer(state, abortStream());
-      expect(aborter1.signal.aborted).toBe(true);
-      expect(aborter2.signal.aborted).toBe(true);
-    } finally {
-      unregisterStreamAborter(aborter1);
-      unregisterStreamAborter(aborter2);
-    }
+    const aborter = new AbortController();
+    const withAborter = { ...state, streamAborter: aborter };
+
+    const newState = sessionSlice.reducer(withAborter, abortStream());
+
+    expect(aborter.signal.aborted).toBe(true);
+    expect(newState.streamAborter).not.toBe(aborter);
   });
 });

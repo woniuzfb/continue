@@ -12,21 +12,21 @@ import {
   setSelectedProfile,
 } from "../redux/slices/profilesSlice";
 import {
-  addContextItemsAtIndex,
-  setHasReasoningEnabled,
-  setIsSessionMetadataLoading,
-} from "../redux/slices/sessionSlice";
+  addContextItemsByMessageId,
+  setSessionReasoningEnabled,
+} from "../redux/slices/sessionsSlice";
+import { setSessionCatalogLoading } from "../redux/slices/sessionCatalogSlice";
 import { setTTSActive } from "../redux/slices/uiSlice";
 
 import { modelSupportsReasoning } from "core/llm/autodetect";
-import { cancelStream } from "../redux/thunks/cancelStream";
-import { handleApplyStateUpdate } from "../redux/thunks/handleApplyStateUpdate";
+import { stopActiveSessionStream } from "../redux/thunks/sessionStreams";
 import {
   handleSessionApplyStateUpdate,
   lookupApplyOrigin,
 } from "../redux/thunks/sessionApplyState";
-import { loadSession, refreshSessionMetadata } from "../redux/thunks/session";
-import { updateFileSymbolsFromHistory } from "../redux/thunks/updateFileSymbols";
+import { loadSession } from "../redux/thunks/session";
+import { refreshSessionCatalog } from "../redux/thunks/sessionLifecycle";
+import { updateSessionFileSymbolsFromHistory } from "../redux/thunks/updateFileSymbols";
 import {
   setDocumentStylesFromLocalStorage,
   setDocumentStylesFromTheme,
@@ -105,13 +105,17 @@ function ParallelListeners() {
         : undefined;
       const wasReasoningPreviouslyEnabled =
         userReasoningPref !== undefined ? userReasoningPref : !isLLMPrefix;
-      dispatch(
-        setHasReasoningEnabled(
-          supportsReasoning &&
-            !isReasoningDisabled &&
-            wasReasoningPreviouslyEnabled,
-        ),
-      );
+      if (sessionId) {
+        dispatch(
+          setSessionReasoningEnabled({
+            sessionId,
+            enabled:
+              supportsReasoning &&
+              !isReasoningDisabled &&
+              wasReasoningPreviouslyEnabled,
+          }),
+        );
+      }
     },
     [dispatch, hasDoneInitialConfigLoad, selectedProfileId, reasoningSettings],
   );
@@ -119,7 +123,7 @@ function ParallelListeners() {
   // Load config from the IDE
   useEffect(() => {
     async function initialLoadConfig() {
-      dispatch(setIsSessionMetadataLoading(true));
+      dispatch(setSessionCatalogLoading({ isLoading: true }));
       dispatch(setConfigLoading(true));
       const result = await ideMessenger.request(
         "config/getSerializedProfileInfo",
@@ -143,8 +147,8 @@ function ParallelListeners() {
       if (hasDoneInitialConfigLoad.current) {
         // Init to run on initial config load
         ideMessenger.post("docs/initStatuses", undefined);
-        void dispatch(updateFileSymbolsFromHistory());
-        void dispatch(refreshSessionMetadata({}));
+        void dispatch(updateSessionFileSymbolsFromHistory({ sessionId }));
+        void dispatch(refreshSessionCatalog({}));
 
         // This triggers sending pending status to the GUI for relevant docs indexes
         clearInterval(interval);
@@ -169,14 +173,14 @@ function ParallelListeners() {
 
   useEffect(() => {
     if (sessionId) {
-      void dispatch(updateFileSymbolsFromHistory());
+      void dispatch(updateSessionFileSymbolsFromHistory({ sessionId }));
     }
   }, [sessionId]);
 
   // ON LOAD
   useEffect(() => {
     // Override persisted state
-    void dispatch(cancelStream());
+    void dispatch(stopActiveSessionStream());
 
     const jetbrains = isJetBrains();
     setDocumentStylesFromLocalStorage(jetbrains);
@@ -235,7 +239,7 @@ function ParallelListeners() {
   );
 
   useWebviewListener("setInactive", async () => {
-    void dispatch(cancelStream());
+    void dispatch(stopActiveSessionStream());
   });
 
   useWebviewListener("setTTSActive", async (status) => {
@@ -243,12 +247,16 @@ function ParallelListeners() {
   });
 
   useWebviewListener("addContextItem", async (data) => {
-    dispatch(
-      addContextItemsAtIndex({
-        index: data.historyIndex,
-        contextItems: [data.item],
-      }),
-    );
+    const messageId = history[data.historyIndex]?.message.id;
+    if (messageId) {
+      dispatch(
+        addContextItemsByMessageId({
+          sessionId,
+          messageId,
+          contextItems: [data.item],
+        }),
+      );
+    }
   });
 
   useWebviewListener("indexing/statusUpdate", async (data) => {
@@ -267,19 +275,18 @@ function ParallelListeners() {
       // Without a recorded origin the event belongs to the visible session
       // (global active UI entry point, 方案.md §五.21).
       const targetSessionId = origin?.sessionId ?? sessionId;
-      if (targetSessionId) {
-        void dispatch(
-          handleSessionApplyStateUpdate({
-            sessionId: targetSessionId,
-            applyState: {
-              ...state,
-              toolCallId: state.toolCallId ?? origin?.toolCallId,
-            },
-          }),
-        );
+      if (!targetSessionId) {
         return;
       }
-      void dispatch(handleApplyStateUpdate(state));
+      void dispatch(
+        handleSessionApplyStateUpdate({
+          sessionId: targetSessionId,
+          applyState: {
+            ...state,
+            toolCallId: state.toolCallId ?? origin?.toolCallId,
+          },
+        }),
+      );
     },
     [],
   );

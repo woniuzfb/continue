@@ -185,3 +185,75 @@ export const updateFileSymbolsFromHistory = createAsyncThunk<
     console.error("Error updating file symbols from context items", e);
   }
 });
+
+/**
+ * Session-scoped symbols refresh (方案.md §五.20): reads the target session's
+ * history and merges only its missing file URIs, writing through
+ * `setSessionSymbols`. In-flight calls for the same session are shared.
+ */
+export const updateSessionFileSymbolsFromHistory = createAsyncThunk<
+  void,
+  { sessionId: string },
+  ThunkApiType
+>(
+  "sessions/updateFileSymbolsFromHistory",
+  async ({ sessionId }, { dispatch, extra, getState }) => {
+    try {
+      const existing = symbolsInFlight.get(sessionId);
+      if (existing) {
+        await existing;
+        await dispatch(
+          updateSessionFileSymbolsFromHistory({ sessionId }),
+        ).unwrap();
+        return;
+      }
+
+      const run = (async () => {
+        const state = getState();
+        const session = state.sessions.sessionsById[sessionId];
+        if (!session) {
+          return;
+        }
+        const contextItems = getContextItemsFromHistory(session.history);
+        const uniqueUris = new Set(
+          contextItems
+            .filter((item) => item?.uri?.type === "file" && item?.uri?.value)
+            .map((item) => item.uri!.value),
+        );
+        Object.keys(session.symbols).forEach((key) => {
+          uniqueUris.delete(key);
+        });
+        const uriArray = Array.from(uniqueUris);
+        if (uriArray.length === 0) {
+          return;
+        }
+        const result = await extra.ideMessenger.request(
+          "context/getSymbolsForFiles",
+          { uris: uriArray },
+        );
+        if (result.status === "error") {
+          throw new Error(result.error);
+        }
+        const current = getState().sessions.sessionsById[sessionId];
+        if (!current) {
+          return;
+        }
+        dispatch(
+          setSessionSymbols({
+            sessionId,
+            symbols: { ...current.symbols, ...result.content },
+          }),
+        );
+      })();
+
+      symbolsInFlight.set(sessionId, run);
+      try {
+        await run;
+      } finally {
+        symbolsInFlight.delete(sessionId);
+      }
+    } catch (e) {
+      console.error("Error updating session file symbols from history", e);
+    }
+  },
+);

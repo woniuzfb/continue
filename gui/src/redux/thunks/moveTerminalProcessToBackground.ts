@@ -1,13 +1,9 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { ContextItem } from "core";
-import {
-  abortStream,
-  acceptToolCall,
-  updateToolCallOutput,
-} from "../slices/sessionSlice";
 import { ThunkApiType } from "../store";
-import { findToolCallById } from "../util";
-import { streamResponseAfterToolCall } from "./streamResponseAfterToolCall";
+import { findSessionToolCallTarget } from "../util/sessionToolCallWrites";
+import { applySessionToolCallUpdate } from "../util/sessionToolCallWrites";
+import { continueToolLoop } from "./sessionTools";
 
 /**
  * This thunk is used to move a terminal command to the background
@@ -24,11 +20,18 @@ export const moveTerminalProcessToBackground = createAsyncThunk<
 >(
   "chat/moveTerminalProcessToBackground",
   async ({ toolCallId }, { dispatch, getState, extra }) => {
-    // Find the current tool call using utility function
-    const state = getState();
-    const toolCall = findToolCallById(state.session.history, toolCallId);
+    // The session must be explicit (方案.md §五.20); the active session is
+    // resolved once here because this is a visible-UI action.
+    const sessionId = getState().sessions.activeSessionId;
+    const session = sessionId
+      ? getState().sessions.sessionsById[sessionId]
+      : undefined;
+    const target = session
+      ? findSessionToolCallTarget(session.history, toolCallId)
+      : undefined;
+    const toolCall = target?.toolCallState;
 
-    if (!toolCall) {
+    if (!sessionId || !session || !target || !toolCall) {
       console.error("Could not find tool call with ID:", toolCallId);
       return;
     }
@@ -51,15 +54,15 @@ export const moveTerminalProcessToBackground = createAsyncThunk<
       },
     ];
 
-    // Abort any existing stream for this tool call
-    dispatch(abortStream());
-
     // Update the tool call output
-    dispatch(
-      updateToolCallOutput({
+    applySessionToolCallUpdate(
+      { dispatch, getState },
+      {
+        sessionId,
+        messageId: target.assistantItem.message.id,
         toolCallId,
-        contextItems,
-      }),
+        patch: { output: contextItems },
+      },
     );
 
     // Mark the process as backgrounded so we ignore future events
@@ -67,16 +70,22 @@ export const moveTerminalProcessToBackground = createAsyncThunk<
       toolCallId,
     });
 
-    // Mark the tool call as "done" in the UI
-    // This will set isRunning to false in RunTerminalCommand.tsx
-    dispatch(acceptToolCall({ toolCallId }));
-
-    // Trigger an LLM response about the command being moved to background
-    dispatch(updateToolCallOutput({ toolCallId, contextItems }));
-    dispatch(
-      streamResponseAfterToolCall({
+    // Mark the tool call as "done" in the UI (isRunning -> false).
+    applySessionToolCallUpdate(
+      { dispatch, getState },
+      {
+        sessionId,
+        messageId: target.assistantItem.message.id,
         toolCallId,
-      }),
+        patch: { status: "done", output: contextItems },
+      },
     );
+
+    // Continue the turn on the same request.
+    const requestId =
+      getState().sessions.sessionsById[sessionId]?.stream.requestId;
+    if (requestId) {
+      void dispatch(continueToolLoop({ sessionId, requestId, toolCallId }));
+    }
   },
 );

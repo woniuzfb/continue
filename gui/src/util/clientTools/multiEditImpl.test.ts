@@ -1,7 +1,7 @@
 import { ContinueErrorReason } from "core/util/errors";
 import * as ideUtils from "core/util/ideUtils";
 import { beforeEach, describe, expect, it, Mock, vi } from "vitest";
-import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
+import { applyEditToolChanges } from "../../redux/thunks/sessionApplyState";
 import { ClientToolExtras } from "./callClientTool";
 import { multiEditImpl } from "./multiEditImpl";
 
@@ -13,20 +13,21 @@ vi.mock("core/util/ideUtils", () => ({
   resolveRelativePathInDir: vi.fn(),
 }));
 
-vi.mock("../../redux/thunks/handleApplyStateUpdate", () => ({
-  applyForEditTool: vi.fn(),
+vi.mock("../../redux/thunks/sessionApplyState", () => ({
+  applySessionForEditTool: vi.fn(),
+  applyEditToolChanges: vi.fn(),
 }));
 
 describe("multiEditImpl GUI specific", () => {
   let mockExtras: ClientToolExtras;
   let mockResolveRelativePathInDir: Mock;
-  let mockApplyForEditTool: Mock;
+  let mockApplyEditToolChanges: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();
 
     mockResolveRelativePathInDir = vi.mocked(ideUtils.resolveRelativePathInDir);
-    mockApplyForEditTool = vi.mocked(applyForEditTool);
+    mockApplyEditToolChanges = vi.mocked(applyEditToolChanges);
 
     mockExtras = {
       getState: vi.fn(() => ({
@@ -102,13 +103,16 @@ describe("multiEditImpl GUI specific", () => {
       expect(mockExtras.ideMessenger.ide.readFile).toHaveBeenCalledWith(
         "file:///dir/test/file.txt",
       );
-      expect(mockApplyForEditTool).toHaveBeenCalledWith({
-        streamId: "test-uuid",
-        toolCallId: "id",
-        text: "Hi world",
-        filepath: "file:///dir/test/file.txt",
-        isSearchAndReplace: true,
-      });
+      expect(mockApplyEditToolChanges).toHaveBeenCalledWith(
+        expect.objectContaining({ dispatch: expect.anything() }),
+        {
+          streamId: "test-uuid",
+          toolCallId: "id",
+          text: "Hi world",
+          filepath: "file:///dir/test/file.txt",
+          isSearchAndReplace: true,
+        },
+      );
     });
 
     it("should wrap IDE readFile errors", async () => {

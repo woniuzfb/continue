@@ -2,13 +2,14 @@ import { useContext } from "react";
 import { IdeMessengerContext } from "../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../redux/hooks";
 import {
-  setCompactionLoading,
-  deleteCompaction,
-  updateHistoryItemAtIndex,
-} from "../redux/slices/sessionSlice";
-import { saveCurrentSession } from "../redux/thunks/session";
-import { loadFullHistory } from "../redux/thunks/loadFullHistory";
+  deleteCompactionByMessageId,
+  setCompactionLoadingByMessageId,
+  updateHistoryItemByMessageId,
+} from "../redux/slices/sessionsSlice";
+import { loadFullHistory } from "../redux/thunks/sessionPaging";
+import { flushSessionSave } from "../redux/thunks/sessionPersistence";
 import {
+  selectActiveHistory,
   selectActiveHistoryLoadedOffset,
   selectActiveHistoryTruncated,
   selectActiveSessionId,
@@ -26,6 +27,8 @@ export const useCompactConversation = () => {
   const historyLoadedOffset = useAppSelector(
     (state) => selectActiveHistoryLoadedOffset(state) ?? 0,
   );
+  const history = useAppSelector(selectActiveHistory);
+  const sessionId = useAppSelector(selectActiveSessionId);
 
   return async (index: number) => {
     if (!currentSessionId) {
@@ -39,7 +42,7 @@ export const useCompactConversation = () => {
     if (historyTruncated) {
       absoluteIndex = index + historyLoadedOffset;
       try {
-        await dispatch(loadFullHistory()).unwrap();
+        await dispatch(loadFullHistory({ sessionId })).unwrap();
       } catch (e) {
         console.error(
           "compactConversation: loadFullHistory failed, abort compact",
@@ -59,8 +62,17 @@ export const useCompactConversation = () => {
       return;
     }
 
+    const messageId = history[index]?.message.id;
     try {
-      dispatch(setCompactionLoading({ index, loading: true }));
+      if (messageId) {
+        dispatch(
+          setCompactionLoadingByMessageId({
+            sessionId: currentSessionId,
+            messageId,
+            loading: true,
+          }),
+        );
+      }
 
       const result = await ideMessenger.request("conversation/compact", {
         index: absoluteIndex,
@@ -72,21 +84,31 @@ export const useCompactConversation = () => {
       // summary。此时 history 已完整加载，absoluteIndex 即前端 state index。
       // 后端返回 content 即为生成的 summary 文本。
       if (result?.status === "success" && result.content) {
-        dispatch(
-          updateHistoryItemAtIndex({
-            index: absoluteIndex,
-            updates: {
-              conversationSummary: result.content,
-            },
-          }),
-        );
+        const absoluteMessageId = history[absoluteIndex]?.message.id;
+        if (absoluteMessageId) {
+          dispatch(
+            updateHistoryItemByMessageId({
+              sessionId: currentSessionId,
+              messageId: absoluteMessageId,
+              updates: { conversationSummary: result.content },
+            }),
+          );
+        }
         // 清除 stale 的 contextMetrics（compact 改变了上下文结构）
         // updateHistoryItemAtIndex reducer 已自动清除 contextMetrics
       }
     } catch (error) {
       console.error("Error compacting conversation:", error);
     } finally {
-      dispatch(setCompactionLoading({ index, loading: false }));
+      if (messageId) {
+        dispatch(
+          setCompactionLoadingByMessageId({
+            sessionId: currentSessionId,
+            messageId,
+            loading: false,
+          }),
+        );
+      }
     }
   };
 };
@@ -99,6 +121,8 @@ export const useDeleteCompaction = () => {
   const historyLoadedOffset = useAppSelector(
     (state) => selectActiveHistoryLoadedOffset(state) ?? 0,
   );
+  const history = useAppSelector(selectActiveHistory);
+  const sessionId = useAppSelector(selectActiveSessionId);
 
   return async (index: number) => {
     // 懒加载兼容：前端 index 是基于部分 history 的相对位置，
@@ -108,7 +132,7 @@ export const useDeleteCompaction = () => {
     if (historyTruncated) {
       absoluteIndex = index + historyLoadedOffset;
       try {
-        await dispatch(loadFullHistory()).unwrap();
+        await dispatch(loadFullHistory({ sessionId })).unwrap();
       } catch (e) {
         console.error("deleteCompaction: loadFullHistory failed, abort", e);
         return;
@@ -123,11 +147,10 @@ export const useDeleteCompaction = () => {
     }
 
     // Update local state and save to persistence
-    dispatch(deleteCompaction(absoluteIndex));
-    dispatch(
-      saveCurrentSession({
-        openNewSession: false,
-      }),
-    );
+    const messageId = history[absoluteIndex]?.message.id;
+    if (messageId) {
+      dispatch(deleteCompactionByMessageId({ sessionId, messageId }));
+    }
+    void dispatch(flushSessionSave({ sessionId }));
   };
 };

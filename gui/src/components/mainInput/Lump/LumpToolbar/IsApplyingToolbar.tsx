@@ -1,7 +1,7 @@
 import { useContext } from "react";
 import { IdeMessengerContext } from "../../../../context/IdeMessenger";
 import { useAppDispatch } from "../../../../redux/hooks";
-import { cancelStream } from "../../../../redux/thunks/cancelStream";
+import { stopActiveSessionStream } from "../../../../redux/thunks/sessionStreams";
 import { getAltKeyLabel, getMetaKeyLabel } from "../../../../util";
 import { GeneratingIndicator } from "./GeneratingIndicator";
 
@@ -21,7 +21,7 @@ export const IsApplyingToolbar = () => {
           // Apply is prioritized because it can be more catastrophic
           // Intentional to be more WYSIWYG for now
           // Keyboard shortcut is handled in chat
-          void dispatch(cancelStream());
+          void dispatch(stopActiveSessionStream());
           ideMessenger.post("rejectDiff", {});
         }}
       >
