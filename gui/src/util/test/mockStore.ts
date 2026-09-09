@@ -21,7 +21,6 @@ import sessionCatalogReducer, {
 import sessionsReducer, {
   initialSessionsState as INITIAL_SESSIONS_STATE,
 } from "../../redux/slices/sessionsSlice";
-import tabsReducer, { INITIAL_TABS_STATE } from "../../redux/slices/tabsSlice";
 import uiReducer, { DEFAULT_UI_SLICE } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
 
@@ -35,7 +34,6 @@ export const getEmptyRootState: () => RootState = () => {
     editModeState: INITIAL_EDIT_STATE,
     indexing: INITIAL_INDEXING_STATE,
     profiles: INITIAL_PROFILES_STATE,
-    tabs: INITIAL_TABS_STATE,
   };
   const withoutSessionCopy = copyOf(withoutSession) as RootState;
   return withoutSessionCopy;
@@ -59,7 +57,6 @@ export const createMockStore = (
       editModeState: editModeStateReducer,
       config: configReducer,
       indexing: indexingReducer,
-      tabs: tabsReducer,
       profiles: profilesReducer,
     },
     preloadedState: {

@@ -19,6 +19,7 @@ import {
   needsContextMetricsRecompute,
 } from "./sessionMetrics";
 import { getSession, getSessionPage } from "./session";
+import { enqueueSessionSave } from "./sessionPersistence";
 
 /**
  * Phase 1 tab activation pipeline (方案.md §五.16/§五.17/§五.19).
@@ -170,9 +171,23 @@ export const activateSessionTab = createAsyncThunk<
   if (!selectTabDescriptor(getState(), sessionId)) {
     return;
   }
+  const outgoingSessionId = getState().sessions.activeSessionId;
   // Activate first so the UI responds immediately, then finish the
   // side-effects; a slow disk load never blocks the switch.
   dispatch(setActiveSessionId({ sessionId }));
+  // Phase 1 transitional save (方案.md §五.15): switching out persists the
+  // outgoing session in the background.
+  if (outgoingSessionId && outgoingSessionId !== sessionId) {
+    const outgoing = selectSessionById(getState(), outgoingSessionId);
+    if (outgoing?.dirty) {
+      void dispatch(
+        enqueueSessionSave({
+          sessionId: outgoingSessionId,
+          reason: "TAB_SWITCH",
+        }),
+      );
+    }
+  }
   await dispatch(completeSessionActivation({ sessionId }));
 });
 

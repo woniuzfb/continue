@@ -21,7 +21,6 @@ import indexingReducer from "./slices/indexingSlice";
 import { profilesReducer } from "./slices/profilesSlice";
 import sessionCatalogReducer from "./slices/sessionCatalogSlice";
 import sessionsReducer from "./slices/sessionsSlice";
-import tabsReducer from "./slices/tabsSlice";
 import uiReducer from "./slices/uiSlice";
 
 const rootReducer = combineReducers({
@@ -34,7 +33,6 @@ const rootReducer = combineReducers({
   editModeState: editModeStateReducer,
   config: configReducer,
   indexing: indexingReducer,
-  tabs: tabsReducer,
   profiles: profilesReducer,
 });
 
@@ -52,7 +50,6 @@ const saveSubsetFilters = [
     "reasoningSettings",
   ]),
   createFilter("indexing", []),
-  createFilter("tabs", ["tabs"]),
   createFilter("profiles", ["preferencesByProfileId", "selectedProfileId"]),
   // Phase 1 target shape: only the tab projection and the catalog pointer.
   // sessionsById / history / streams / aborters are never persisted.

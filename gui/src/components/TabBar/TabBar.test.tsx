@@ -44,22 +44,6 @@ describe("TabBar", () => {
           ),
         },
       },
-      tabs: {
-        tabs: [
-          {
-            id: "tab-current",
-            title: "Current stream",
-            isActive: true,
-            sessionId: "session-current",
-          },
-          {
-            id: "tab-other",
-            title: "Other session",
-            isActive: false,
-            sessionId: "session-other",
-          },
-        ],
-      },
     });
 
     render(
@@ -69,6 +53,7 @@ describe("TabBar", () => {
     );
     store.clearActions();
 
+    // Clicking the already-active tab must not switch or save anything.
     fireEvent.click(screen.getByText("Current stream"));
 
     expect(store.getActions()).toEqual([]);

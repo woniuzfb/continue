@@ -3,23 +3,19 @@ import React, { useCallback, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import styled from "styled-components";
 import { defaultBorderRadius } from "..";
-import {
-  addTab,
-  handleSessionChange,
-  removeTab,
-  setActiveTab,
-  setTabs,
-} from "../../redux/slices/tabsSlice";
 import { AppDispatch, RootState } from "../../redux/store";
+import {
+  activateSessionTab,
+  closeSessionTab,
+  createAndActivateSession,
+} from "../../redux/thunks/sessionActivation";
+import { selectTabSummaries } from "../../redux/selectors/sessions";
+import { saveActiveSession } from "../../redux/thunks/sessionPersistence";
 import { varWithFallback } from "../../styles/theme";
 import {
   selectActiveHistory,
   selectActiveSessionId,
-  selectActiveTitle,
 } from "../../redux/selectors/sessionView";
-import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
-import { saveActiveSession } from "../../redux/thunks/sessionPersistence";
-import { openSessionTab } from "../../redux/thunks/sessionLifecycle";
 
 // Haven't set up theme colors for tabs yet
 // Will keep it simple and choose from existing ones. Comments show vars we could use
@@ -138,106 +134,36 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
   const currentSessionId = useSelector((state: RootState) =>
     selectActiveSessionId(state),
   );
-  const currentSessionTitle = useSelector((state: RootState) =>
-    selectActiveTitle(state),
-  );
   const hasHistory = useSelector(
     (state: RootState) => selectActiveHistory(state).length > 0,
   );
-  const tabs = useSelector((state: RootState) => state.tabs.tabs);
+  // 方案.md §五.1: the tab bar is a projection of tabOrder + descriptors +
+  // runtime, never its own state.
+  const tabs = useSelector((state: RootState) => selectTabSummaries(state));
 
-  // Simple UUID generator for our needs
-  const generateId = useCallback(() => {
-    return Date.now().toString(36) + Math.random().toString(36).substring(2);
-  }, []);
-
-  useEffect(() => {
-    if (!currentSessionId) return;
-
-    dispatch(
-      handleSessionChange({
-        currentSessionId,
-        currentSessionTitle,
-        newTabId: generateId(), // Pass the ID generator result
-      }),
-    );
-  }, [currentSessionId, currentSessionTitle]);
-
-  const handleNewTab = async () => {
-    // openNewSession: true 时 saveCurrentSession 内部会先 cacheCurrentSession
-    // （把当前会话快照进 LRU 缓存，含正在流的中间内容）再 dispatch(newSession())
-    // —— 后台续流依赖这个快照，切走前的 chunk 才不会丢。
-    // 同步部分（getState、cache、newSession）微秒级完成，异步部分（IPC、
-    // LLM 标题生成）在后台执行不阻塞 UI。
+  const handleNewTab = useCallback(async () => {
     if (hasHistory) {
-      void dispatch(saveActiveSession({ openNewSession: true }));
+      await dispatch(saveActiveSession({ openNewSession: true }));
     } else {
-      void dispatch(createAndActivateSession({ origin: "new" }));
+      await dispatch(createAndActivateSession({ origin: "new" }));
     }
-
-    dispatch(
-      addTab({
-        id: generateId(),
-        title: `Chat ${tabs.length + 1}`,
-        isActive: true,
-        sessionId: undefined,
-      }),
-    );
-  };
+  }, [dispatch, hasHistory]);
 
   useEffect(() => {
-    if (!tabs.length) {
-      handleNewTab();
+    if (tabs.length === 0) {
+      void handleNewTab();
     }
-  }, [tabs.map((t) => t.id).join(",")]);
+  }, [tabs.length, handleNewTab]);
 
-  const handleTabClick = (id: string) => {
-    const targetTab = tabs.find((tab) => tab.id === id);
-    if (!targetTab) return;
-
-    // Clicking the already active tab must be a no-op. In particular, while
-    // it is streaming, re-running loadSession would restore the LRU snapshot
-    // taken at stream start and can temporarily replace newer in-memory chunks.
-    if (targetTab.isActive) {
+  const handleTabClick = (sessionId: string) => {
+    if (sessionId === currentSessionId) {
       return;
     }
-
-    // 先切 UI（立即响应），save/load 在后台执行。
-    // 旧实现 await loadSession 阻塞 setActiveTab，目标 session 未命中 LRU
-    // 缓存时（如 new session tab）需等 IPC + compileChatForContextMetrics
-    // 完成才能看到 tab 切换，造成明显卡顿。
-    const shouldSave = hasHistory;
-    dispatch(setActiveTab(id));
-    if (targetTab.sessionId) {
-      void dispatch(openSessionTab({ sessionId: targetTab.sessionId }));
-    }
+    void dispatch(activateSessionTab({ sessionId }));
   };
 
-  const handleTabClose = async (id: string) => {
-    //if (tabs.length <= 1) return;
-
-    const isClosingActive = tabs.find((t) => t.id === id)?.isActive;
-    const filtered = tabs.filter((t) => t.id !== id);
-
-    if (isClosingActive) {
-      const lastTab = filtered[filtered.length - 1];
-      if (filtered.length) {
-        await handleTabClick(lastTab.id);
-        dispatch(
-          setTabs(
-            filtered.map((tab, i) => ({
-              ...tab,
-              isActive: i === filtered.length - 1,
-            })),
-          ),
-        );
-      } else {
-        dispatch(setTabs([]));
-        void dispatch(createAndActivateSession({ origin: "new" }));
-      }
-    } else {
-      dispatch(removeTab(id));
-    }
+  const handleTabClose = (sessionId: string) => {
+    void dispatch(closeSessionTab({ sessionId }));
   };
 
   return (
@@ -247,32 +173,35 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
         display: tabs.length === 1 ? "none" : "flex",
       }}
     >
-      {tabs.map((tab) => (
-        <Tab
-          key={tab.id}
-          isActive={tab.isActive}
-          aria-current={tab.isActive ? "page" : undefined}
-          onClick={() => handleTabClick(tab.id)}
-          onAuxClick={(e) => {
-            // Middle mouse button
-            if (e.button === 1) {
-              e.preventDefault();
-              handleTabClose(tab.id);
-            }
-          }}
-        >
-          <TabTitle>{tab.title}</TabTitle>
-          <CloseButton
-            /* disabled={tabs.length === 1} */
-            onClick={(e) => {
-              e.stopPropagation();
-              handleTabClose(tab.id);
+      {tabs.map((tab) => {
+        const isActive = tab.sessionId === currentSessionId;
+        return (
+          <Tab
+            key={tab.sessionId}
+            isActive={isActive}
+            aria-current={isActive ? "page" : undefined}
+            onClick={() => handleTabClick(tab.sessionId)}
+            onAuxClick={(e) => {
+              // Middle mouse button
+              if (e.button === 1) {
+                e.preventDefault();
+                handleTabClose(tab.sessionId);
+              }
             }}
           >
-            <XMarkIcon width={12} height={12} />
-          </CloseButton>
-        </Tab>
-      ))}
+            <TabTitle>{tab.title}</TabTitle>
+            <CloseButton
+              /* disabled={tabs.length === 1} */
+              onClick={(e) => {
+                e.stopPropagation();
+                handleTabClose(tab.sessionId);
+              }}
+            >
+              <XMarkIcon width={12} height={12} />
+            </CloseButton>
+          </Tab>
+        );
+      })}
       <TabBarSpace>
         {/* <NewTabButton onClick={handleNewTab}>
           <PlusIcon width={16} height={16} />
