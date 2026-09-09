@@ -5,9 +5,6 @@ import { MockIdeMessenger } from "../../context/MockIdeMessenger";
 import configReducer, {
   INITIAL_CONFIG_SLICE,
 } from "../../redux/slices/configSlice";
-import editModeStateReducer, {
-  INITIAL_EDIT_STATE,
-} from "../../redux/slices/editState";
 import indexingReducer, {
   INITIAL_INDEXING_STATE,
 } from "../../redux/slices/indexingSlice";
@@ -31,7 +28,6 @@ export const getEmptyRootState: () => RootState = () => {
     sessionCatalog: INITIAL_SESSION_CATALOG_STATE,
     config: INITIAL_CONFIG_SLICE,
     ui: DEFAULT_UI_SLICE,
-    editModeState: INITIAL_EDIT_STATE,
     indexing: INITIAL_INDEXING_STATE,
     profiles: INITIAL_PROFILES_STATE,
   };
@@ -54,7 +50,6 @@ export const createMockStore = (
       sessions: sessionsReducer,
       sessionCatalog: sessionCatalogReducer,
       ui: uiReducer,
-      editModeState: editModeStateReducer,
       config: configReducer,
       indexing: indexingReducer,
       profiles: profilesReducer,

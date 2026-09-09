@@ -12,7 +12,7 @@ import { useStore } from "react-redux";
 import { selectActiveSessionId } from "../redux/selectors/sessionView";
 import { setSessionMergeSettings } from "../redux/slices/sessionsSlice";
 import type { RootState } from "../redux/store";
-import { setCodeToEdit } from "../redux/slices/editState";
+import { setSessionCodeToEdit } from "../redux/slices/sessionsSlice";
 import { setShowDialog } from "../redux/slices/uiSlice";
 import { enterEdit, exitEdit } from "../redux/thunks/edit";
 import { fontSize, isMetaEquivalentKeyPressed } from "../util";
@@ -170,8 +170,9 @@ const Layout = () => {
     "setCodeToEdit",
     async (payload) => {
       dispatch(
-        setCodeToEdit({
-          codeToEdit: payload,
+        setSessionCodeToEdit({
+          sessionId: selectActiveSessionId(store.getState()),
+          codeToEdit: Array.isArray(payload) ? payload : [payload],
         }),
       );
     },

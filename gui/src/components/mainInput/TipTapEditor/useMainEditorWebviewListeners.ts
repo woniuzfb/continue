@@ -4,7 +4,7 @@ import { rifWithContentsToContextItem } from "core/commands/util";
 import { MutableRefObject } from "react";
 import { useWebviewListener } from "../../../hooks/useWebviewListener";
 import { useAppSelector } from "../../../redux/hooks";
-import { clearCodeToEdit } from "../../../redux/slices/editState";
+import { setSessionCodeToEdit } from "../../../redux/slices/sessionsSlice";
 import { setSessionNewestToolbarPreviewForInput } from "../../../redux/slices/sessionsSlice";
 import { AppDispatch } from "../../../redux/store";
 
@@ -69,7 +69,7 @@ export function useMainEditorWebviewListeners({
   useWebviewListener(
     "focusContinueInput",
     async () => {
-      dispatch(clearCodeToEdit());
+      dispatch(setSessionCodeToEdit({ sessionId, codeToEdit: [] }));
 
       if (historyLength > 0) {
         await dispatch(saveActiveSession({ openNewSession: false }));

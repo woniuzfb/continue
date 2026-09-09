@@ -31,6 +31,7 @@ import {
 } from "./getSuggestion";
 import { handleImageFile } from "./imageUtils";
 import {
+  selectActiveCodeToEdit,
   selectActiveHistory,
   selectActiveIsInEdit,
   selectActiveIsStreaming,
@@ -123,7 +124,7 @@ export function createEditorConfig(options: {
   const historyLength = useAppSelector(
     (store) => selectActiveHistory(store).length,
   );
-  const codeToEdit = useAppSelector((store) => store.editModeState.codeToEdit);
+  const codeToEdit = useAppSelector((state) => selectActiveCodeToEdit(state));
   const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
   const isInEditRef = useUpdatingRef(isInEdit);
 

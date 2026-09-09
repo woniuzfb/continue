@@ -928,6 +928,15 @@ export const sessionsSlice = createSlice({
         lastItem.isGatheringContext = action.payload.gathering;
       }
     },
+    setSessionLastNonEditSessionWasEmpty: (
+      state,
+      action: PayloadAction<{ sessionId: string; isEmpty: boolean }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.editState.lastNonEditSessionWasEmpty = action.payload.isEmpty;
+      }
+    },
     setSessionIsInEdit: (
       state,
       action: PayloadAction<{ sessionId: string; isInEdit: boolean }>,
@@ -1219,6 +1228,7 @@ export const {
   setSessionMainEditorDraft,
   setSessionMainEditorContentTrigger,
   setSessionMainEditorAttachmentsRestore,
+  setSessionLastNonEditSessionWasEmpty,
   setSessionMergeSettings,
   setSessionGatheringContext,
   setSessionIsInEdit,

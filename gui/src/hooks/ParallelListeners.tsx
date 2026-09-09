@@ -4,7 +4,7 @@ import { IdeMessengerContext } from "../context/IdeMessenger";
 import { FromCoreProtocol } from "core/protocol";
 import { useAppDispatch, useAppSelector } from "../redux/hooks";
 import { setConfigLoading, setConfigResult } from "../redux/slices/configSlice";
-import { setLastNonEditSessionEmpty } from "../redux/slices/editState";
+import { setSessionLastNonEditSessionWasEmpty } from "../redux/slices/sessionsSlice";
 import { updateIndexingStatus } from "../redux/slices/indexingSlice";
 import {
   initializeProfilePreferences,
@@ -289,7 +289,14 @@ function ParallelListeners() {
 
   useEffect(() => {
     if (!isInEdit) {
-      dispatch(setLastNonEditSessionEmpty(history.length === 0));
+      if (sessionId) {
+        dispatch(
+          setSessionLastNonEditSessionWasEmpty({
+            sessionId,
+            isEmpty: history.length === 0,
+          }),
+        );
+      }
     }
   }, [isInEdit, history]);
 

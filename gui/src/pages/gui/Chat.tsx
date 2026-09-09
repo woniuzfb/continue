@@ -69,6 +69,7 @@ import { ExploreDialogWatcher } from "./ExploreDialogWatcher";
 import { useAutoScroll } from "./useAutoScroll";
 
 import {
+  selectActiveCodeToEdit,
   selectActiveHasMoreHistory,
   selectActiveHistory,
   selectActiveIsHistoryLoading,
@@ -155,7 +156,7 @@ export function Chat() {
   const showChatScrollbar = useAppSelector(
     (state) => state.config.config.ui?.showChatScrollbar,
   );
-  const codeToEdit = useAppSelector((state) => state.editModeState.codeToEdit);
+  const codeToEdit = useAppSelector((state) => selectActiveCodeToEdit(state));
   const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
 
   const lastSessionId = useAppSelector((state) => selectLastSessionId(state));
@@ -204,7 +205,7 @@ export function Chat() {
       const latestPendingToolCalls = selectPendingToolCalls(stateSnapshot);
       const latestPendingApplyStates = selectDoneApplyStates(stateSnapshot);
       const isCurrentlyInEdit = selectActiveIsInEdit(stateSnapshot);
-      const codeToEditSnapshot = stateSnapshot.editModeState.codeToEdit;
+      const codeToEditSnapshot = selectActiveCodeToEdit(stateSnapshot);
       const selectedModelByRole =
         stateSnapshot.config.config.selectedModelByRole;
       const currentMode = selectActiveMode(stateSnapshot);

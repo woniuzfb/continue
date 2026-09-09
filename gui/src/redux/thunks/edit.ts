@@ -7,23 +7,35 @@ import {
 } from "core";
 import { stripImages } from "core/util/messageContent";
 import { resolveEditorContent } from "../../components/mainInput/TipTapEditor";
+
 import {
-  clearCodeToEdit,
-  INITIAL_EDIT_APPLY_STATE,
-  setPreviousModeEditorContent,
-  setReturnToModeAfterEdit,
-  updateEditStateApplyState,
-} from "../slices/editState";
-import { selectActiveSessionId } from "../selectors/sessionView";
+  selectActiveCodeToEdit,
+  selectActiveEditApplyState,
+  selectActiveLastNonEditSessionWasEmpty,
+  selectActivePreviousModeEditorContent,
+  selectActiveReturnToMode,
+  selectActiveSessionId,
+} from "../selectors/sessionView";
 import { createAndActivateSession } from "./sessionActivation";
 import {
   beginSessionStream,
   finishSessionStream,
+  setSessionCodeToEdit,
   setSessionIsInEdit,
   setSessionMainEditorContentTrigger,
   setSessionMode,
+  setSessionPreviousModeEditorContent,
+  setSessionReturnToMode,
+  updateSessionEditApplyState,
 } from "../slices/sessionsSlice";
+import { EDIT_MODE_STREAM_ID } from "core/edit/constants";
 import { ThunkApiType } from "../store";
+
+/** Default per-session edit apply state (方案.md §五.4). */
+const INITIAL_EDIT_APPLY_STATE = {
+  streamId: EDIT_MODE_STREAM_ID,
+  status: "not-started" as const,
+};
 import { bootstrapLastSession } from "./sessionLifecycle";
 import { flushSessionSave } from "./sessionPersistence";
 import { sessionStreamWrapper } from "./sessionStreamWrapper";
@@ -99,19 +111,19 @@ export const exitEdit = createAsyncThunk<
   ThunkApiType
 >("edit/exit", async ({ openNewSession }, { dispatch, extra, getState }) => {
   const state = getState();
-  const codeToEdit = state.editModeState.codeToEdit;
+  const codeToEdit = selectActiveCodeToEdit(state);
   const sessionId = selectActiveSessionId(state);
   const isInEdit = sessionId
     ? (state.sessions.sessionsById[sessionId]?.isInEdit ?? false)
     : false;
   const previousModeEditorContent =
-    state.editModeState.previousModeEditorContent;
+    selectActivePreviousModeEditorContent(state);
 
   if (!isInEdit) {
     return;
   }
 
-  if (codeToEdit[0] && state.editModeState.applyState.numDiffs) {
+  if (codeToEdit[0] && selectActiveEditApplyState(state)?.numDiffs) {
     extra.ideMessenger.post("rejectDiff", {
       filepath: codeToEdit[0].filepath,
     });
@@ -119,8 +131,13 @@ export const exitEdit = createAsyncThunk<
 
   extra.ideMessenger.post("edit/clearDecorations", undefined);
 
-  dispatch(clearCodeToEdit());
-  dispatch(updateEditStateApplyState(INITIAL_EDIT_APPLY_STATE));
+  dispatch(setSessionCodeToEdit({ sessionId, codeToEdit: [] }));
+  dispatch(
+    updateSessionEditApplyState({
+      sessionId,
+      updates: INITIAL_EDIT_APPLY_STATE,
+    }),
+  );
   if (sessionId) {
     dispatch(setSessionIsInEdit({ sessionId, isInEdit: false }));
   }
@@ -133,10 +150,12 @@ export const exitEdit = createAsyncThunk<
         content: previousModeEditorContent,
       }),
     );
-    dispatch(setPreviousModeEditorContent(undefined));
+    dispatch(
+      setSessionPreviousModeEditorContent({ sessionId, content: undefined }),
+    );
   }
 
-  if (openNewSession || state.editModeState.lastNonEditSessionWasEmpty) {
+  if (openNewSession || selectActiveLastNonEditSessionWasEmpty(state)) {
     await dispatch(createAndActivateSession({ origin: "new" }));
   } else {
     await dispatch(bootstrapLastSession());
@@ -147,7 +166,7 @@ export const exitEdit = createAsyncThunk<
     dispatch(
       setSessionMode({
         sessionId: nextSessionId,
-        mode: state.editModeState.returnToMode,
+        mode: selectActiveReturnToMode(state),
       }),
     );
   }
@@ -170,7 +189,7 @@ export const enterEdit = createAsyncThunk<
       return;
     }
 
-    if (!state.editModeState.codeToEdit[0]) {
+    if (!selectActiveCodeToEdit(state)[0]) {
       extra.ideMessenger.post("showToast", [
         "info",
         "Please open a file to use Edit mode",
@@ -179,11 +198,23 @@ export const enterEdit = createAsyncThunk<
     }
 
     dispatch(setSessionMainEditorContentTrigger({ sessionId, content: {} }));
-    dispatch(setPreviousModeEditorContent(editorContent));
+    dispatch(
+      setSessionPreviousModeEditorContent({
+        sessionId,
+        content: editorContent,
+      }),
+    );
 
     const currentMode = state.sessions.sessionsById[sessionId]?.mode ?? "chat";
-    dispatch(setReturnToModeAfterEdit(returnToMode ?? currentMode));
-    dispatch(updateEditStateApplyState(INITIAL_EDIT_APPLY_STATE));
+    dispatch(
+      setSessionReturnToMode({ sessionId, mode: returnToMode ?? currentMode }),
+    );
+    dispatch(
+      updateSessionEditApplyState({
+        sessionId,
+        updates: INITIAL_EDIT_APPLY_STATE,
+      }),
+    );
 
     await dispatch(flushSessionSave({ sessionId }));
     await dispatch(createAndActivateSession({ origin: "new" }));

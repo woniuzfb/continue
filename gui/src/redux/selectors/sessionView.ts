@@ -22,6 +22,7 @@ const EMPTY_APPLY_STATES: SessionRuntimeState["codeBlockApplyStates"] = {
   curIndex: 0,
 };
 const EMPTY_PREVIEWS: SessionRuntimeState["newestToolbarPreviewForInput"] = {};
+const EMPTY_CODE_TO_EDIT: SessionRuntimeState["editState"]["codeToEdit"] = [];
 
 export const selectActiveSessionId = (state: RootState): string =>
   state.sessions.activeSessionId ?? "";
@@ -124,6 +125,22 @@ export const selectActiveCompactionLoading = (
   messageId: string | undefined,
 ): boolean =>
   !!messageId && !!activeRuntime(state)?.compactionLoading[messageId];
+
+/** Edit-mode runtime (方案.md §五.4), per session. */
+export const selectActiveCodeToEdit = (state: RootState) =>
+  activeRuntime(state)?.editState.codeToEdit ?? EMPTY_CODE_TO_EDIT;
+
+export const selectActiveEditApplyState = (state: RootState) =>
+  activeRuntime(state)?.editState.applyState;
+
+export const selectActiveReturnToMode = (state: RootState) =>
+  activeRuntime(state)?.editState.returnToMode ?? "chat";
+
+export const selectActiveLastNonEditSessionWasEmpty = (state: RootState) =>
+  activeRuntime(state)?.editState.lastNonEditSessionWasEmpty ?? false;
+
+export const selectActivePreviousModeEditorContent = (state: RootState) =>
+  activeRuntime(state)?.editState.previousModeEditorContent;
 
 /** Catalog fields (方案.md §五.6), preferring the catalog slice. */
 export const selectLastSessionId = (state: RootState): string | undefined =>

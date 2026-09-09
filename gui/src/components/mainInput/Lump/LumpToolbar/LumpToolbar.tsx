@@ -26,6 +26,7 @@ import { StreamingToolbar } from "./StreamingToolbar";
 import { TtsActiveToolbar } from "./TtsActiveToolbar";
 import {
   selectActiveCodeBlockApplyStates,
+  selectActiveEditApplyState,
   selectActiveIsInEdit,
   selectActiveIsStreaming,
 } from "../../../../redux/selectors/sessionView";
@@ -63,8 +64,8 @@ export function LumpToolbar() {
   const jetbrains = isJetBrains();
   const pendingToolCalls = useAppSelector(selectPendingToolCalls);
   const firstPendingToolCall = useAppSelector(selectFirstPendingToolCall);
-  const editApplyState = useAppSelector(
-    (state) => state.editModeState.applyState,
+  const editApplyState = useAppSelector((state) =>
+    selectActiveEditApplyState(state),
   );
   const applyStates = useAppSelector(
     (state) => selectActiveCodeBlockApplyStates(state).states,
@@ -181,7 +182,7 @@ export function LumpToolbar() {
   }
 
   if (isInEdit) {
-    if (editApplyState.status === "done") {
+    if (editApplyState?.status === "done") {
       return <EditOutcomeToolbar />;
     }
 

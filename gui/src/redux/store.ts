@@ -20,7 +20,6 @@ import {
 } from "./persistV2";
 import { IdeMessenger, IIdeMessenger } from "../context/IdeMessenger";
 import configReducer from "./slices/configSlice";
-import editModeStateReducer from "./slices/editState";
 import indexingReducer from "./slices/indexingSlice";
 import { profilesReducer } from "./slices/profilesSlice";
 import sessionCatalogReducer from "./slices/sessionCatalogSlice";
@@ -28,24 +27,18 @@ import sessionsReducer from "./slices/sessionsSlice";
 import uiReducer from "./slices/uiSlice";
 
 const rootReducer = combineReducers({
-  // 方案.md §五.1/§五.3: sessions/sessionCatalog are the session state; the
-  // legacy session/tabs slices are gone. editModeState remains until the edit
-  // flow moves its runtime into the session.
+  // 方案.md §五.1/§五.3/§五.4: sessions/sessionCatalog own the session state,
+  // including the per-session edit runtime. The legacy session/tabs/editMode
+  // slices are gone.
   sessions: sessionsReducer,
   sessionCatalog: sessionCatalogReducer,
   ui: uiReducer,
-  editModeState: editModeStateReducer,
   config: configReducer,
   indexing: indexingReducer,
   profiles: profilesReducer,
 });
 
 const saveSubsetFilters = [
-  createFilter("editModeState", [
-    "returnToMode",
-    "lastNonEditSessionWasEmpty",
-    "codeToEdit",
-  ]),
   createFilter("config", []),
   createFilter("ui", [
     "toolSettings",

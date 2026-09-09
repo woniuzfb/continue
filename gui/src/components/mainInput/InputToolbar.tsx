@@ -19,6 +19,7 @@ import { selectUseActiveFile } from "../../redux/selectors";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
 import { setSessionReasoningEnabled } from "../../redux/slices/sessionsSlice";
 import {
+  selectActiveCodeToEdit,
   selectActiveHasReasoningEnabled,
   selectActiveIsInEdit,
   selectActiveSessionId,
@@ -70,7 +71,7 @@ function InputToolbar(props: InputToolbarProps) {
   const defaultModel = useAppSelector(selectSelectedChatModel);
   const useActiveFile = useAppSelector(selectUseActiveFile);
   const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
-  const codeToEdit = useAppSelector((store) => store.editModeState.codeToEdit);
+  const codeToEdit = useAppSelector((state) => selectActiveCodeToEdit(state));
   const hasReasoningEnabled = useAppSelector((store) =>
     selectActiveHasReasoningEnabled(store),
   );

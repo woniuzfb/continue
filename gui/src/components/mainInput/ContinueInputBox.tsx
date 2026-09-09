@@ -21,6 +21,7 @@ import { InputBoxDiv } from "./TipTapEditor/components/StyledComponents";
 import { getUserInputStaticHtml } from "./userInputHtmlCache";
 import { AttachmentMeta, AttachedFile } from "./types";
 import {
+  selectActiveEditApplyState,
   selectActiveIsInEdit,
   selectActiveIsStreaming,
 } from "../../redux/selectors/sessionView";
@@ -72,6 +73,9 @@ const EDIT_ALLOWED_SLASH_COMMAND_SOURCES: SlashCommandSource[] = [
 
 function ContinueInputBox(props: ContinueInputBoxProps) {
   const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
+  const editApplyState = useAppSelector((state) =>
+    selectActiveEditApplyState(state),
+  );
   const ideMessenger = useContext(IdeMessengerContext);
   const availableSlashCommands = useAppSelector(
     selectSlashCommandComboBoxInputs,
@@ -80,7 +84,6 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
     (state) => state.config.config.contextProviders,
   );
   const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
-  const editModeState = useAppSelector((state) => state.editModeState);
 
   const filteredSlashCommands = useMemo(() => {
     if (isInEdit) {
@@ -116,13 +119,12 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
         hideImageUpload: false,
         hideUseCodebase: true,
         hideSelectModel: false,
-        enterText:
-          editModeState.applyState.status === "done" ? "Retry" : "Edit",
+        enterText: editApplyState?.status === "done" ? "Retry" : "Edit",
       } as ToolbarOptions;
     }
     // Stable empty object to avoid re-renders from identity changes
     return {} as ToolbarOptions;
-  }, [isInEdit, editModeState.applyState.status]);
+  }, [isInEdit, editApplyState?.status]);
 
   const { appliedRules = [], contextItems = [], attachments = [] } = props;
   const hasBottomExtras = appliedRules.length > 0 || contextItems.length > 0;
