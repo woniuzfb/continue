@@ -38,7 +38,10 @@ const DEFAULT_MOCK_CORE_RESPONSES: MockResponses = {
   ],
   "history/list": [],
   "docs/getIndexedPages": [],
-  "history/save": undefined,
+  "history/save": {
+    firstTurnItems: [],
+    totalHistoryCount: 0,
+  },
   "config/getSerializedProfileInfo": {
     profileId: "local",
     profiles: [],

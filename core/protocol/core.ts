@@ -75,6 +75,22 @@ export interface LoadPageHistoryRequest {
   limit: number;
 }
 
+/**
+ * 方案.md §七.8.1: `history/save` returns the authoritative post-merge data.
+ * GUI 只在 success 后更新，绝不从 truncated window 重算。
+ */
+export interface SaveHistoryResponse {
+  /** 磁盘首轮原始条目（未经 GUI bubble merge）。 */
+  firstTurnItems: ChatHistoryItem[];
+  latestConversationSummary?: {
+    sourceMessageId: string;
+    sourceAbsoluteIndex: number;
+    content: string;
+  };
+  /** 合并后的完整 history 条数（含磁盘冻结头部）。 */
+  totalHistoryCount: number;
+}
+
 export interface LoadPageHistoryResponse {
   items: ChatHistoryItem[];
   hasMore: boolean;
@@ -101,7 +117,7 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   "history/load": [{ id: string }, Session];
   "history/loadPage": [LoadPageHistoryRequest, LoadPageHistoryResponse];
   "history/searchContent": [{ query: string }, HistorySearchResult[]];
-  "history/save": [Session, void];
+  "history/save": [Session, SaveHistoryResponse];
   "history/share": [{ id: string; outputDir?: string }, void];
   "history/clear": [undefined, void];
   "devdata/log": [DevDataLogEvent, void];

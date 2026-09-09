@@ -330,7 +330,7 @@ export class Core {
 
     on("history/save", async (msg) => {
       // 异步保存；错误向上传播（gui 侧 await request("history/save")）。
-      await historyManager.save(msg.data);
+      return historyManager.save(msg.data);
     });
 
     on("history/share", async (msg) => {

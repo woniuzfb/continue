@@ -18,6 +18,8 @@ import {
   encodePromptLogDeltas,
 } from "./promptLogDelta.js";
 import { SessionPersistenceError } from "./sessionPersistenceError.js";
+import type { SaveHistoryResponse } from "../protocol/core";
+import type { ChatHistoryItem } from "../index";
 function safeParseArray<T>(
   value: string,
   errorMessage: string = "Error parsing array",
@@ -412,7 +414,7 @@ export class HistoryManager {
     };
   }
 
-  async save(session: Session): Promise<void> {
+  async save(session: Session): Promise<SaveHistoryResponse> {
     // 用跨进程锁串行化整个“读→合并→写”，使两个 IDE 窗口编辑同一 session 时不会
     // 互相覆盖。finally 保证任何退出路径（数据完整性守卫的 return、抛异常）都释放锁。
     // 异步版：等待锁期间不再阻塞事件循环（见 sleep/acquireSessionLock）。
@@ -420,13 +422,13 @@ export class HistoryManager {
       getSessionFilePath(session.sessionId),
     );
     try {
-      await this._saveUnlocked(session);
+      return await this._saveUnlocked(session);
     } finally {
       await releaseSessionLock(lockDir);
     }
   }
 
-  private async _saveUnlocked(session: Session): Promise<void> {
+  private async _saveUnlocked(session: Session): Promise<SaveHistoryResponse> {
     // Save the main session json file
     // Explicitely rewriting here to influence the written key order in the file!
     // e.g. id at the top, history next, etc.
@@ -605,6 +607,60 @@ export class HistoryManager {
     } finally {
       await releaseSessionsListLock(listLock);
     }
+
+    // 方案.md §七.8.1: 返回权威首轮 / 最新摘要 / 完整条数。
+    return {
+      firstTurnItems: this.firstTurnItemsOf(finalHistory),
+      latestConversationSummary: this.latestSummaryOf(finalHistory),
+      totalHistoryCount: finalHistory.length,
+    };
+  }
+
+  /**
+   * 磁盘首轮条目：从第一条 user 消息到第二条 user 消息之前（不含）。
+   * 未经 GUI bubble merge，直接来自落盘的 finalHistory（方案.md §五.5）。
+   */
+  private firstTurnItemsOf(history: ChatHistoryItem[]): ChatHistoryItem[] {
+    if (history.length === 0) {
+      return [];
+    }
+    const firstUserIndex = history.findIndex(
+      (item) => item.message.role === "user",
+    );
+    if (firstUserIndex < 0) {
+      return [];
+    }
+    let end = history.length;
+    for (let i = firstUserIndex + 1; i < history.length; i++) {
+      if (history[i].message.role === "user") {
+        end = i;
+        break;
+      }
+    }
+    return history.slice(firstUserIndex, end);
+  }
+
+  /** 最近一次 compact 的摘要及其来源条目位置（方案.md §七.8.1）。 */
+  private latestSummaryOf(history: ChatHistoryItem[]):
+    | {
+        sourceMessageId: string;
+        sourceAbsoluteIndex: number;
+        content: string;
+      }
+    | undefined {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const summary = (history[i] as { conversationSummary?: string })
+        .conversationSummary;
+      const messageId = (history[i].message as { id?: string }).id;
+      if (summary && messageId) {
+        return {
+          sourceMessageId: messageId,
+          sourceAbsoluteIndex: i,
+          content: summary,
+        };
+      }
+    }
+    return undefined;
   }
 }
 

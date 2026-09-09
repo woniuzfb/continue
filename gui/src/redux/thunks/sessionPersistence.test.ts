@@ -142,3 +142,33 @@ describe("sessionPersistence.saveSession", () => {
     expect(request).not.toHaveBeenCalled();
   });
 });
+
+describe("sessionPersistence.saveSession response handling", () => {
+  beforeEach(() => resetSessionSaveQueues());
+
+  it("applies the authoritative count and summary from the save response", async () => {
+    const store = makeStore();
+    store.mockIdeMessenger.request = vi.fn().mockResolvedValue({
+      status: "success",
+      content: {
+        firstTurnItems: [],
+        totalHistoryCount: 42,
+        latestConversationSummary: {
+          sourceMessageId: "a1",
+          sourceAbsoluteIndex: 1,
+          content: "summary text",
+        },
+      },
+      done: true,
+    }) as any;
+
+    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.pagination.totalCount).toBe(42);
+    expect(session.latestConversationSummary).toEqual({
+      sourceMessageId: "a1",
+      content: "summary text",
+    });
+  });
+});

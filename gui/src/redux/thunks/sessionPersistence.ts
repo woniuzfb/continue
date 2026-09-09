@@ -4,6 +4,8 @@ import { Session } from "core";
 import { selectSessionById } from "../selectors/sessions";
 import {
   markSessionPersisted,
+  setSessionConversationSummary,
+  setSessionPagination,
   setSessionPersistenceState,
   SessionPersistenceState,
 } from "../slices/sessionsSlice";
@@ -104,6 +106,30 @@ async function performSave(
     );
     // Never clear dirty / pending on failure (方案.md §七.7).
     throw new Error(result.error);
+  }
+
+  // 方案.md §七.8.1: the response carries the authoritative post-merge data.
+  // Only the disk accounting is applied now; firstTurnItems are loaded and
+  // maintained in Phase 4 (方案.md §五.5).
+  if (result.content?.totalHistoryCount !== undefined) {
+    dispatch(
+      setSessionPagination({
+        sessionId,
+        pagination: { totalCount: result.content.totalHistoryCount },
+      }),
+    );
+  }
+  const summary = result.content?.latestConversationSummary;
+  if (summary?.sourceMessageId && summary.content) {
+    dispatch(
+      setSessionConversationSummary({
+        sessionId,
+        summary: {
+          sourceMessageId: summary.sourceMessageId,
+          content: summary.content,
+        },
+      }),
+    );
   }
 
   dispatch(
