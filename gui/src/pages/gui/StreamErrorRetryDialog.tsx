@@ -8,6 +8,8 @@ import StreamErrorDialog from "./StreamError";
 
 interface StreamErrorRetryDialogProps {
   error: unknown;
+  /** 方案.md §五.20: explicit session id (the dialog renders in the shell). */
+  sessionId: string;
 }
 
 /**
@@ -20,7 +22,10 @@ interface StreamErrorRetryDialogProps {
  * cleanup resolves the pending choice as "disconnect" so the wrapper never
  * hangs.
  */
-const StreamErrorRetryDialog = ({ error }: StreamErrorRetryDialogProps) => {
+const StreamErrorRetryDialog = ({
+  error,
+  sessionId,
+}: StreamErrorRetryDialogProps) => {
   const dispatch = useAppDispatch();
 
   useEffect(() => {
@@ -34,7 +39,7 @@ const StreamErrorRetryDialog = ({ error }: StreamErrorRetryDialogProps) => {
 
   return (
     <div className="flex flex-col gap-4 px-3 pb-3 pt-3">
-      <StreamErrorDialog error={error} hideResubmit />
+      <StreamErrorDialog error={error} sessionId={sessionId} hideResubmit />
 
       <div className="border-border mt-2 flex items-center justify-end gap-2 border-t border-solid pt-3">
         <GhostButton

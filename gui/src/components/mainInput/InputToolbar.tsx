@@ -261,7 +261,7 @@ function InputToolbar(props: InputToolbarProps) {
             <HoverItem
               className="hidden hover:underline sm:flex"
               onClick={async () => {
-                void dispatch(exitEdit({}));
+                void dispatch(exitEdit({ sessionId }));
                 ideMessenger.post("focusEditor", undefined);
               }}
             >

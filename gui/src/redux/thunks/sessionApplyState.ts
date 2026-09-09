@@ -119,7 +119,7 @@ export const handleSessionApplyStateUpdate = createAsyncThunk<
         if (toolCallState) {
           logToolUsage(toolCallState, true, true, extra.ideMessenger);
         }
-        void dispatch(exitEdit({}));
+        void dispatch(exitEdit({ sessionId }));
       }
       return;
     }

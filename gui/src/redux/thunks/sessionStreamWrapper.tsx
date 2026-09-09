@@ -83,7 +83,11 @@ export const sessionStreamWrapper = createAsyncThunk<
           attempt < TRANSIENT_RETRIES
         ) {
           await stopLiveRequest(api, sessionId);
-          dispatch(setDialogMessage(<StreamErrorRetryDialog error={e} />));
+          dispatch(
+            setDialogMessage(
+              <StreamErrorRetryDialog error={e} sessionId={sessionId} />,
+            ),
+          );
           dispatch(setShowDialog(true));
           const choice = await waitForStreamRetryChoice();
           if (choice === "retry") {
@@ -96,7 +100,11 @@ export const sessionStreamWrapper = createAsyncThunk<
 
         // 3. Permanent errors (or retries exhausted).
         await stopLiveRequest(api, sessionId);
-        dispatch(setDialogMessage(<StreamErrorDialog error={e} />));
+        dispatch(
+          setDialogMessage(
+            <StreamErrorDialog error={e} sessionId={sessionId} />,
+          ),
+        );
         dispatch(setShowDialog(true));
         return false;
       }

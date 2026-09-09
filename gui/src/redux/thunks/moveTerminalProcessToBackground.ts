@@ -15,23 +15,20 @@ import { continueToolLoop } from "./sessionTools";
  */
 export const moveTerminalProcessToBackground = createAsyncThunk<
   void,
-  { toolCallId: string },
+  { sessionId: string; toolCallId: string },
   ThunkApiType
 >(
   "chat/moveTerminalProcessToBackground",
-  async ({ toolCallId }, { dispatch, getState, extra }) => {
-    // The session must be explicit (方案.md §五.20); the active session is
-    // resolved once here because this is a visible-UI action.
-    const sessionId = getState().sessions.activeSessionId;
-    const session = sessionId
-      ? getState().sessions.sessionsById[sessionId]
-      : undefined;
+  async ({ sessionId, toolCallId }, { dispatch, getState, extra }) => {
+    // The session is explicit (方案.md §五.20): this thunk is dispatched from
+    // inside a SessionView, which always knows its own sessionId.
+    const session = getState().sessions.sessionsById[sessionId];
     const target = session
       ? findSessionToolCallTarget(session.history, toolCallId)
       : undefined;
     const toolCall = target?.toolCallState;
 
-    if (!sessionId || !session || !target || !toolCall) {
+    if (!session || !target || !toolCall) {
       console.error("Could not find tool call with ID:", toolCallId);
       return;
     }

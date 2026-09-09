@@ -1,6 +1,6 @@
 import { useContext } from "react";
 import { IdeMessengerContext } from "../context/IdeMessenger";
-import { useAppDispatch, useAppSelector } from "../redux/hooks";
+import { useAppDispatch } from "../redux/hooks";
 import {
   deleteCompactionByMessageId,
   setCompactionLoadingByMessageId,
@@ -9,32 +9,23 @@ import {
 import { loadFullHistory } from "../redux/thunks/sessionPaging";
 import { enqueueSessionSave } from "../redux/thunks/sessionPersistence";
 import {
-  selectActiveHistory,
-  selectActiveHistoryLoadedOffset,
-  selectActiveHistoryTruncated,
-  selectActiveSessionId,
+  useSessionHistory,
+  useSessionHistoryLoadedOffset,
+  useSessionHistoryTruncated,
 } from "../redux/selectors/sessionView";
+import { useSessionId } from "../components/mainInput/TipTapEditor/SessionScope";
 
 export const useCompactConversation = () => {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
-  const currentSessionId = useAppSelector((state) =>
-    selectActiveSessionId(state),
-  );
-  const historyTruncated = useAppSelector((state) =>
-    selectActiveHistoryTruncated(state),
-  );
-  const historyLoadedOffset = useAppSelector(
-    (state) => selectActiveHistoryLoadedOffset(state) ?? 0,
-  );
-  const history = useAppSelector(selectActiveHistory);
-  const sessionId = useAppSelector(selectActiveSessionId);
+  // 方案.md §五.20: these hooks read the session from SessionScope, so a
+  // compaction started in one tab can never target another tab's history.
+  const sessionId = useSessionId();
+  const historyTruncated = useSessionHistoryTruncated();
+  const historyLoadedOffset = useSessionHistoryLoadedOffset() ?? 0;
+  const history = useSessionHistory();
 
   return async (index: number) => {
-    if (!currentSessionId) {
-      return;
-    }
-
     // 懒加载兼容：前端 index 是基于部分 history 的相对位置，
     // 后端在完整 history 上切片会错位。先加载完整 history，
     // 把相对 index 偏移为完整 history 中的绝对 index。
@@ -67,7 +58,7 @@ export const useCompactConversation = () => {
       if (messageId) {
         dispatch(
           setCompactionLoadingByMessageId({
-            sessionId: currentSessionId,
+            sessionId: sessionId,
             messageId,
             loading: true,
           }),
@@ -76,7 +67,7 @@ export const useCompactConversation = () => {
 
       const result = await ideMessenger.request("conversation/compact", {
         index: absoluteIndex,
-        sessionId: currentSessionId,
+        sessionId: sessionId,
       });
 
       // compact 后不再 reload（reload 会破坏懒加载状态，且可能让 compact
@@ -88,7 +79,7 @@ export const useCompactConversation = () => {
         if (absoluteMessageId) {
           dispatch(
             updateHistoryItemByMessageId({
-              sessionId: currentSessionId,
+              sessionId: sessionId,
               messageId: absoluteMessageId,
               updates: { conversationSummary: result.content },
             }),
@@ -98,7 +89,7 @@ export const useCompactConversation = () => {
         // updateHistoryItemByMessageId reducer 已自动清除 contextMetrics
         void dispatch(
           enqueueSessionSave({
-            sessionId: currentSessionId,
+            sessionId: sessionId,
             reason: "COMPACTION_CHANGED",
           }),
         );
@@ -109,7 +100,7 @@ export const useCompactConversation = () => {
       if (messageId) {
         dispatch(
           setCompactionLoadingByMessageId({
-            sessionId: currentSessionId,
+            sessionId: sessionId,
             messageId,
             loading: false,
           }),
@@ -121,14 +112,10 @@ export const useCompactConversation = () => {
 
 export const useDeleteCompaction = () => {
   const dispatch = useAppDispatch();
-  const historyTruncated = useAppSelector((state) =>
-    selectActiveHistoryTruncated(state),
-  );
-  const historyLoadedOffset = useAppSelector(
-    (state) => selectActiveHistoryLoadedOffset(state) ?? 0,
-  );
-  const history = useAppSelector(selectActiveHistory);
-  const sessionId = useAppSelector(selectActiveSessionId);
+  const sessionId = useSessionId();
+  const historyTruncated = useSessionHistoryTruncated();
+  const historyLoadedOffset = useSessionHistoryLoadedOffset() ?? 0;
+  const history = useSessionHistory();
 
   return async (index: number) => {
     // 懒加载兼容：前端 index 是基于部分 history 的相对位置，

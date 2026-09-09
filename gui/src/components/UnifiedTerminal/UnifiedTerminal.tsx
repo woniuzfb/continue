@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import styled, { keyframes } from "styled-components";
 import { useAppDispatch } from "../../redux/hooks";
 import { moveTerminalProcessToBackground } from "../../redux/thunks/moveTerminalProcessToBackground";
+import { useSessionId } from "../mainInput/TipTapEditor/SessionScope";
 import { getFontSize } from "../../util";
 import { CopyButton } from "../StyledMarkdownPreview/StepContainerPreToolbar/CopyButton";
 import { RunInTerminalButton } from "../StyledMarkdownPreview/StepContainerPreToolbar/RunInTerminalButton";
@@ -346,6 +347,9 @@ export function UnifiedTerminalCommand({
   displayLines = 15,
 }: UnifiedTerminalCommandProps) {
   const dispatch = useAppDispatch();
+  // This component only ever renders inside a SessionView, so the session id
+  // comes from context rather than from the global "visible tab" state.
+  const sessionId = useSessionId();
   const [isExpanded, setIsExpanded] = useState(true);
   const [outputExpanded, setOutputExpanded] = useState(false);
 
@@ -402,6 +406,7 @@ export function UnifiedTerminalCommand({
     if (toolCallId) {
       void dispatch(
         moveTerminalProcessToBackground({
+          sessionId,
           toolCallId,
         }),
       );

@@ -81,7 +81,9 @@ const Layout = () => {
     async () => {
       navigate(ROUTES.HOME);
       if (isInEdit) {
-        await dispatch(exitEdit({}));
+        await dispatch(
+          exitEdit({ sessionId: selectActiveSessionId(store.getState()) }),
+        );
       } else {
         // fire-and-forget：saveCurrentSession 内部 cacheCurrentSession +
         // dispatch(newSession()) 同步执行让 UI 立即响应，LLM 标题生成和
@@ -108,6 +110,7 @@ const Layout = () => {
       if (isInEdit) {
         await dispatch(
           exitEdit({
+            sessionId: selectActiveSessionId(store.getState()),
             openNewSession: true,
           }),
         );
@@ -160,7 +163,12 @@ const Layout = () => {
     "focusEdit",
     async () => {
       await ideMessenger.request("edit/addCurrentSelection", undefined);
-      await dispatch(enterEdit({ editorContent: mainEditor?.getJSON() }));
+      await dispatch(
+        enterEdit({
+          sessionId: selectActiveSessionId(store.getState()),
+          editorContent: mainEditor?.getJSON(),
+        }),
+      );
       mainEditor?.commands.focus();
     },
     [ideMessenger, mainEditor],
@@ -182,7 +190,9 @@ const Layout = () => {
   useWebviewListener(
     "exitEditMode",
     async () => {
-      await dispatch(exitEdit({}));
+      await dispatch(
+        exitEdit({ sessionId: selectActiveSessionId(store.getState()) }),
+      );
     },
     [],
   );

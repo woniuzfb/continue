@@ -36,6 +36,7 @@ import {
   useSessionIsInEdit,
   useSessionIsStreaming,
 } from "../../../../redux/selectors/sessionView";
+import { useSessionId } from "../SessionScope";
 
 export function getPlaceholderText(
   placeholder: TipTapEditorProps["placeholder"],
@@ -120,6 +121,7 @@ export function createEditorConfig(options: {
   const { getSubmenuContextItems } = useSubmenuContextProviders();
   const defaultModel = useAppSelector(selectSelectedChatModel);
   const isStreaming = useSessionIsStreaming();
+  const sessionId = useSessionId();
   const useActiveFile = useAppSelector(selectUseActiveFile);
   const historyLength = useSessionHistory().length;
   const codeToEdit = useSessionEditState()?.codeToEdit ?? [];
@@ -351,6 +353,7 @@ export function createEditorConfig(options: {
               if (isInEditRef.current) {
                 void dispatch(
                   exitEdit({
+                    sessionId,
                     openNewSession: false,
                   }),
                 );

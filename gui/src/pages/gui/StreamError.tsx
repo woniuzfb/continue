@@ -9,33 +9,38 @@ import { useContext, useMemo } from "react";
 
 import { GhostButton } from "../../components";
 import { useEditModel } from "../../components/mainInput/Lump/useEditBlock";
-import { useMainEditor } from "../../components/mainInput/TipTapEditor";
+import { useMainEditorForSession } from "../../components/mainInput/TipTapEditor";
 import ToggleDiv from "../../components/ToggleDiv";
 import { useAuth } from "../../context/Auth";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
-import {
-  selectActiveHistory,
-  selectActiveSessionId,
-} from "../../redux/selectors/sessionView";
+import { selectSessionHistory } from "../../redux/selectors/sessionView";
 import { submitSessionInput } from "../../redux/thunks/sessionSubmit";
 import { analyzeError } from "../../util/errorAnalysis";
 
 interface StreamErrorProps {
   error: unknown;
+  /** 方案.md §五.20: the dialog is rendered by the shell, so the session it
+   * belongs to is passed explicitly instead of read from the visible tab. */
+  sessionId: string;
   /** Hide the "Resubmit last message" button (used by the retryable variant,
    * which offers its own Retry/Disconnect actions). */
   hideResubmit?: boolean;
 }
 
-const StreamErrorDialog = ({ error, hideResubmit }: StreamErrorProps) => {
+const StreamErrorDialog = ({
+  error,
+  sessionId,
+  hideResubmit,
+}: StreamErrorProps) => {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
   const selectedModel = useAppSelector(selectSelectedChatModel);
   const { refreshProfiles } = useAuth();
-  const { mainEditor } = useMainEditor();
+  // Prefer this session's editor; the shell's active editor is the fallback.
+  const { mainEditor } = useMainEditorForSession(sessionId);
 
   const {
     parsedError,
@@ -58,8 +63,9 @@ const StreamErrorDialog = ({ error, hideResubmit }: StreamErrorProps) => {
     void navigator.clipboard.writeText(parsedError);
   };
 
-  const history = useAppSelector(selectActiveHistory);
-  const sessionId = useAppSelector(selectActiveSessionId);
+  const history = useAppSelector((state) =>
+    selectSessionHistory(state, sessionId),
+  );
 
   const checkKeysButton = apiKeyUrl ? (
     <GhostButton

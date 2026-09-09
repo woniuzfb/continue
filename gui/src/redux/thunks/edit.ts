@@ -9,12 +9,12 @@ import { stripImages } from "core/util/messageContent";
 import { resolveEditorContent } from "../../components/mainInput/TipTapEditor";
 
 import {
-  selectActiveCodeToEdit,
-  selectActiveEditApplyState,
-  selectActiveLastNonEditSessionWasEmpty,
-  selectActivePreviousModeEditorContent,
-  selectActiveReturnToMode,
   selectActiveSessionId,
+  selectSessionCodeToEdit,
+  selectSessionEditApplyState,
+  selectSessionLastNonEditSessionWasEmpty,
+  selectSessionPreviousModeEditorContent,
+  selectSessionReturnToMode,
 } from "../selectors/sessionView";
 import { createAndActivateSession } from "./sessionActivation";
 import {
@@ -44,17 +44,17 @@ import { v4 as uuidv4 } from "uuid";
 export const streamEditThunk = createAsyncThunk<
   boolean,
   {
+    sessionId: string;
     editorState: JSONContent;
     codeToEdit: SetCodeToEditPayload[];
   },
   ThunkApiType
 >(
   "edit/streamResponse",
-  async ({ editorState, codeToEdit }, { dispatch, extra, getState }) => {
-    const sessionId = selectActiveSessionId(getState());
-    if (!sessionId) {
-      return false;
-    }
+  async (
+    { sessionId, editorState, codeToEdit },
+    { dispatch, extra, getState },
+  ) => {
     const succeeded = await dispatch(
       sessionStreamWrapper({
         sessionId,
@@ -108,89 +108,101 @@ export const streamEditThunk = createAsyncThunk<
 
 export const exitEdit = createAsyncThunk<
   void,
-  { openNewSession?: boolean },
-  ThunkApiType
->("edit/exit", async ({ openNewSession }, { dispatch, extra, getState }) => {
-  const state = getState();
-  const codeToEdit = selectActiveCodeToEdit(state);
-  const sessionId = selectActiveSessionId(state);
-  const isInEdit = sessionId
-    ? (state.sessions.sessionsById[sessionId]?.isInEdit ?? false)
-    : false;
-  const previousModeEditorContent =
-    selectActivePreviousModeEditorContent(state);
-
-  if (!isInEdit) {
-    return;
-  }
-
-  if (codeToEdit[0] && selectActiveEditApplyState(state)?.numDiffs) {
-    extra.ideMessenger.post("rejectDiff", {
-      filepath: codeToEdit[0].filepath,
-    });
-  }
-
-  extra.ideMessenger.post("edit/clearDecorations", undefined);
-
-  dispatch(setSessionCodeToEdit({ sessionId, codeToEdit: [] }));
-  dispatch(
-    updateSessionEditApplyState({
-      sessionId,
-      updates: INITIAL_EDIT_APPLY_STATE,
-    }),
-  );
-  if (sessionId) {
-    dispatch(setSessionIsInEdit({ sessionId, isInEdit: false }));
-  }
-
-  // Restore the previous editor content if available
-  if (previousModeEditorContent && sessionId) {
-    dispatch(
-      setSessionMainEditorContentTrigger({
-        sessionId,
-        content: previousModeEditorContent,
-      }),
-    );
-    dispatch(
-      setSessionPreviousModeEditorContent({ sessionId, content: undefined }),
-    );
-  }
-
-  if (openNewSession || selectActiveLastNonEditSessionWasEmpty(state)) {
-    await dispatch(createAndActivateSession({ origin: "new" }));
-  } else {
-    await dispatch(bootstrapLastSession());
-  }
-
-  const nextSessionId = selectActiveSessionId(getState());
-  if (nextSessionId) {
-    dispatch(
-      setSessionMode({
-        sessionId: nextSessionId,
-        mode: selectActiveReturnToMode(state),
-      }),
-    );
-  }
-});
-
-export const enterEdit = createAsyncThunk<
-  void,
-  { returnToMode?: MessageModes; editorContent?: JSONContent },
+  { sessionId: string; openNewSession?: boolean },
   ThunkApiType
 >(
-  "edit/enter",
-  async ({ returnToMode, editorContent }, { dispatch, extra, getState }) => {
+  "edit/exit",
+  async ({ sessionId, openNewSession }, { dispatch, extra, getState }) => {
     const state = getState();
-    const sessionId = selectActiveSessionId(state);
-    const isInEdit = sessionId
-      ? (state.sessions.sessionsById[sessionId]?.isInEdit ?? false)
-      : false;
+    // 方案.md §五.20: the outgoing session is explicit; the session created or
+    // bootstrapped below becomes active through the normal activation flow.
+    const codeToEdit = selectSessionCodeToEdit(state, sessionId);
+    const isInEdit = state.sessions.sessionsById[sessionId]?.isInEdit ?? false;
+    const previousModeEditorContent = selectSessionPreviousModeEditorContent(
+      state,
+      sessionId,
+    );
 
-    if (isInEdit || !sessionId) {
+    if (!isInEdit) {
       return;
     }
 
-    if (!selectActiveCodeToEdit(state)[0]) {
+    if (
+      codeToEdit[0] &&
+      selectSessionEditApplyState(state, sessionId)?.numDiffs
+    ) {
+      extra.ideMessenger.post("rejectDiff", {
+        filepath: codeToEdit[0].filepath,
+      });
+    }
+
+    extra.ideMessenger.post("edit/clearDecorations", undefined);
+
+    dispatch(setSessionCodeToEdit({ sessionId, codeToEdit: [] }));
+    dispatch(
+      updateSessionEditApplyState({
+        sessionId,
+        updates: INITIAL_EDIT_APPLY_STATE,
+      }),
+    );
+    dispatch(setSessionIsInEdit({ sessionId, isInEdit: false }));
+
+    // Restore the previous editor content if available
+    if (previousModeEditorContent) {
+      dispatch(
+        setSessionMainEditorContentTrigger({
+          sessionId,
+          content: previousModeEditorContent,
+        }),
+      );
+      dispatch(
+        setSessionPreviousModeEditorContent({ sessionId, content: undefined }),
+      );
+    }
+
+    if (
+      openNewSession ||
+      selectSessionLastNonEditSessionWasEmpty(state, sessionId)
+    ) {
+      await dispatch(createAndActivateSession({ origin: "new" }));
+    } else {
+      await dispatch(bootstrapLastSession());
+    }
+
+    const nextSessionId = selectActiveSessionId(getState());
+    if (nextSessionId) {
+      dispatch(
+        setSessionMode({
+          sessionId: nextSessionId,
+          mode: selectSessionReturnToMode(state, sessionId),
+        }),
+      );
+    }
+  },
+);
+
+export const enterEdit = createAsyncThunk<
+  void,
+  {
+    sessionId: string;
+    returnToMode?: MessageModes;
+    editorContent?: JSONContent;
+  },
+  ThunkApiType
+>(
+  "edit/enter",
+  async (
+    { sessionId, returnToMode, editorContent },
+    { dispatch, extra, getState },
+  ) => {
+    const state = getState();
+    const isInEdit = state.sessions.sessionsById[sessionId]?.isInEdit ?? false;
+
+    if (isInEdit) {
+      return;
+    }
+
+    if (!selectSessionCodeToEdit(state, sessionId)[0]) {
       extra.ideMessenger.post("showToast", [
         "info",
         "Please open a file to use Edit mode",

@@ -253,6 +253,7 @@ export function Chat() {
       if (isCurrentlyInEdit) {
         return await dispatch(
           streamEditThunk({
+            sessionId,
             editorState,
             codeToEdit: codeToEditSnapshot,
           }),

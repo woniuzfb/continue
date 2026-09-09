@@ -95,7 +95,9 @@ export function HistoryTableRow({
       data-testid={`history-row-${index}`}
       className="hover:bg-input relative mb-2 box-border flex w-full cursor-pointer overflow-hidden rounded-lg p-3"
       onClick={async () => {
-        await dispatch(exitEdit({}));
+        await dispatch(
+          exitEdit({ sessionId: currentSessionId, openNewSession: false }),
+        );
         if (sessionMetadata.sessionId !== currentSessionId) {
           await dispatch(
             openSessionTab({ sessionId: sessionMetadata.sessionId }),

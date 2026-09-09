@@ -8,10 +8,12 @@ import {
   useSessionEditState,
   useSessionMode,
 } from "../../../../redux/selectors/sessionView";
+import { useSessionId } from "../../TipTapEditor/SessionScope";
 
 export function EditToolbar() {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
+  const sessionId = useSessionId();
   const mode = useSessionMode();
   const codeToEdit = useSessionEditState()?.codeToEdit[0];
   if (!codeToEdit) {
@@ -19,7 +21,7 @@ export function EditToolbar() {
   }
 
   const handleBackClick = async () => {
-    void dispatch(exitEdit({}));
+    void dispatch(exitEdit({ sessionId }));
     ideMessenger.post("focusEditor", undefined);
   };
 

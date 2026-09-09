@@ -5,9 +5,11 @@ import { exitEdit } from "../../../../redux/thunks/edit";
 import AcceptRejectDiffButtons from "../../../AcceptRejectDiffButtons";
 import { useMainEditor } from "../../TipTapEditor";
 import { useSessionEditState } from "../../../../redux/selectors/sessionView";
+import { useSessionId } from "../../TipTapEditor/SessionScope";
 
 export function EditOutcomeToolbar() {
   const dispatch = useAppDispatch();
+  const sessionId = useSessionId();
   const editApplyState = useSessionEditState()?.applyState;
   const { mainEditor } = useMainEditor();
   const ideMessenger = useContext(IdeMessengerContext);
@@ -25,7 +27,7 @@ export function EditOutcomeToolbar() {
         applyStates={[editApplyState]}
         onAcceptOrReject={async (outcome) => {
           if (outcome === "acceptDiff") {
-            await dispatch(exitEdit({}));
+            await dispatch(exitEdit({ sessionId }));
             ideMessenger.post("focusEditor", undefined);
           } else {
             mainEditor?.commands.focus();

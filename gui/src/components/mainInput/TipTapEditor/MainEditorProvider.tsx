@@ -68,6 +68,17 @@ function subscribeRegistry(listener: () => void): () => void {
 }
 
 /**
+ * 方案.md §九: shell-level consumers that know an explicit sessionId (for
+ * example a stream-error dialog opened for a specific tab) resolve that
+ * session's editor directly instead of falling back to the visible tab.
+ */
+export function getEditorForSession(
+  sessionId: string,
+): MainEditorContextType | undefined {
+  return activeEditors.get(sessionId);
+}
+
+/**
  * Provider component that maintains a reference to the main editor
  */
 export const MainEditorProvider: React.FC<{
@@ -178,6 +189,40 @@ export const useMainEditor = (): MainEditorContextType => {
     () => registryVersion,
     () => registryVersion,
   );
+  if (context) {
+    return context;
+  }
+  return (
+    (realActiveSessionId && activeEditors.get(realActiveSessionId)) ||
+    initialState
+  );
+};
+
+/**
+ * Explicit-session variant of `useMainEditor` for shell consumers that carry a
+ * sessionId (方案.md §五.20). Inside that session's provider it behaves exactly
+ * like `useMainEditor`; outside it resolves that session's published editor.
+ */
+export const useMainEditorForSession = (
+  sessionId: string,
+): MainEditorContextType => {
+  const context = useContext(MainEditorContext);
+  const realActiveSessionId = useAppSelector(
+    (state) => state.sessions.activeSessionId,
+  );
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useSyncExternalStore(
+    subscribeRegistry,
+    () => registryVersion,
+    () => registryVersion,
+  );
+  if (context && context.sessionId === sessionId) {
+    return context;
+  }
+  const published = getEditorForSession(sessionId);
+  if (published) {
+    return published;
+  }
   if (context) {
     return context;
   }

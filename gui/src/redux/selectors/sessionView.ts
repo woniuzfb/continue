@@ -34,6 +34,12 @@ export function activeRuntimeOf(
 
 /** Stable empty values: `useSelector` needs a stable reference. */
 const EMPTY_HISTORY: SessionRuntimeState["history"] = [];
+
+/**
+ * Explicit-session history for shell consumers that carry a sessionId
+ * (方案.md §五.20). Same implementation as `selectActiveHistoryOf`.
+ */
+export const selectSessionHistory = selectActiveHistoryOf;
 const EMPTY_SYMBOLS: SessionRuntimeState["symbols"] = {};
 const EMPTY_APPLY_STATES: SessionRuntimeState["codeBlockApplyStates"] = {
   states: [],
@@ -159,6 +165,32 @@ export const selectActiveLastNonEditSessionWasEmpty = (state: RootState) =>
 
 export const selectActivePreviousModeEditorContent = (state: RootState) =>
   activeRuntime(state)?.editState.previousModeEditorContent;
+
+/** Explicit-session variants of the edit-mode selectors (方案.md §五.20). */
+export const selectSessionCodeToEdit = (state: RootState, sessionId: string) =>
+  activeRuntimeOf(state, sessionId)?.editState.codeToEdit ?? EMPTY_CODE_TO_EDIT;
+
+export const selectSessionEditApplyState = (
+  state: RootState,
+  sessionId: string,
+) => activeRuntimeOf(state, sessionId)?.editState.applyState;
+
+export const selectSessionReturnToMode = (
+  state: RootState,
+  sessionId: string,
+) => activeRuntimeOf(state, sessionId)?.editState.returnToMode ?? "chat";
+
+export const selectSessionLastNonEditSessionWasEmpty = (
+  state: RootState,
+  sessionId: string,
+) =>
+  activeRuntimeOf(state, sessionId)?.editState.lastNonEditSessionWasEmpty ??
+  false;
+
+export const selectSessionPreviousModeEditorContent = (
+  state: RootState,
+  sessionId: string,
+) => activeRuntimeOf(state, sessionId)?.editState.previousModeEditorContent;
 
 /** Catalog fields (方案.md §五.6), preferring the catalog slice. */
 export const selectLastSessionId = (state: RootState): string | undefined =>
