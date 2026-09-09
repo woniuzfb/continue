@@ -1,0 +1,1009 @@
+import { PayloadAction, createSlice } from "@reduxjs/toolkit";
+import { JSONContent } from "@tiptap/react";
+import {
+  ApplyState,
+  ChatMessage,
+  ContextItemWithId,
+  FileSymbolMap,
+  MessageModes,
+  RuleMetadata,
+  SetCodeToEditPayload,
+  ToolCallState,
+} from "core";
+import type { SessionPersistenceErrorCode } from "core/util/sessionPersistenceError";
+import { type InlineErrorMessageType } from "../../components/mainInput/InlineErrorMessage";
+import { type AttachedFile } from "../../components/mainInput/types";
+import {
+  ChatHistoryItemWithMessageId,
+  ContextMetricsSnapshot,
+  applyStreamUpdatesToHistory,
+  mergeSplitReplies,
+} from "./sessionSlice";
+
+/**
+ * Phase 1 session ownership.
+ *
+ * `sessionsById` is the single runtime owner of every open session; a tab is
+ * just a projection (`tabOrder` + `tabDescriptors`). Only `activeSessionId`,
+ * `tabOrder` and `tabDescriptors` are persisted (see store.ts) — never the
+ * runtime state, which holds AbortControllers, streams and pagination requests.
+ */
+
+export type SessionPersistenceStatus =
+  | "clean"
+  | "pending"
+  | "saving"
+  | "failed";
+
+export type SessionPersistenceState = {
+  state: SessionPersistenceStatus;
+  revision: number;
+  persistedRevision: number;
+  hasPersistedBaseline: boolean;
+  error?: {
+    code: SessionPersistenceErrorCode;
+    message: string;
+  };
+};
+
+export type SessionScrollState = {
+  scrollTop: number;
+  scrollHeight: number;
+  isFollowingBottom: boolean;
+  anchorMessageId?: string;
+  anchorOffsetPx?: number;
+  restoreGeneration: number;
+};
+
+export type SessionEditRuntimeState = {
+  codeToEdit: SetCodeToEditPayload[];
+  applyState: ApplyState;
+  returnToMode: MessageModes;
+  lastNonEditSessionWasEmpty: boolean;
+  previousModeEditorContent?: JSONContent;
+};
+
+export type SessionPaginationState = {
+  truncated: boolean;
+  loadedOffset: number;
+  totalCount?: number;
+  loadedDiskCount?: number;
+  hasMore: boolean;
+  loading: boolean;
+  requestGeneration: number;
+  persistPending: boolean;
+};
+
+export type SessionStreamState = {
+  status: "idle" | "streaming" | "aborting" | "failed";
+  requestId?: string;
+  aborter?: AbortController;
+  error?: string;
+};
+
+export type SessionRuntimeState = {
+  id: string;
+  title: string;
+
+  history: ChatHistoryItemWithMessageId[];
+  firstTurnItems: ChatHistoryItemWithMessageId[];
+  latestConversationSummary?: {
+    sourceMessageId: string;
+    content: string;
+  };
+
+  mode: MessageModes;
+  chatModelTitle?: string;
+  hasReasoningEnabled?: boolean;
+  reasoningPreferenceSource?: "derived" | "explicit";
+
+  symbols: FileSymbolMap;
+  mainEditorContentTrigger?: JSONContent;
+  mainEditorAttachmentsRestore?: AttachedFile[];
+  mainEditorDraft?: JSONContent;
+  isInEdit: boolean;
+
+  codeBlockApplyStates: {
+    states: ApplyState[];
+    curIndex: number;
+  };
+  newestToolbarPreviewForInput: Record<string, string>;
+
+  isPruned?: boolean;
+  contextPercentage?: number;
+  contextInputTokens?: number;
+  contextLength?: number;
+  contextMetrics?: ContextMetricsSnapshot;
+
+  inlineErrorMessage?: InlineErrorMessageType;
+  compactionLoading: Record<string, boolean>;
+
+  /** Per-session snapshot of the global config.ui merge settings. */
+  dontMergeReplyBubbles?: boolean;
+  dontMergeHistoricalReplyBubbles?: boolean;
+
+  stream: SessionStreamState;
+  pagination: SessionPaginationState;
+  editState: SessionEditRuntimeState;
+  scrollState: SessionScrollState;
+  persistence?: SessionPersistenceState;
+
+  pendingApprovalCount: number;
+  dirty: boolean;
+  lifecycle: { closing: boolean };
+};
+
+export type SessionTabDescriptor = {
+  sessionId: string;
+  title: string;
+  loadState: "unloaded" | "loading" | "loaded" | "failed";
+  mode?: MessageModes;
+  persistedEditState?: {
+    returnToMode?: MessageModes;
+    lastNonEditSessionWasEmpty?: boolean;
+    codeToEdit?: SetCodeToEditPayload[];
+  };
+};
+
+export type SessionsState = {
+  activeSessionId?: string;
+  tabOrder: string[];
+  tabDescriptors: Record<string, SessionTabDescriptor>;
+  sessionsById: Record<string, SessionRuntimeState>;
+};
+
+export const initialSessionsState: SessionsState = {
+  activeSessionId: undefined,
+  tabOrder: [],
+  tabDescriptors: {},
+  sessionsById: {},
+};
+
+export function initialSessionRuntime(
+  sessionId: string,
+  title: string,
+  overrides: Partial<SessionRuntimeState> = {},
+): SessionRuntimeState {
+  return {
+    id: sessionId,
+    title,
+    history: [],
+    firstTurnItems: [],
+    mode: "chat",
+    symbols: {},
+    isInEdit: false,
+    codeBlockApplyStates: { states: [], curIndex: 0 },
+    newestToolbarPreviewForInput: {},
+    compactionLoading: {},
+    stream: { status: "idle" },
+    pagination: {
+      truncated: false,
+      loadedOffset: 0,
+      hasMore: false,
+      loading: false,
+      requestGeneration: 0,
+      persistPending: false,
+    },
+    editState: {
+      codeToEdit: [],
+      applyState: {
+        streamId: "chat",
+        status: "not-started",
+      } as ApplyState,
+      returnToMode: "chat",
+      lastNonEditSessionWasEmpty: false,
+    },
+    scrollState: {
+      scrollTop: 0,
+      scrollHeight: 0,
+      isFollowingBottom: true,
+      restoreGeneration: 0,
+    },
+    pendingApprovalCount: 0,
+    dirty: false,
+    lifecycle: { closing: false },
+    ...overrides,
+  };
+}
+
+/**
+ * A tool call that has been generated by the model but not yet executed is
+ * waiting for the user's approval. The count is always derived from the
+ * history, never stored independently (方案.md §六 Tool/Compact).
+ */
+export function countAwaitingApprovalToolCalls(
+  history: ChatHistoryItemWithMessageId[],
+): number {
+  let count = 0;
+  for (const item of history) {
+    for (const toolCallState of item.toolCallStates ?? []) {
+      if (toolCallState.status === "generated") {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+function findRuntime(
+  state: SessionsState,
+  sessionId: string,
+): SessionRuntimeState | undefined {
+  return state.sessionsById[sessionId];
+}
+
+function findItemByMessageId(
+  session: SessionRuntimeState,
+  messageId: string,
+): ChatHistoryItemWithMessageId | undefined {
+  return session.history.find((item) => item.message.id === messageId);
+}
+
+function invalidateContextMetrics(session: SessionRuntimeState): void {
+  session.isPruned = false;
+  session.contextPercentage = undefined;
+  session.contextInputTokens = undefined;
+  session.contextLength = undefined;
+  session.contextMetrics = undefined;
+}
+
+export const sessionsSlice = createSlice({
+  name: "sessions",
+  initialState: initialSessionsState,
+  reducers: {
+    // ── Runtime lifecycle / Tab descriptor ────────────────────────────────
+    createSessionRuntime: (
+      state,
+      action: PayloadAction<{ session: SessionRuntimeState }>,
+    ) => {
+      const { session } = action.payload;
+      state.sessionsById[session.id] = session;
+      state.tabDescriptors[session.id] = {
+        sessionId: session.id,
+        title: session.title,
+        loadState: "loaded",
+        mode: session.mode,
+      };
+      if (!state.tabOrder.includes(session.id)) {
+        state.tabOrder.push(session.id);
+      }
+    },
+    removeSessionRuntime: (
+      state,
+      action: PayloadAction<{ sessionId: string }>,
+    ) => {
+      delete state.sessionsById[action.payload.sessionId];
+    },
+    setSessionClosing: (
+      state,
+      action: PayloadAction<{ sessionId: string; closing: boolean }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.lifecycle.closing = action.payload.closing;
+      }
+    },
+    setActiveSessionId: (
+      state,
+      action: PayloadAction<{ sessionId: string | undefined }>,
+    ) => {
+      state.activeSessionId = action.payload.sessionId;
+    },
+    setTabDescriptor: (
+      state,
+      action: PayloadAction<{ descriptor: SessionTabDescriptor }>,
+    ) => {
+      const { descriptor } = action.payload;
+      state.tabDescriptors[descriptor.sessionId] = descriptor;
+      if (!state.tabOrder.includes(descriptor.sessionId)) {
+        state.tabOrder.push(descriptor.sessionId);
+      }
+    },
+    setTabLoadState: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        loadState: SessionTabDescriptor["loadState"];
+      }>,
+    ) => {
+      const descriptor = state.tabDescriptors[action.payload.sessionId];
+      if (descriptor) {
+        descriptor.loadState = action.payload.loadState;
+      }
+    },
+    setSessionTitle: (
+      state,
+      action: PayloadAction<{ sessionId: string; title: string }>,
+    ) => {
+      const { sessionId, title } = action.payload;
+      // runtime.title is the authority for a loaded session; the descriptor is
+      // only an unloaded placeholder and must stay in sync (方案.md §五.20).
+      const session = findRuntime(state, sessionId);
+      if (session) {
+        session.title = title;
+      }
+      const descriptor = state.tabDescriptors[sessionId];
+      if (descriptor) {
+        descriptor.title = title;
+      }
+    },
+
+    // ── History / Message identity ────────────────────────────────────────
+    setSessionHistory: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        history: ChatHistoryItemWithMessageId[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.history = action.payload.history;
+      }
+    },
+    setContextItemsByMessageId: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        messageId: string;
+        contextItems: ContextItemWithId[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      const item = session
+        ? findItemByMessageId(session, action.payload.messageId)
+        : undefined;
+      if (session && item) {
+        session.dirty = true;
+        item.contextItems = action.payload.contextItems;
+      }
+    },
+    addContextItemsByMessageId: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        messageId: string;
+        contextItems: ContextItemWithId[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      const item = session
+        ? findItemByMessageId(session, action.payload.messageId)
+        : undefined;
+      if (session && item) {
+        session.dirty = true;
+        item.contextItems = [
+          ...item.contextItems,
+          ...action.payload.contextItems,
+        ];
+      }
+    },
+    updateHistoryItemByMessageId: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        messageId: string;
+        updates: Partial<ChatHistoryItemWithMessageId>;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      const item = session
+        ? findItemByMessageId(session, action.payload.messageId)
+        : undefined;
+      if (!session || !item) {
+        return;
+      }
+      session.dirty = true;
+      Object.assign(item, action.payload.updates);
+      // Editing/retrying invalidates the previous context snapshot, and a tool
+      // state change changes the pending-approval projection.
+      invalidateContextMetrics(session);
+      session.pendingApprovalCount = countAwaitingApprovalToolCalls(
+        session.history,
+      );
+    },
+    setAppliedRulesByMessageId: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        messageId: string;
+        appliedRules: RuleMetadata[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      const item = session
+        ? findItemByMessageId(session, action.payload.messageId)
+        : undefined;
+      if (session && item) {
+        session.dirty = true;
+        item.appliedRules = action.payload.appliedRules;
+      }
+    },
+    deleteTurnByMessageId: (
+      state,
+      action: PayloadAction<{ sessionId: string; messageId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const index = session.history.findIndex(
+        (item) => item.message.id === action.payload.messageId,
+      );
+      if (index < 0) {
+        return;
+      }
+      // A turn runs from its user message up to (not including) the next user
+      // message. Deleting by identity never depends on a window offset.
+      let start = index;
+      while (start > 0 && session.history[start].message.role !== "user") {
+        start--;
+      }
+      let end = start + 1;
+      while (
+        end < session.history.length &&
+        session.history[end].message.role !== "user"
+      ) {
+        end++;
+      }
+      session.history.splice(start, end - start);
+      session.dirty = true;
+      invalidateContextMetrics(session);
+      session.pendingApprovalCount = countAwaitingApprovalToolCalls(
+        session.history,
+      );
+    },
+    truncateHistoryAfterMessageId: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        messageId: string;
+        assistantPlaceholderId?: string;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const index = session.history.findIndex(
+        (item) => item.message.id === action.payload.messageId,
+      );
+      if (index < 0 || index >= session.history.length) {
+        return;
+      }
+      session.codeBlockApplyStates.curIndex = 0;
+      session.history = session.history.slice(0, index + 1).concat({
+        message: {
+          id: action.payload.assistantPlaceholderId ?? "",
+          role: "assistant",
+          content: "",
+        },
+        contextItems: [],
+      });
+      session.inlineErrorMessage = undefined;
+      session.dirty = true;
+      invalidateContextMetrics(session);
+      session.pendingApprovalCount = 0;
+    },
+
+    // ── First turn / Summary ──────────────────────────────────────────────
+    setSessionFirstTurn: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        firstTurnItems: ChatHistoryItemWithMessageId[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.firstTurnItems = action.payload.firstTurnItems;
+      }
+    },
+    setSessionConversationSummary: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        summary: { sourceMessageId: string; content: string };
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.latestConversationSummary = action.payload.summary;
+      }
+    },
+    clearSessionConversationSummary: (
+      state,
+      action: PayloadAction<{ sessionId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.latestConversationSummary = undefined;
+      }
+    },
+
+    // ── Stream ────────────────────────────────────────────────────────────
+    beginSessionStream: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        requestId: string;
+        aborter?: AbortController;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.stream = {
+          status: "streaming",
+          requestId: action.payload.requestId,
+          aborter: action.payload.aborter,
+        };
+      }
+    },
+    applySessionStreamUpdate: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        requestId: string;
+        messages: ChatMessage[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      // Stale stream completion must never touch a newer stream.
+      if (!session || session.stream.requestId !== action.payload.requestId) {
+        return;
+      }
+      session.dirty = true;
+      applyStreamUpdatesToHistory(session, action.payload.messages);
+    },
+    finishSessionStream: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        requestId: string;
+        status: "completed" | "aborted" | "failed";
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session || session.stream.requestId !== action.payload.requestId) {
+        return;
+      }
+      session.stream = {
+        status: action.payload.status === "completed" ? "idle" : "failed",
+      };
+    },
+    setSessionStreamError: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        requestId: string;
+        error: string;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session || session.stream.requestId !== action.payload.requestId) {
+        return;
+      }
+      session.stream = {
+        status: "failed",
+        requestId: action.payload.requestId,
+        error: action.payload.error,
+      };
+    },
+
+    // ── Pagination ────────────────────────────────────────────────────────
+    setSessionPagination: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        pagination: Partial<SessionPaginationState>;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.pagination = {
+          ...session.pagination,
+          ...action.payload.pagination,
+        };
+      }
+    },
+    prependSessionHistory: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        items: ChatHistoryItemWithMessageId[];
+        hasMore: boolean;
+        newLoadedOffset: number;
+        totalCount: number;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session || !session.pagination.truncated) {
+        return;
+      }
+      const { items, hasMore, newLoadedOffset, totalCount } = action.payload;
+      // Disk accounting uses the raw page size, before any GUI bubble merge.
+      session.pagination.loadedDiskCount =
+        (session.pagination.loadedDiskCount ?? session.history.length) +
+        items.length;
+      session.history =
+        (session.dontMergeHistoricalReplyBubbles ?? true)
+          ? [...items, ...session.history]
+          : mergeSplitReplies([...items, ...session.history]);
+      session.pagination.loadedOffset = newLoadedOffset;
+      session.pagination.hasMore = hasMore;
+      session.pagination.totalCount = totalCount;
+      session.pagination.truncated = hasMore;
+      session.pagination.loading = false;
+    },
+    setSessionHistoryLoading: (
+      state,
+      action: PayloadAction<{ sessionId: string; loading: boolean }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.pagination.loading = action.payload.loading;
+      }
+    },
+    /**
+     * Trim is only allowed when the caller could reliably map GUI items to
+     * disk items (方案.md §九.6): it must pass the exact disk accounting.
+     * This reducer never guesses.
+     */
+    trimSessionHistoryWindow: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        keepCount: number;
+        removedDiskItems: number;
+        fullDiskItemCount: number;
+        retainedDiskItemCount: number;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session || action.payload.keepCount < 0) {
+        return;
+      }
+      const {
+        keepCount,
+        removedDiskItems,
+        fullDiskItemCount,
+        retainedDiskItemCount,
+      } = action.payload;
+      if (keepCount < session.history.length) {
+        session.history = session.history.slice(
+          session.history.length - keepCount,
+        );
+      }
+      const pagination = session.pagination;
+      pagination.truncated = removedDiskItems > 0;
+      pagination.loadedOffset =
+        pagination.loadedOffset + Math.max(removedDiskItems, 0);
+      pagination.totalCount = fullDiskItemCount;
+      pagination.loadedDiskCount = retainedDiskItemCount;
+      pagination.hasMore = removedDiskItems > 0;
+      pagination.loading = false;
+      // Every trim invalidates in-flight paging results.
+      pagination.requestGeneration++;
+      pagination.persistPending = session.dirty;
+    },
+
+    // ── Persistence ───────────────────────────────────────────────────────
+    setSessionPersistenceState: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        persistence: SessionPersistenceState;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.persistence = action.payload.persistence;
+      }
+    },
+    markSessionDirty: (state, action: PayloadAction<{ sessionId: string }>) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.dirty = true;
+      }
+    },
+    markSessionPersisted: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        revision?: number;
+        hasPersistedBaseline?: boolean;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const { revision, hasPersistedBaseline } = action.payload;
+      const persistence = session.persistence ?? {
+        state: "clean",
+        revision: 0,
+        persistedRevision: 0,
+        hasPersistedBaseline: false,
+      };
+      if (revision !== undefined) {
+        persistence.persistedRevision = revision;
+        persistence.state =
+          persistence.persistedRevision === persistence.revision
+            ? "clean"
+            : "pending";
+      }
+      if (hasPersistedBaseline !== undefined) {
+        persistence.hasPersistedBaseline = hasPersistedBaseline;
+      }
+      persistence.error = undefined;
+      session.persistence = persistence;
+      if (persistence.state === "clean") {
+        session.dirty = false;
+        session.pagination.persistPending = false;
+      }
+    },
+
+    // ── Editor / Edit / Apply ─────────────────────────────────────────────
+    setSessionMainEditorDraft: (
+      state,
+      action: PayloadAction<{ sessionId: string; draft?: JSONContent }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.mainEditorDraft = action.payload.draft;
+      }
+    },
+    setSessionMainEditorContentTrigger: (
+      state,
+      action: PayloadAction<{ sessionId: string; content?: JSONContent }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.mainEditorContentTrigger = action.payload.content;
+      }
+    },
+    setSessionMainEditorAttachmentsRestore: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        attachments?: AttachedFile[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.mainEditorAttachmentsRestore = action.payload.attachments;
+      }
+    },
+    setSessionCodeToEdit: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        codeToEdit: SetCodeToEditPayload[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.editState.codeToEdit = action.payload.codeToEdit;
+      }
+    },
+    updateSessionEditApplyState: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        updates: Partial<ApplyState>;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.editState.applyState = {
+          ...session.editState.applyState,
+          ...action.payload.updates,
+        };
+      }
+    },
+    setSessionReturnToMode: (
+      state,
+      action: PayloadAction<{ sessionId: string; mode: MessageModes }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.editState.returnToMode = action.payload.mode;
+      }
+    },
+    setSessionPreviousModeEditorContent: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        content?: JSONContent;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.editState.previousModeEditorContent = action.payload.content;
+      }
+    },
+
+    // ── Tool / Compact ────────────────────────────────────────────────────
+    setCompactionLoadingByMessageId: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        messageId: string;
+        loading: boolean;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      if (action.payload.loading) {
+        session.compactionLoading[action.payload.messageId] = true;
+      } else {
+        delete session.compactionLoading[action.payload.messageId];
+      }
+    },
+    deleteCompactionByMessageId: (
+      state,
+      action: PayloadAction<{ sessionId: string; messageId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      const item = session
+        ? findItemByMessageId(session, action.payload.messageId)
+        : undefined;
+      if (session && item?.conversationSummary) {
+        session.dirty = true;
+        item.conversationSummary = undefined;
+      }
+    },
+
+    // ── Model / Mode / Reasoning ──────────────────────────────────────────
+    setSessionMode: (
+      state,
+      action: PayloadAction<{ sessionId: string; mode: MessageModes }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.mode = action.payload.mode;
+        const descriptor = state.tabDescriptors[action.payload.sessionId];
+        if (descriptor) {
+          descriptor.mode = action.payload.mode;
+        }
+      }
+    },
+    setSessionChatModelTitle: (
+      state,
+      action: PayloadAction<{ sessionId: string; chatModelTitle?: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.chatModelTitle = action.payload.chatModelTitle;
+      }
+    },
+    setSessionReasoningEnabled: (
+      state,
+      action: PayloadAction<{ sessionId: string; enabled?: boolean }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.hasReasoningEnabled = action.payload.enabled;
+      }
+    },
+    setSessionReasoningPreferenceSource: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        source?: "derived" | "explicit";
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.reasoningPreferenceSource = action.payload.source;
+      }
+    },
+
+    // ── Runtime presentation ──────────────────────────────────────────────
+    setSessionSymbols: (
+      state,
+      action: PayloadAction<{ sessionId: string; symbols: FileSymbolMap }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.symbols = action.payload.symbols;
+      }
+    },
+    setSessionInlineError: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        error?: InlineErrorMessageType;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.inlineErrorMessage = action.payload.error;
+      }
+    },
+    setSessionContextMetrics: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        metrics?: ContextMetricsSnapshot;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      session.contextMetrics = action.payload.metrics;
+      session.isPruned = action.payload.metrics?.didPrune;
+      session.contextPercentage = action.payload.metrics?.contextPercentage;
+      session.contextInputTokens = action.payload.metrics?.inputTokens;
+      session.contextLength = action.payload.metrics?.contextLength;
+    },
+    setSessionScrollState: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        scrollState: Partial<SessionScrollState>;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.scrollState = {
+          ...session.scrollState,
+          ...action.payload.scrollState,
+        };
+      }
+    },
+  },
+});
+
+export const {
+  createSessionRuntime,
+  removeSessionRuntime,
+  setSessionClosing,
+  setActiveSessionId,
+  setTabDescriptor,
+  setTabLoadState,
+  setSessionTitle,
+  setSessionHistory,
+  setContextItemsByMessageId,
+  addContextItemsByMessageId,
+  updateHistoryItemByMessageId,
+  setAppliedRulesByMessageId,
+  deleteTurnByMessageId,
+  truncateHistoryAfterMessageId,
+  setSessionFirstTurn,
+  setSessionConversationSummary,
+  clearSessionConversationSummary,
+  beginSessionStream,
+  applySessionStreamUpdate,
+  finishSessionStream,
+  setSessionStreamError,
+  setSessionPagination,
+  prependSessionHistory,
+  setSessionHistoryLoading,
+  trimSessionHistoryWindow,
+  setSessionPersistenceState,
+  markSessionDirty,
+  markSessionPersisted,
+  setSessionMainEditorDraft,
+  setSessionMainEditorContentTrigger,
+  setSessionMainEditorAttachmentsRestore,
+  setSessionCodeToEdit,
+  updateSessionEditApplyState,
+  setSessionReturnToMode,
+  setSessionPreviousModeEditorContent,
+  setCompactionLoadingByMessageId,
+  deleteCompactionByMessageId,
+  setSessionMode,
+  setSessionChatModelTitle,
+  setSessionReasoningEnabled,
+  setSessionReasoningPreferenceSource,
+  setSessionSymbols,
+  setSessionInlineError,
+  setSessionContextMetrics,
+  setSessionScrollState,
+} = sessionsSlice.actions;
+
+export default sessionsSlice.reducer;
