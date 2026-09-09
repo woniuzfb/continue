@@ -14,6 +14,10 @@ import {
 import { createFilter } from "redux-persist-transform-filter";
 import autoMergeLevel2 from "redux-persist/lib/stateReconciler/autoMergeLevel2";
 import storage from "redux-persist/lib/storage";
+import {
+  migratePersistedStateToV2,
+  normalizePersistedSessionsState,
+} from "./persistV2";
 import { IdeMessenger, IIdeMessenger } from "../context/IdeMessenger";
 import configReducer from "./slices/configSlice";
 import editModeStateReducer from "./slices/editState";
@@ -24,9 +28,9 @@ import sessionsReducer from "./slices/sessionsSlice";
 import uiReducer from "./slices/uiSlice";
 
 const rootReducer = combineReducers({
-  // Phase 1: sessions/sessionCatalog are the target state shape. The legacy
-  // session/tabs/editModeState slices are still registered while consumers
-  // migrate; they are removed together with the v1->v2 persist bump.
+  // 方案.md §五.1/§五.3: sessions/sessionCatalog are the session state; the
+  // legacy session/tabs slices are gone. editModeState remains until the edit
+  // flow moves its runtime into the session.
   sessions: sessionsReducer,
   sessionCatalog: sessionCatalogReducer,
   ui: uiReducer,
@@ -60,7 +64,6 @@ const saveSubsetFilters = [
 const migrations: MigrationManifest = {
   "0": (state) => {
     const oldState = state as any;
-
     return {
       config: {
         defaultModelTitle: oldState?.state?.defaultModelTitle ?? undefined,
@@ -81,10 +84,13 @@ const migrations: MigrationManifest = {
       _persist: oldState?._persist,
     };
   },
+  // v1 -> v2 (方案.md §五.23): the persisted shape becomes the tab projection
+  // plus the catalog pointer. Runtime state is never persisted.
+  "1": (state) => migratePersistedStateToV2(state) as any,
 };
 
 const persistConfig = {
-  version: 1,
+  version: 2,
   key: "root",
   storage,
   transforms: [...saveSubsetFilters],
@@ -92,9 +98,36 @@ const persistConfig = {
   migrate: createMigrate(migrations, { debug: false }),
 };
 
+/**
+ * Rehydrate guard (方案.md §五.23): never trust the persisted tab projection.
+ * A rehydrated descriptor only says which session should be opened; history is
+ * always loaded from disk afterwards.
+ */
+const normalizedReducer = (
+  state: ReturnType<typeof rootReducer> | undefined,
+  action: Parameters<typeof rootReducer>[1],
+) => {
+  const next = rootReducer(state, action);
+  if (action.type === "persist/REHYDRATE") {
+    const rehydrated = normalizePersistedSessionsState({
+      sessions: (next as any).sessions,
+      sessionCatalog: (next as any).sessionCatalog,
+    });
+    return {
+      ...next,
+      sessions: { ...(next as any).sessions, ...rehydrated.sessions },
+      sessionCatalog: {
+        ...(next as any).sessionCatalog,
+        ...rehydrated.sessionCatalog,
+      },
+    } as ReturnType<typeof rootReducer>;
+  }
+  return next;
+};
+
 const persistedReducer = persistReducer<ReturnType<typeof rootReducer>>(
   persistConfig,
-  rootReducer,
+  normalizedReducer as typeof rootReducer,
 );
 
 export function setupStore(options: { ideMessenger?: IIdeMessenger }) {
