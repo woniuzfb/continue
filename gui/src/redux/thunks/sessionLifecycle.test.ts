@@ -371,3 +371,37 @@ describe("firstTurnItems hydration", () => {
     expect(sessions(store).sessionsById["s1"].firstTurnItems).toEqual([]);
   });
 });
+
+describe("firstTurnItems from the paged response", () => {
+  it("hydrates the disk first turn from loadPage", async () => {
+    const store = makeStore({ catalog: [{ sessionId: "s1" }] });
+    (store.getState() as any).config.config.ui = { lazyLoadHistory: true };
+    store.mockIdeMessenger.responses["history/loadPage"] = {
+      items: [
+        item("t1", "user", "tail"),
+        item("t2", "assistant", "tail reply"),
+      ],
+      firstTurnItems: [
+        item("f1", "user", "first"),
+        item("f2", "assistant", "first reply"),
+      ],
+      hasMore: true,
+      total: 20,
+      session: {
+        title: "From disk",
+        mode: "agent",
+        chatModelTitle: undefined,
+        workspaceDirectory: "/w",
+        contextMetrics: undefined,
+      },
+    } as any;
+
+    await run(store, openSessionTab({ sessionId: "s1" }));
+
+    expect(
+      sessions(store).sessionsById["s1"].firstTurnItems.map(
+        (i: any) => i.message.content,
+      ),
+    ).toEqual(["first", "first reply"]);
+  });
+});

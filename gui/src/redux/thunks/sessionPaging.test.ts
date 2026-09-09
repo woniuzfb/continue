@@ -68,6 +68,7 @@ describe("sessionPaging.loadMoreHistory", () => {
     const store = storeWith();
     store.mockIdeMessenger.responses["history/loadPage"] = {
       items: [item("u2", "user", "1"), item("a2", "assistant", "2")],
+      firstTurnItems: [],
       hasMore: false,
       total: 6,
       session: { title: "Chat 1", workspaceDirectory: "ws" } as any,
@@ -93,6 +94,7 @@ describe("sessionPaging.loadMoreHistory", () => {
     const store = storeWith();
     store.mockIdeMessenger.responses["history/loadPage"] = {
       items: [legacyItem("user", "legacy")],
+      firstTurnItems: [],
       hasMore: false,
       total: 3,
       session: { title: "Chat 1", workspaceDirectory: "ws" } as any,
@@ -145,6 +147,7 @@ describe("sessionPaging.loadMoreHistory", () => {
       });
       return {
         items: [item("u2", "user", "1")],
+        firstTurnItems: [],
         hasMore: false,
         total: 6,
         session: {},

@@ -93,6 +93,8 @@ export interface SaveHistoryResponse {
 
 export interface LoadPageHistoryResponse {
   items: ChatHistoryItem[];
+  /** 磁盘首轮原始条目（方案.md §五.5/§十三.4）。 */
+  firstTurnItems: ChatHistoryItem[];
   hasMore: boolean;
   total: number;
   session: Pick<

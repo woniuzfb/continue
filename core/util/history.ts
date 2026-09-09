@@ -376,6 +376,7 @@ export class HistoryManager {
     limit: number,
   ): {
     items: Session["history"];
+    firstTurnItems: ChatHistoryItem[];
     hasMore: boolean;
     total: number;
     session: Pick<
@@ -402,6 +403,7 @@ export class HistoryManager {
     const hasMore = start > 0;
     return {
       items,
+      firstTurnItems: this.firstTurnItemsOf(session.history),
       hasMore,
       total,
       session: {

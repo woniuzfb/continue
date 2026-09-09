@@ -1,5 +1,10 @@
 import { createAsyncThunk, unwrapResult } from "@reduxjs/toolkit";
-import { BaseSessionMetadata, ChatMessage, Session } from "core";
+import {
+  BaseSessionMetadata,
+  ChatHistoryItem,
+  ChatMessage,
+  Session,
+} from "core";
 import { NEW_SESSION_TITLE } from "core/util/constants";
 import {
   renderChatMessage,
@@ -42,6 +47,7 @@ export async function getSessionPage(
   limit: number,
 ): Promise<{
   session: Session;
+  firstTurnItems: ChatHistoryItem[];
   hasMore: boolean;
   totalCount: number;
   loadedOffset: number;
@@ -55,7 +61,7 @@ export async function getSessionPage(
   if (res.status === "error") {
     throw new Error(res.error);
   }
-  const { items, hasMore, total, session: meta } = res.content;
+  const { items, firstTurnItems, hasMore, total, session: meta } = res.content;
   const loadedOffset = total - items.length; // 头部未加载条数
   const session: Session = {
     sessionId: id,
@@ -68,6 +74,7 @@ export async function getSessionPage(
   };
   return {
     session,
+    firstTurnItems: firstTurnItems ?? [],
     hasMore,
     totalCount: total,
     loadedOffset,

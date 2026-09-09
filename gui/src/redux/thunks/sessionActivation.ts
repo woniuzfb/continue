@@ -16,6 +16,7 @@ import {
 import type { RootState, ThunkApiType } from "../store";
 import { ensureMessageIds } from "../util/messageIds";
 import { firstTurnItemsOf } from "../slices/sessionHistory";
+import type { ChatHistoryItem } from "core";
 import {
   compileSessionChatForContextMetrics,
   needsContextMetricsRecompute,
@@ -88,10 +89,12 @@ export const loadSessionRuntime = createAsyncThunk<
       let hasMore = false;
       let totalCount = 0;
       let loadedOffset = 0;
+      let pageFirstTurnItems: ChatHistoryItem[] | undefined;
 
       if (ui?.lazyLoadHistory) {
         const page = await getSessionPage(extra.ideMessenger, sessionId, limit);
         session = page.session;
+        pageFirstTurnItems = page.firstTurnItems;
         hasMore = page.hasMore;
         totalCount = page.totalCount;
         loadedOffset = page.loadedOffset;
@@ -103,10 +106,11 @@ export const loadSessionRuntime = createAsyncThunk<
       const history = ensureMessageIds(session.history);
       const runtime = initialSessionRuntime(sessionId, session.title, {
         history,
-        // Phase 4 (方案.md §五.5): a full load knows the head, so the first
-        // turn can be captured. A lazy window only has the tail and stays
-        // empty until the save response supplies it.
-        firstTurnItems: hasMore ? [] : firstTurnItemsOf(history),
+        // Phase 4/5 (方案.md §五.5/§十三.4): the first turn comes from the disk
+        // — from the page response when paging, or computed on a full load.
+        firstTurnItems: hasMore
+          ? ensureMessageIds(pageFirstTurnItems ?? [])
+          : firstTurnItemsOf(history),
         mode: session.mode ?? "chat",
         chatModelTitle: session.chatModelTitle ?? undefined,
         hasReasoningEnabled: (session as { hasReasoningEnabled?: boolean })
