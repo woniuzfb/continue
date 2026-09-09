@@ -91,9 +91,8 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
     // 方案.md §十三.8: the metrics path shares the request-history builder with
     // the send path, so token counts describe the same request.
     let historyForCompile: ChatHistoryItemWithMessageId[] = session.history;
-    const plan = buildRequestHistoryForSession(session, {
-      localConversation: isLocalConversationModel(selectedChatModel),
-    });
+    const localConversation = isLocalConversationModel(selectedChatModel);
+    const plan = buildRequestHistoryForSession(session, { localConversation });
     if (plan.kind === "ready") {
       historyForCompile = plan.requestHistory;
     } else if (session.pagination.truncated) {
@@ -163,6 +162,12 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
       state.config.config.rules,
       state.ui.ruleSettings,
       systemToolsFramework,
+      localConversation
+        ? {
+            conversationSummaryOverride:
+              session.latestConversationSummary?.content,
+          }
+        : undefined,
     );
 
     const precompiledRes = await extra.ideMessenger.request("llm/compileChat", {

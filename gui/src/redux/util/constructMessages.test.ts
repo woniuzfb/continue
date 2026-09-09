@@ -1196,3 +1196,49 @@ describe("constructMessages", () => {
     });
   });
 });
+
+describe("constructMessages conversationSummaryOverride", () => {
+  const historyWithCarrier = [
+    {
+      message: { id: "u1", role: "user" as const, content: "old question" },
+      contextItems: [],
+      conversationSummary: "SUMMARY OF EARLIER TURNS",
+    },
+    {
+      message: { id: "a1", role: "assistant" as const, content: "old answer" },
+      contextItems: [],
+    },
+    {
+      message: { id: "u2", role: "user" as const, content: "current question" },
+      contextItems: [],
+    },
+  ];
+
+  test("uses the explicit summary and keeps the history as passed", () => {
+    const { messages } = constructMessages(
+      historyWithCarrier as any,
+      "Base system",
+      [],
+      {},
+      undefined,
+      { conversationSummaryOverride: "EXPLICIT SUMMARY" },
+    );
+
+    // The first turn is not truncated away.
+    expect(JSON.stringify(messages)).toContain("old question");
+    const system = messages.find((m) => m.role === "system");
+    expect(JSON.stringify(system?.content)).toContain("EXPLICIT SUMMARY");
+    expect(JSON.stringify(system?.content)).not.toContain("SUMMARY OF EARLIER");
+  });
+
+  test("without the override the carrier still truncates history", () => {
+    const { messages } = constructMessages(
+      historyWithCarrier as any,
+      "Base system",
+      [],
+      {},
+    );
+
+    expect(JSON.stringify(messages)).not.toContain("old question");
+  });
+});

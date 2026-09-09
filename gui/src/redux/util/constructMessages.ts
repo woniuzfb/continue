@@ -43,6 +43,14 @@ export function constructMessages(
   availableRules: RuleWithSource[],
   rulePolicies: RulePolicies,
   useSystemToolsFramework?: SystemMessageToolsFramework,
+  options?: {
+    /**
+     * 方案.md §十三.0: Local Provider 的请求历史只含首轮 + 当前回合，摘要
+     * carrier 不在其中，必须由调用方显式传入并追加到唯一 system message。
+     * 存在时不扫描 carrier、不截掉首轮。
+     */
+    conversationSummaryOverride?: string;
+  },
 ): {
   messages: ChatMessage[];
   appliedRules: RuleMetadata[];
@@ -53,17 +61,21 @@ export function constructMessages(
    */
   appliedRulesSourceMessageId?: string;
 } {
-  // Find the most recent conversation summary and filter history accordingly
-  let summaryContent = "";
+  // Find the most recent conversation summary and filter history accordingly.
+  // With an explicit override the history is authoritative as passed (Local
+  // Provider fast path): no carrier lookup and no first-turn truncation.
+  let summaryContent = options?.conversationSummaryOverride ?? "";
   let filteredHistory = history;
 
-  for (let i = history.length - 1; i >= 0; i--) {
-    const summary = history[i].conversationSummary;
-    if (summary) {
-      summaryContent = summary;
-      // Only include messages that come AFTER the message with the summary
-      filteredHistory = history.slice(i + 1);
-      break;
+  if (options?.conversationSummaryOverride === undefined) {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const summary = history[i].conversationSummary;
+      if (summary) {
+        summaryContent = summary;
+        // Only include messages that come AFTER the message with the summary
+        filteredHistory = history.slice(i + 1);
+        break;
+      }
     }
   }
 

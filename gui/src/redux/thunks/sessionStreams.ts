@@ -552,9 +552,8 @@ async function streamModelTurn(
   // turn; anything else falls back to the full history (loading it first when
   // the window is truncated).
   let historyForRequest = session.history;
-  const plan = buildRequestHistoryForSession(session, {
-    localConversation: isLocalConversationModel(selectedChatModel),
-  });
+  const localConversation = isLocalConversationModel(selectedChatModel);
+  const plan = buildRequestHistoryForSession(session, { localConversation });
   if (plan.kind === "ready") {
     historyForRequest = plan.requestHistory;
   } else {
@@ -580,6 +579,14 @@ async function streamModelTurn(
       state.config.config.rules,
       state.ui.ruleSettings,
       systemToolsFramework,
+      // The reduced request has no summary carrier, so the compact summary is
+      // injected explicitly (方案.md §十三.0).
+      localConversation
+        ? {
+            conversationSummaryOverride:
+              session.latestConversationSummary?.content,
+          }
+        : undefined,
     );
 
   if (appliedRulesSourceMessageId) {
