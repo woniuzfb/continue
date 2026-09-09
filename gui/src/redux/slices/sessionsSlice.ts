@@ -293,13 +293,33 @@ function invalidateContextMetrics(session: SessionRuntimeState): void {
  * the session clean although newer content was queued, and its response could
  * overwrite the newer derived metadata.
  */
+/**
+ * 方案.md §七.7: a failed save stays `failed` (with its error) until an explicit
+ * retry succeeds. New content must not turn it into `pending` — that would hide
+ * the retry banner/badge and re-enable the gates that key on `failed`.
+ *
+ * clean → pending, pending → pending, saving → saving, failed → failed.
+ */
+function stateAfterMutation(
+  current: SessionPersistenceState["state"],
+): SessionPersistenceState["state"] {
+  switch (current) {
+    case "failed":
+      return "failed";
+    case "saving":
+      return "saving";
+    default:
+      return "pending";
+  }
+}
+
 function markHistoryChanged(session: SessionRuntimeState): void {
   session.dirty = true;
   session.historyRevision += 1;
   const persistence = session.persistence ?? initialPersistenceState();
   session.persistence = {
     ...persistence,
-    state: persistence.state === "saving" ? "saving" : "pending",
+    state: stateAfterMutation(persistence.state),
     revision: persistence.revision + 1,
   };
 }
@@ -438,6 +458,17 @@ export const sessionsSlice = createSlice({
     },
 
     // ── History / Message identity ────────────────────────────────────────
+    /**
+     * Whole-array replacement with **two different meanings** (方案.md §七.3):
+     *
+     * - hydration (loadFullHistory / disk merge): must NOT mark the session
+     *   dirty, because the content already matches disk;
+     * - user content change (submit / retry): the caller must immediately
+     *   `markSessionDirty`, which is what advances `persistence.revision`.
+     *
+     * Only `historyRevision` is bumped here, so a caller that forgets
+     * `markSessionDirty` produces a change the save queue cannot see.
+     */
     setSessionHistory: (
       state,
       action: PayloadAction<{
@@ -903,15 +934,10 @@ export const sessionsSlice = createSlice({
         return;
       }
       session.dirty = true;
-      const persistence = session.persistence ?? {
-        state: "clean" as const,
-        revision: 0,
-        persistedRevision: 0,
-        hasPersistedBaseline: false,
-      };
+      const persistence = session.persistence ?? initialPersistenceState();
       session.persistence = {
         ...persistence,
-        state: persistence.state === "saving" ? "saving" : "pending",
+        state: stateAfterMutation(persistence.state),
         revision: persistence.revision + 1,
       };
     },

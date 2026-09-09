@@ -7,7 +7,11 @@ import {
   initialSessionRuntime,
   markSessionDirty,
 } from "../slices/sessionsSlice";
-import { resetSessionSaveQueues, saveSession } from "./sessionPersistence";
+import {
+  resetSessionSaveQueues,
+  retrySessionSave,
+  saveSession,
+} from "./sessionPersistence";
 
 function item(
   id: string,
@@ -113,6 +117,36 @@ describe("sessionPersistence.saveSession", () => {
     });
     expect(session.dirty).toBe(true);
     expect(session.pagination.persistPending).toBe(true);
+  });
+
+  it("clears the failure only when a retry succeeds", async () => {
+    const store = makeStore();
+    store.mockIdeMessenger.request = vi.fn().mockResolvedValue({
+      status: "error",
+      error: "disk full",
+      errorCode: "SESSION_SAVE_FAILED",
+      done: true,
+    }) as any;
+    await expect(
+      run(store, saveSession({ sessionId: "s1", reason: "test" })),
+    ).rejects.toThrow("disk full");
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.persistence?.state,
+    ).toBe("failed");
+
+    // A successful retry clears the error and recomputes clean/pending
+    // (方案.md §七.7).
+    store.mockIdeMessenger.request = vi.fn().mockResolvedValue({
+      status: "success",
+      content: { firstTurnItems: [], totalHistoryCount: 2 },
+      done: true,
+    }) as any;
+    await run(store, retrySessionSave({ sessionId: "s1" }));
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.persistence?.state).toBe("clean");
+    expect(session.persistence?.error).toBeUndefined();
+    expect(session.dirty).toBe(false);
   });
 
   it("coalesces concurrent saves into at most one extra write", async () => {

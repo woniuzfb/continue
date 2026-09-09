@@ -9,7 +9,9 @@ import {
   deleteTurnByMessageId,
   initialSessionRuntime,
   initialSessionsState,
+  markSessionDirty,
   markSessionPersisted,
+  markSessionSaveFailed,
   setActiveSessionId,
   setAppliedRulesByMessageId,
   setCompactionLoadingByMessageId,
@@ -155,6 +157,47 @@ describe("sessionsSlice — ownership", () => {
     expect(state.sessionsById.s1.persistence?.revision).toBe(before + 1);
     expect(state.sessionsById.s1.persistence?.state).toBe("pending");
     expect(state.sessionsById.s1.dirty).toBe(true);
+  });
+
+  it("keeps a failed save visible when more content arrives", () => {
+    // 方案.md §七.7: a failed save keeps state=failed, dirty and the error until
+    // an explicit retry succeeds. New content must not silently turn it into
+    // pending — that would hide the retry banner and re-enable the gates that
+    // depend on `state === "failed"`.
+    let state = stateWith({ history: [item("u1", "user", "hi")] });
+    state = sessionsSlice.reducer(
+      state,
+      markSessionSaveFailed({
+        sessionId: "s1",
+        error: { code: "SESSION_SAVE_FAILED", message: "disk full" },
+      }),
+    );
+    const failed = state.sessionsById.s1.persistence!;
+    expect(failed.state).toBe("failed");
+
+    // A stream chunk / tool result / compact arrives.
+    state = sessionsSlice.reducer(
+      state,
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "u1",
+        updates: { conversationSummary: "compacted" },
+      }),
+    );
+    expect(state.sessionsById.s1.persistence).toMatchObject({
+      state: "failed",
+      revision: failed.revision + 1,
+    });
+    expect(state.sessionsById.s1.persistence!.error?.message).toBe("disk full");
+    expect(state.sessionsById.s1.dirty).toBe(true);
+
+    // A plain dirty mark (model / title) must preserve it too.
+    state = sessionsSlice.reducer(state, markSessionDirty({ sessionId: "s1" }));
+    expect(state.sessionsById.s1.persistence).toMatchObject({
+      state: "failed",
+      revision: failed.revision + 2,
+    });
+    expect(state.sessionsById.s1.persistence!.error?.message).toBe("disk full");
   });
 
   it("keeps the runtime summary in sync with compact / delete", () => {
