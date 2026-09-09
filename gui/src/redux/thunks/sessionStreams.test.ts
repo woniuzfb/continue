@@ -144,6 +144,10 @@ describe("sessionStreams", () => {
     expect(lastMessage.role).toBe("assistant");
     expect(lastMessage.content).toBe("This is a test");
     expect(target.stream).toEqual({ status: "idle" });
+    expect(target.contextMetricsMeta).toMatchObject({
+      modelIdentity: "gpt-4o",
+      schemaVersion: 1,
+    });
     expect(request).toHaveBeenCalledWith("llm/compileChat", expect.anything());
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(

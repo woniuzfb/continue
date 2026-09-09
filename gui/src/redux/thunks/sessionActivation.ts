@@ -14,7 +14,10 @@ import {
 } from "../slices/sessionsSlice";
 import type { RootState, ThunkApiType } from "../store";
 import { ensureMessageIds } from "../util/messageIds";
-import { compileChatForContextMetrics } from "./compileChatForContextMetrics";
+import {
+  compileSessionChatForContextMetrics,
+  needsContextMetricsRecompute,
+} from "./sessionMetrics";
 import { getSession, getSessionPage } from "./session";
 
 /**
@@ -264,12 +267,12 @@ export const ensureSessionContextMetrics = createAsyncThunk<
 >(
   "sessions/ensureContextMetrics",
   async ({ sessionId }, { dispatch, getState }) => {
-    // Phase 1 keeps the legacy metrics path (it still reads the legacy session
-    // slice), so it can only measure the visible session. The session-scoped
-    // request-history builder lands with Phase 4/5 (方案.md §十三.8).
-    if (getState().sessions.activeSessionId !== sessionId) {
+    // Recompute only when the stored snapshot cannot be trusted for this
+    // session (方案.md §五.16 重算门禁): missing, different model, different
+    // history revision or incompatible schema. Switching tabs must not compile.
+    if (!needsContextMetricsRecompute(getState(), sessionId)) {
       return;
     }
-    await dispatch(compileChatForContextMetrics()).unwrap();
+    await dispatch(compileSessionChatForContextMetrics({ sessionId }));
   },
 );

@@ -43,6 +43,7 @@ import {
 import { evaluateSessionToolPolicies } from "./evaluateToolPolicies";
 import { preprocessSessionToolCalls } from "./preprocessToolCallArgs";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { CONTEXT_METRICS_SCHEMA_VERSION } from "./sessionMetrics";
 import {
   approveToolCalls,
   continueToolLoop,
@@ -567,6 +568,14 @@ async function streamModelTurn(
     setSessionContextMetrics({
       sessionId,
       metrics: { didPrune, contextPercentage, inputTokens, contextLength },
+      // Identity of this snapshot (方案.md §五.16): the gate only recompiles
+      // when the model, the history revision or the schema moved on.
+      meta: {
+        modelIdentity: selectedChatModel.title,
+        historyRevision:
+          selectSessionById(getState(), sessionId)?.historyRevision ?? 0,
+        schemaVersion: CONTEXT_METRICS_SCHEMA_VERSION,
+      },
     }),
   );
 

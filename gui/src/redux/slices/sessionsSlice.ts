@@ -81,11 +81,23 @@ export type SessionStreamState = {
   error?: string;
 };
 
+/**
+ * Identity of a context-metrics snapshot (方案.md §五.16). A snapshot may only
+ * be reused when the model, the history revision and the schema all match.
+ */
+export type ContextMetricsMeta = {
+  modelIdentity: string;
+  historyRevision: number;
+  schemaVersion: number;
+};
+
 export type SessionRuntimeState = {
   id: string;
   title: string;
 
   history: ChatHistoryItemWithMessageId[];
+  /** Bumped by every request-relevant mutation; gates metrics recomputation. */
+  historyRevision: number;
   firstTurnItems: ChatHistoryItemWithMessageId[];
   latestConversationSummary?: {
     sourceMessageId: string;
@@ -114,6 +126,7 @@ export type SessionRuntimeState = {
   contextInputTokens?: number;
   contextLength?: number;
   contextMetrics?: ContextMetricsSnapshot;
+  contextMetricsMeta?: ContextMetricsMeta;
 
   inlineErrorMessage?: InlineErrorMessageType;
   compactionLoading: Record<string, boolean>;
@@ -168,6 +181,7 @@ export function initialSessionRuntime(
     id: sessionId,
     title,
     history: [],
+    historyRevision: 0,
     firstTurnItems: [],
     mode: "chat",
     symbols: {},
@@ -245,6 +259,17 @@ function invalidateContextMetrics(session: SessionRuntimeState): void {
   session.contextInputTokens = undefined;
   session.contextLength = undefined;
   session.contextMetrics = undefined;
+  session.contextMetricsMeta = undefined;
+}
+
+/**
+ * Every mutation that changes the request history (messages, context items,
+ * applied rules, summary, mode) marks the session dirty and advances
+ * `historyRevision`, which is what the metrics recompute gate compares.
+ */
+function markHistoryChanged(session: SessionRuntimeState): void {
+  session.dirty = true;
+  session.historyRevision += 1;
 }
 
 export const sessionsSlice = createSlice({
@@ -381,6 +406,7 @@ export const sessionsSlice = createSlice({
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.history = action.payload.history;
+        session.historyRevision += 1;
       }
     },
     setContextItemsByMessageId: (
@@ -396,7 +422,7 @@ export const sessionsSlice = createSlice({
         ? findItemByMessageId(session, action.payload.messageId)
         : undefined;
       if (session && item) {
-        session.dirty = true;
+        markHistoryChanged(session);
         item.contextItems = action.payload.contextItems;
       }
     },
@@ -413,7 +439,7 @@ export const sessionsSlice = createSlice({
         ? findItemByMessageId(session, action.payload.messageId)
         : undefined;
       if (session && item) {
-        session.dirty = true;
+        markHistoryChanged(session);
         item.contextItems = [
           ...item.contextItems,
           ...action.payload.contextItems,
@@ -435,7 +461,7 @@ export const sessionsSlice = createSlice({
       if (!session || !item) {
         return;
       }
-      session.dirty = true;
+      markHistoryChanged(session);
       Object.assign(item, action.payload.updates);
       // Editing/retrying invalidates the previous context snapshot, and a tool
       // state change changes the pending-approval projection.
@@ -457,7 +483,7 @@ export const sessionsSlice = createSlice({
         ? findItemByMessageId(session, action.payload.messageId)
         : undefined;
       if (session && item) {
-        session.dirty = true;
+        markHistoryChanged(session);
         item.appliedRules = action.payload.appliedRules;
       }
     },
@@ -489,7 +515,7 @@ export const sessionsSlice = createSlice({
         end++;
       }
       session.history.splice(start, end - start);
-      session.dirty = true;
+      markHistoryChanged(session);
       invalidateContextMetrics(session);
       session.pendingApprovalCount = countAwaitingApprovalToolCalls(
         session.history,
@@ -523,7 +549,7 @@ export const sessionsSlice = createSlice({
         contextItems: [],
       });
       session.inlineErrorMessage = undefined;
-      session.dirty = true;
+      markHistoryChanged(session);
       invalidateContextMetrics(session);
       session.pendingApprovalCount = 0;
     },
@@ -539,6 +565,7 @@ export const sessionsSlice = createSlice({
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.firstTurnItems = action.payload.firstTurnItems;
+        session.historyRevision += 1;
       }
     },
     setSessionConversationSummary: (
@@ -551,6 +578,7 @@ export const sessionsSlice = createSlice({
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.latestConversationSummary = action.payload.summary;
+        session.historyRevision += 1;
       }
     },
     clearSessionConversationSummary: (
@@ -560,6 +588,7 @@ export const sessionsSlice = createSlice({
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.latestConversationSummary = undefined;
+        session.historyRevision += 1;
       }
     },
 
@@ -594,7 +623,7 @@ export const sessionsSlice = createSlice({
       if (!session || session.stream.requestId !== action.payload.requestId) {
         return;
       }
-      session.dirty = true;
+      markHistoryChanged(session);
       applyStreamUpdatesToHistory(session, action.payload.messages);
     },
     finishSessionStream: (
@@ -680,6 +709,8 @@ export const sessionsSlice = createSlice({
       session.pagination.totalCount = totalCount;
       session.pagination.truncated = hasMore;
       session.pagination.loading = false;
+      // Prepending older history changes the request history.
+      session.historyRevision += 1;
     },
     setSessionHistoryLoading: (
       state,
@@ -719,6 +750,7 @@ export const sessionsSlice = createSlice({
         session.history = session.history.slice(
           session.history.length - keepCount,
         );
+        session.historyRevision += 1;
       }
       const pagination = session.pagination;
       pagination.truncated = removedDiskItems > 0;
@@ -959,7 +991,7 @@ export const sessionsSlice = createSlice({
         ? findItemByMessageId(session, action.payload.messageId)
         : undefined;
       if (session && item?.conversationSummary) {
-        session.dirty = true;
+        markHistoryChanged(session);
         item.conversationSummary = undefined;
       }
     },
@@ -972,6 +1004,7 @@ export const sessionsSlice = createSlice({
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.mode = action.payload.mode;
+        session.historyRevision += 1;
         const descriptor = state.tabDescriptors[action.payload.sessionId];
         if (descriptor) {
           descriptor.mode = action.payload.mode;
@@ -1036,6 +1069,7 @@ export const sessionsSlice = createSlice({
       action: PayloadAction<{
         sessionId: string;
         metrics?: ContextMetricsSnapshot;
+        meta?: ContextMetricsMeta;
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
@@ -1043,6 +1077,9 @@ export const sessionsSlice = createSlice({
         return;
       }
       session.contextMetrics = action.payload.metrics;
+      session.contextMetricsMeta = action.payload.metrics
+        ? action.payload.meta
+        : undefined;
       session.isPruned = action.payload.metrics?.didPrune;
       session.contextPercentage = action.payload.metrics?.contextPercentage;
       session.contextInputTokens = action.payload.metrics?.inputTokens;
