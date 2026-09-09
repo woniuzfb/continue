@@ -304,6 +304,7 @@ async function runApproveToolCall(
     dispatch,
     getState,
     ideMessenger,
+    sessionId,
   });
 
   const output = execution.error

@@ -1,6 +1,6 @@
 import { resolveRelativePathInDir } from "core/util/ideUtils";
 import { v4 as uuid } from "uuid";
-import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
+import { applyEditToolChanges } from "../../redux/thunks/sessionApplyState";
 import { ClientToolImpl } from "./callClientTool";
 
 export const editToolImpl: ClientToolImpl = async (
@@ -37,13 +37,14 @@ export const editToolImpl: ClientToolImpl = async (
     throw new Error(`${filepath} does not exist`);
   }
   const streamId = uuid();
-  void extras.dispatch(
-    applyForEditTool({
+  applyEditToolChanges(
+    { sessionId: extras.sessionId, dispatch: extras.dispatch },
+    {
       streamId,
       text: args.changes,
       toolCallId,
       filepath: firstUriMatch,
-    }),
+    },
   );
 
   return {

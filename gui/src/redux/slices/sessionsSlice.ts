@@ -868,6 +868,51 @@ export const sessionsSlice = createSlice({
         session.editState.previousModeEditorContent = action.payload.content;
       }
     },
+    /**
+     * Chat/agent code-block apply state (方案.md §六 Editor/Edit/Apply).
+     * Mirrors the legacy `updateApplyState`, including the `curIndex` advance
+     * on `done`, but for one explicit session.
+     */
+    updateSessionApplyState: (
+      state,
+      action: PayloadAction<{ sessionId: string; applyState: ApplyState }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const { applyState } = action.payload;
+      const existing = session.codeBlockApplyStates.states.find(
+        (candidate) => candidate.streamId === applyState.streamId,
+      );
+      if (!existing) {
+        session.codeBlockApplyStates.states.push(applyState);
+      } else {
+        existing.status = applyState.status ?? existing.status;
+        existing.numDiffs = applyState.numDiffs ?? existing.numDiffs;
+        existing.filepath = applyState.filepath ?? existing.filepath;
+        existing.fileContent = applyState.fileContent ?? existing.fileContent;
+        existing.originalFileContent =
+          applyState.originalFileContent ?? existing.originalFileContent;
+      }
+      if (applyState.status === "done") {
+        session.codeBlockApplyStates.curIndex++;
+      }
+    },
+    /**
+     * Session-scoped equivalent of `resetNextCodeBlockToApplyIndex`. The tool
+     * loop resets the cursor before continuing a turn so the next reply's code
+     * blocks apply from the start.
+     */
+    resetSessionCodeBlockApplyIndex: (
+      state,
+      action: PayloadAction<{ sessionId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.codeBlockApplyStates.curIndex = 0;
+      }
+    },
 
     // ── Tool / Compact ────────────────────────────────────────────────────
     setCompactionLoadingByMessageId: (
@@ -1041,6 +1086,8 @@ export const {
   updateSessionEditApplyState,
   setSessionReturnToMode,
   setSessionPreviousModeEditorContent,
+  updateSessionApplyState,
+  resetSessionCodeBlockApplyIndex,
   setCompactionLoadingByMessageId,
   deleteCompactionByMessageId,
   setSessionMode,

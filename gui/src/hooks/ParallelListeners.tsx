@@ -21,6 +21,10 @@ import { setTTSActive } from "../redux/slices/uiSlice";
 import { modelSupportsReasoning } from "core/llm/autodetect";
 import { cancelStream } from "../redux/thunks/cancelStream";
 import { handleApplyStateUpdate } from "../redux/thunks/handleApplyStateUpdate";
+import {
+  handleSessionApplyStateUpdate,
+  lookupApplyOrigin,
+} from "../redux/thunks/sessionApplyState";
 import { loadSession, refreshSessionMetadata } from "../redux/thunks/session";
 import { updateFileSymbolsFromHistory } from "../redux/thunks/updateFileSymbols";
 import {
@@ -248,6 +252,24 @@ function ParallelListeners() {
   useWebviewListener(
     "updateApplyState",
     async (state) => {
+      // 方案.md §五.21: a target-session event must not resolve its session at
+      // callback time. The apply origin is recorded when the apply request is
+      // issued, so a session-scoped edit lands in the session that started it
+      // even after the user switched tabs. Unregistered streams keep the legacy
+      // active-session path.
+      const origin = lookupApplyOrigin(state.streamId);
+      if (origin) {
+        void dispatch(
+          handleSessionApplyStateUpdate({
+            sessionId: origin.sessionId,
+            applyState: {
+              ...state,
+              toolCallId: state.toolCallId ?? origin.toolCallId,
+            },
+          }),
+        );
+        return;
+      }
       void dispatch(handleApplyStateUpdate(state));
     },
     [],

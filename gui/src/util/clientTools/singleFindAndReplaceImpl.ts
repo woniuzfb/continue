@@ -2,7 +2,7 @@ import { validateSingleEdit } from "core/edit/searchAndReplace/findAndReplaceUti
 import { executeFindAndReplace } from "core/edit/searchAndReplace/performReplace";
 import { validateSearchAndReplaceFilepath } from "core/edit/searchAndReplace/validateArgs";
 import { v4 as uuid } from "uuid";
-import { applyForEditTool } from "../../redux/thunks/handleApplyStateUpdate";
+import { applyEditToolChanges } from "../../redux/thunks/sessionApplyState";
 import { ClientToolImpl } from "./callClientTool";
 
 export const singleFindAndReplaceImpl: ClientToolImpl = async (
@@ -33,14 +33,15 @@ export const singleFindAndReplaceImpl: ClientToolImpl = async (
 
   // Apply the changes to the file
   const streamId = uuid();
-  void extras.dispatch(
-    applyForEditTool({
+  applyEditToolChanges(
+    { sessionId: extras.sessionId, dispatch: extras.dispatch },
+    {
       streamId,
       toolCallId,
       text: newFileContents,
       filepath: fileUri,
       isSearchAndReplace: true,
-    }),
+    },
   );
 
   // Return success - applyToFile will handle the completion state

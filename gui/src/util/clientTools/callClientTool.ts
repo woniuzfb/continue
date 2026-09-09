@@ -11,6 +11,11 @@ export interface ClientToolExtras {
   getState: () => RootState;
   dispatch: AppThunkDispatch;
   ideMessenger: IIdeMessenger;
+  /**
+   * Owning session (方案.md §五.20). Set by the session-scoped tool loop; the
+   * legacy active-session path leaves it undefined.
+   */
+  sessionId?: string;
 }
 
 export interface ClientToolOutput {
