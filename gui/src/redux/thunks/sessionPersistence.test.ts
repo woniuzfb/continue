@@ -181,7 +181,35 @@ describe("sessionPersistence.saveSession response handling", () => {
     ]);
     expect(session.latestConversationSummary).toEqual({
       sourceMessageId: "a1",
+      sourceAbsoluteIndex: 1,
       content: "summary text",
     });
+  });
+
+  it("clears a stale first turn and summary when the response omits them", async () => {
+    const store = makeStore({
+      firstTurnItems: [item("old1", "user", "stale first turn")],
+      latestConversationSummary: {
+        sourceMessageId: "old-summary",
+        sourceAbsoluteIndex: 3,
+        content: "stale summary",
+      },
+    });
+    store.mockIdeMessenger.request = vi.fn().mockResolvedValue({
+      status: "success",
+      content: {
+        // Authoritative: the session on disk has neither a first turn nor a
+        // compaction anymore.
+        firstTurnItems: [],
+        totalHistoryCount: 0,
+      },
+      done: true,
+    }) as any;
+
+    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.firstTurnItems).toEqual([]);
+    expect(session.latestConversationSummary).toBeUndefined();
   });
 });

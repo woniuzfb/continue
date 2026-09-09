@@ -48,6 +48,11 @@ export async function getSessionPage(
 ): Promise<{
   session: Session;
   firstTurnItems: ChatHistoryItem[];
+  latestConversationSummary?: {
+    sourceMessageId: string;
+    sourceAbsoluteIndex: number;
+    content: string;
+  };
   hasMore: boolean;
   totalCount: number;
   loadedOffset: number;
@@ -61,7 +66,14 @@ export async function getSessionPage(
   if (res.status === "error") {
     throw new Error(res.error);
   }
-  const { items, firstTurnItems, hasMore, total, session: meta } = res.content;
+  const {
+    items,
+    firstTurnItems,
+    latestConversationSummary,
+    hasMore,
+    total,
+    session: meta,
+  } = res.content;
   const loadedOffset = total - items.length; // 头部未加载条数
   const session: Session = {
     sessionId: id,
@@ -71,10 +83,13 @@ export async function getSessionPage(
     mode: meta.mode,
     chatModelTitle: meta.chatModelTitle,
     contextMetrics: meta.contextMetrics,
+    hasReasoningEnabled: meta.hasReasoningEnabled,
+    reasoningPreferenceSource: meta.reasoningPreferenceSource,
   };
   return {
     session,
     firstTurnItems: firstTurnItems ?? [],
+    latestConversationSummary,
     hasMore,
     totalCount: total,
     loadedOffset,

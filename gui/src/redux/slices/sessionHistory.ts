@@ -565,6 +565,29 @@ export function applyStreamUpdatesToHistory(
  *
  * 懒加载窗口只有尾部时返回空数组 —— 首轮必须来自磁盘头部，不能从尾部猜。
  */
+/**
+ * 最近一次 compact 的摘要及其来源位置（方案.md §十一），与 Core
+ * `latestSummaryOf` 同一规则。用于全量加载时在 GUI 侧恢复权威摘要。
+ */
+export function latestSummaryOf(
+  history: ChatHistoryItemWithMessageId[],
+):
+  | { sourceMessageId: string; sourceAbsoluteIndex: number; content: string }
+  | undefined {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const summary = history[i].conversationSummary;
+    const messageId = history[i].message.id;
+    if (summary && messageId) {
+      return {
+        sourceMessageId: messageId,
+        sourceAbsoluteIndex: i,
+        content: summary,
+      };
+    }
+  }
+  return undefined;
+}
+
 export function firstTurnItemsOf(
   history: ChatHistoryItemWithMessageId[],
 ): ChatHistoryItemWithMessageId[] {

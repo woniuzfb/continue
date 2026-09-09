@@ -5,6 +5,7 @@ import { selectSessionById } from "../selectors/sessions";
 import { ensureMessageIds } from "../util/messageIds";
 import {
   markSessionPersisted,
+  clearSessionConversationSummary,
   setSessionConversationSummary,
   setSessionFirstTurn,
   setSessionPagination,
@@ -69,6 +70,11 @@ function buildSessionPayload(
     historyTruncated: session.pagination.truncated,
     historyLoadedOffset: session.pagination.loadedOffset,
     contextMetrics: session.contextMetrics,
+    // 方案.md §七.8: the reasoning preference is per-session state and must
+    // round-trip through history/save, otherwise a reload silently reverts to
+    // the derived default.
+    hasReasoningEnabled: session.hasReasoningEnabled,
+    reasoningPreferenceSource: session.reasoningPreferenceSource,
   } as Session;
 }
 
@@ -121,7 +127,10 @@ async function performSave(
       }),
     );
   }
-  if (result.content?.firstTurnItems?.length) {
+  // The response is authoritative: an empty first turn must *clear* the old
+  // one, otherwise a deleted/emptied session keeps serving a stale first turn
+  // (方案.md §五.5).
+  if (result.content?.firstTurnItems !== undefined) {
     dispatch(
       setSessionFirstTurn({
         sessionId,
@@ -129,6 +138,9 @@ async function performSave(
       }),
     );
   }
+  // Same authority for the summary: deleting a compaction makes the disk
+  // response omit it, and a leftover summary would keep feeding
+  // `conversationSummaryOverride` to the Local Provider (方案.md §七.8.1).
   const summary = result.content?.latestConversationSummary;
   if (summary?.sourceMessageId && summary.content) {
     dispatch(
@@ -136,10 +148,13 @@ async function performSave(
         sessionId,
         summary: {
           sourceMessageId: summary.sourceMessageId,
+          sourceAbsoluteIndex: summary.sourceAbsoluteIndex,
           content: summary.content,
         },
       }),
     );
+  } else {
+    dispatch(clearSessionConversationSummary({ sessionId }));
   }
 
   dispatch(

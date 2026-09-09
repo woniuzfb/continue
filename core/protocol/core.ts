@@ -93,8 +93,19 @@ export interface SaveHistoryResponse {
 
 export interface LoadPageHistoryResponse {
   items: ChatHistoryItem[];
-  /** 磁盘首轮原始条目（方案.md §五.5/§十三.4）。 */
+  /** 磁盘首轮原始条目（方案.md §五.5/§十三.4）。仅 offset === 0 时返回。 */
   firstTurnItems: ChatHistoryItem[];
+  /**
+   * 权威摘要（方案.md §七.8.1/§十一）：懒加载激活时用它恢复
+   * `latestConversationSummary`，否则 Local Provider 的
+   * `conversationSummaryOverride` 在重启后会变成 undefined。
+   * 仅 offset === 0 时返回。
+   */
+  latestConversationSummary?: {
+    sourceMessageId: string;
+    sourceAbsoluteIndex: number;
+    content: string;
+  };
   hasMore: boolean;
   total: number;
   session: Pick<
@@ -104,6 +115,8 @@ export interface LoadPageHistoryResponse {
     | "chatModelTitle"
     | "workspaceDirectory"
     | "contextMetrics"
+    | "hasReasoningEnabled"
+    | "reasoningPreferenceSource"
   >;
 }
 
@@ -289,7 +302,17 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   streamDiffLines: [StreamDiffLinesPayload, AsyncGenerator<DiffLine>];
   getDiffLines: [{ oldContent: string; newContent: string }, DiffLine[]];
   "llm/compileChat": [
-    { messages: ChatMessage[]; options: LLMFullCompletionOptions },
+    {
+      messages: ChatMessage[];
+      options: LLMFullCompletionOptions;
+      /**
+       * 方案.md §十四: message indexes that must not be pruned. Local Provider
+       * requests protect the whole array (system + first turn + current turn),
+       * so an over-budget request fails as out-of-context instead of silently
+       * dropping the first turn.
+       */
+      protectedMessageIndexes?: number[];
+    },
     CompiledMessagesResult,
   ];
   "chatDescriber/describe": [

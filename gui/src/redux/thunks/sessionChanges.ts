@@ -35,7 +35,11 @@ export const setSessionReasoningAndSave = createAsyncThunk<
 >(
   "sessions/setReasoningAndSave",
   async ({ sessionId, enabled }, { dispatch }) => {
-    dispatch(setSessionReasoningEnabled({ sessionId, enabled }));
+    // An explicit user toggle (方案.md §七.8): the persisted preference source
+    // is what makes the choice survive a config reload.
+    dispatch(
+      setSessionReasoningEnabled({ sessionId, enabled, source: "explicit" }),
+    );
     void dispatch(
       enqueueSessionSave({ sessionId, reason: "REASONING_CHANGED" }),
     );

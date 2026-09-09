@@ -377,6 +377,11 @@ export class HistoryManager {
   ): {
     items: Session["history"];
     firstTurnItems: ChatHistoryItem[];
+    latestConversationSummary?: {
+      sourceMessageId: string;
+      sourceAbsoluteIndex: number;
+      content: string;
+    };
     hasMore: boolean;
     total: number;
     session: Pick<
@@ -386,6 +391,8 @@ export class HistoryManager {
       | "chatModelTitle"
       | "workspaceDirectory"
       | "contextMetrics"
+      | "hasReasoningEnabled"
+      | "reasoningPreferenceSource"
     >;
   } {
     const session = this.load(sessionId);
@@ -401,9 +408,15 @@ export class HistoryManager {
     const start = Math.max(0, end - safeLimit); // 包含
     const items = session.history.slice(start, end);
     const hasMore = start > 0;
+    // 首轮和权威摘要只在第一页返回（方案.md §十三.4/§十一）：后续页调用者
+    // 只需要 items/hasMore/total，重复扫描完整 history 是纯浪费。
+    const isFirstPage = safeOffset === 0;
     return {
       items,
-      firstTurnItems: this.firstTurnItemsOf(session.history),
+      firstTurnItems: isFirstPage ? this.firstTurnItemsOf(session.history) : [],
+      latestConversationSummary: isFirstPage
+        ? this.latestSummaryOf(session.history)
+        : undefined,
       hasMore,
       total,
       session: {
@@ -412,6 +425,8 @@ export class HistoryManager {
         chatModelTitle: session.chatModelTitle,
         workspaceDirectory: session.workspaceDirectory,
         contextMetrics: session.contextMetrics,
+        hasReasoningEnabled: session.hasReasoningEnabled,
+        reasoningPreferenceSource: session.reasoningPreferenceSource,
       },
     };
   }
@@ -519,6 +534,15 @@ export class HistoryManager {
     }
     if (session.contextMetrics !== undefined) {
       orderedSession.contextMetrics = session.contextMetrics;
+    }
+    // per-session reasoning preference (方案.md §七.8): without these the GUI
+    // falls back to the derived default after a reload.
+    if (session.hasReasoningEnabled !== undefined) {
+      orderedSession.hasReasoningEnabled = session.hasReasoningEnabled;
+    }
+    if (session.reasoningPreferenceSource !== undefined) {
+      orderedSession.reasoningPreferenceSource =
+        session.reasoningPreferenceSource;
     }
 
     // 原子写：先写临时文件再 rename，避免进程在写到一半时崩溃，

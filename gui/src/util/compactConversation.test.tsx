@@ -68,6 +68,15 @@ function makeStore(options: {
 
   const runtime = initialSessionRuntime(runtimeSessionId, "Chat", {
     history,
+    ...(summaryAt
+      ? {
+          latestConversationSummary: {
+            sourceMessageId: history[summaryAt.index]?.message.id ?? "",
+            sourceAbsoluteIndex: summaryAt.index,
+            content: summaryAt.text,
+          },
+        }
+      : {}),
     // Only override pagination when the window is truncated: passing
     // `pagination: undefined` would replace the default with undefined.
     ...(truncated
@@ -143,6 +152,16 @@ describe("useCompactConversation", () => {
       activeSessionId: "B",
     });
     store.mockIdeMessenger.responses["conversation/compact"] = "summary text";
+    // The authoritative save response carries the new summary back (方案.md §七.8.1).
+    store.mockIdeMessenger.responses["history/save"] = {
+      firstTurnItems: [],
+      totalHistoryCount: FULL_HISTORY.length,
+      latestConversationSummary: {
+        sourceMessageId: "m2",
+        sourceAbsoluteIndex: 2,
+        content: "summary text",
+      },
+    } as any;
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
     const { result } = renderHook(() => useCompactConversation(), {
@@ -160,6 +179,12 @@ describe("useCompactConversation", () => {
 
     const a = selectSessionById(store.getState() as any, "A")!;
     expect(a.history[2].conversationSummary).toBe("summary text");
+    // The runtime summary (what the Local Provider sends) updates immediately.
+    expect(a.latestConversationSummary).toEqual({
+      sourceMessageId: a.history[2].message.id,
+      sourceAbsoluteIndex: 2,
+      content: "summary text",
+    });
     const b = selectSessionById(store.getState() as any, "B")!;
     expect(b.history[0].conversationSummary).toBeUndefined();
   });
@@ -291,10 +316,9 @@ describe("useDeleteCompaction", () => {
       activeSessionId: "B",
       summaryAt: { index: 2, text: "old summary" },
     });
-    expect(
-      selectSessionById(store.getState() as any, "A")!.history[2]
-        .conversationSummary,
-    ).toBe("old summary");
+    const seeded = selectSessionById(store.getState() as any, "A")!;
+    expect(seeded.history[2].conversationSummary).toBe("old summary");
+    expect(seeded.latestConversationSummary?.content).toBe("old summary");
 
     const { result } = renderHook(() => useDeleteCompaction(), {
       wrapper: wrapperFor(store, "A"),
@@ -306,6 +330,9 @@ describe("useDeleteCompaction", () => {
 
     const after = selectSessionById(store.getState() as any, "A")!;
     expect(after.history[2].conversationSummary).toBeUndefined();
+    // The Local Provider override must stop using the deleted summary
+    // immediately, not only after the save response (方案.md §十一).
+    expect(after.latestConversationSummary).toBeUndefined();
     // The visible session keeps its own history untouched.
     const visible = selectSessionById(store.getState() as any, "B")!;
     expect(visible.history[0].message.content).toBe("visible");

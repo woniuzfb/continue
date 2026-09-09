@@ -87,6 +87,48 @@ describe("history first turn boundary", () => {
     expect(second.totalHistoryCount).toBe(7);
   });
 
+  test("loadPage returns the latest summary only on the first page", async () => {
+    const withSummary: Session = {
+      ...session,
+      history: session.history.map((item, index) =>
+        index === 2 ? { ...item, conversationSummary: "compacted" } : item,
+      ),
+    };
+    const saved = await historyManager.save(withSummary);
+    expect(saved.latestConversationSummary).toEqual({
+      sourceMessageId: "a1",
+      sourceAbsoluteIndex: 2,
+      content: "compacted",
+    });
+
+    const firstPage = historyManager.loadPage(sessionId, 0, 2);
+    expect(firstPage.latestConversationSummary).toEqual(
+      saved.latestConversationSummary,
+    );
+
+    // Later pages only carry items/hasMore/total (方案.md §十三.4).
+    const laterPage = historyManager.loadPage(sessionId, 2, 2);
+    expect(laterPage.latestConversationSummary).toBeUndefined();
+    expect(laterPage.firstTurnItems).toEqual([]);
+  });
+
+  test("reasoning preference round-trips through save and load", async () => {
+    const withReasoning: Session = {
+      ...session,
+      hasReasoningEnabled: true,
+      reasoningPreferenceSource: "explicit",
+    };
+    await historyManager.save(withReasoning);
+
+    const loaded = historyManager.load(sessionId);
+    expect(loaded.hasReasoningEnabled).toBe(true);
+    expect(loaded.reasoningPreferenceSource).toBe("explicit");
+
+    const page = historyManager.loadPage(sessionId, 0, 2);
+    expect(page.session.hasReasoningEnabled).toBe(true);
+    expect(page.session.reasoningPreferenceSource).toBe("explicit");
+  });
+
   test("a session without a user message has an empty first turn", async () => {
     const response = await historyManager.save({
       sessionId: uuidv4(),

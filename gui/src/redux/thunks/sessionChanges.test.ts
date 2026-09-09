@@ -70,10 +70,17 @@ describe("session change saves", () => {
     await run(store, setActiveSessionReasoningAndSave({ enabled: true }));
 
     expect(session(store).hasReasoningEnabled).toBe(true);
+    // 方案.md §七.8: an explicit choice is persisted with its source, so a
+    // reload does not silently fall back to the derived default.
+    expect(session(store).reasoningPreferenceSource).toBe("explicit");
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(
         "history/save",
-        expect.objectContaining({ sessionId: "s1" }),
+        expect.objectContaining({
+          sessionId: "s1",
+          hasReasoningEnabled: true,
+          reasoningPreferenceSource: "explicit",
+        }),
       );
     });
   });

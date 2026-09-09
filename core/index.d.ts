@@ -140,6 +140,8 @@ export interface ILLM
   compileChatMessages(
     messages: ChatMessage[],
     options: LLMFullCompletionOpeions,
+    /** 方案.md §十四: indexes that must never be pruned. */
+    protectedMessageIndexes?: number[],
   ): CompiledChatMessagesReport;
 
   embed(chunks: string[]): Promise<number[][]>;
@@ -306,6 +308,14 @@ export interface Session {
     inputTokens?: number;
     contextLength?: number;
   };
+  /**
+   * Optional: per-session reasoning preference. Persisted with the session so a
+   * restart restores the user's explicit choice instead of the derived default
+   * (方案.md §七.8).
+   */
+  hasReasoningEnabled?: boolean;
+  /** Where the preference came from: the model default or an explicit choice. */
+  reasoningPreferenceSource?: "derived" | "explicit";
 }
 
 export interface BaseSessionMetadata {

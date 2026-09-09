@@ -113,6 +113,7 @@ function ParallelListeners() {
               supportsReasoning &&
               !isReasoningDisabled &&
               wasReasoningPreviouslyEnabled,
+            source: "derived",
           }),
         );
       }
