@@ -15,6 +15,7 @@ import {
   findSessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
 import { exitEdit } from "./edit";
+import { enqueueSessionSave } from "./sessionPersistence";
 import { continueToolLoop } from "./sessionTools";
 
 /**
@@ -197,6 +198,9 @@ export const handleSessionApplyStateUpdate = createAsyncThunk<
         patch: { output: [editFailedItem(applyState.filepath)] },
       });
     }
+
+    // EDIT_COMMITTED save boundary (方案.md §七.2).
+    void dispatch(enqueueSessionSave({ sessionId, reason: "EDIT_COMMITTED" }));
 
     // The turn continues on the same request that produced the edit.
     const requestId = selectSessionById(getState(), sessionId)?.stream

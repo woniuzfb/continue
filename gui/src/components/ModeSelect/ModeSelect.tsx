@@ -12,7 +12,7 @@ import {
 import { useCallback, useEffect, useMemo } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
-import { setSessionMode } from "../../redux/slices/sessionsSlice";
+import { setActiveSessionModeAndSave } from "../../redux/thunks/sessionChanges";
 import {
   selectActiveMode,
   selectActiveSessionId,
@@ -46,26 +46,11 @@ export function ModeSelect() {
 
   const cycleMode = useCallback(() => {
     if (mode === "chat") {
-      dispatch(
-        setSessionMode({
-          sessionId,
-          mode: "plan",
-        }),
-      );
+      dispatch(setActiveSessionModeAndSave({ mode: "plan" }));
     } else if (mode === "plan") {
-      dispatch(
-        setSessionMode({
-          sessionId,
-          mode: "agent",
-        }),
-      );
+      dispatch(setActiveSessionModeAndSave({ mode: "agent" }));
     } else {
-      dispatch(
-        setSessionMode({
-          sessionId,
-          mode: "chat",
-        }),
-      );
+      dispatch(setActiveSessionModeAndSave({ mode: "chat" }));
     }
     // Only focus main editor if another one doesn't already have focus
     if (!document.activeElement?.classList?.contains("ProseMirror")) {
@@ -79,12 +64,7 @@ export function ModeSelect() {
         return;
       }
 
-      dispatch(
-        setSessionMode({
-          sessionId,
-          mode: newMode,
-        }),
-      );
+      dispatch(setActiveSessionModeAndSave({ mode: newMode }));
 
       mainEditor?.commands.focus();
     },

@@ -17,7 +17,7 @@ import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectUseActiveFile } from "../../redux/selectors";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
-import { setSessionReasoningEnabled } from "../../redux/slices/sessionsSlice";
+import { setActiveSessionReasoningAndSave } from "../../redux/thunks/sessionChanges";
 import {
   selectActiveCodeToEdit,
   selectActiveHasReasoningEnabled,
@@ -164,8 +164,7 @@ function InputToolbar(props: InputToolbarProps) {
               <HoverItem
                 onClick={() => {
                   dispatch(
-                    setSessionReasoningEnabled({
-                      sessionId,
+                    setActiveSessionReasoningAndSave({
                       enabled: !hasReasoningEnabled,
                     }),
                   );

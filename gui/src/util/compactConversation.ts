@@ -7,7 +7,7 @@ import {
   updateHistoryItemByMessageId,
 } from "../redux/slices/sessionsSlice";
 import { loadFullHistory } from "../redux/thunks/sessionPaging";
-import { flushSessionSave } from "../redux/thunks/sessionPersistence";
+import { enqueueSessionSave } from "../redux/thunks/sessionPersistence";
 import {
   selectActiveHistory,
   selectActiveHistoryLoadedOffset,
@@ -95,7 +95,13 @@ export const useCompactConversation = () => {
           );
         }
         // 清除 stale 的 contextMetrics（compact 改变了上下文结构）
-        // updateHistoryItemAtIndex reducer 已自动清除 contextMetrics
+        // updateHistoryItemByMessageId reducer 已自动清除 contextMetrics
+        void dispatch(
+          enqueueSessionSave({
+            sessionId: currentSessionId,
+            reason: "COMPACTION_CHANGED",
+          }),
+        );
       }
     } catch (error) {
       console.error("Error compacting conversation:", error);
@@ -151,6 +157,8 @@ export const useDeleteCompaction = () => {
     if (messageId) {
       dispatch(deleteCompactionByMessageId({ sessionId, messageId }));
     }
-    void dispatch(flushSessionSave({ sessionId }));
+    void dispatch(
+      enqueueSessionSave({ sessionId, reason: "COMPACTION_DELETED" }),
+    );
   };
 };

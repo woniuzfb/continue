@@ -12,6 +12,8 @@ import { AddModelForm } from "../../forms/AddModelForm";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { updateSelectedModelByRole } from "../../redux/thunks/updateSelectedModelByRole";
+import { setSessionChatModelAndSave } from "../../redux/thunks/sessionChanges";
+import { selectActiveSessionId } from "../../redux/selectors/sessionView";
 import { getMetaKeyLabel, isMetaEquivalentKeyPressed } from "../../util";
 import { CONFIG_ROUTES } from "../../util/navigation";
 import {
@@ -123,6 +125,9 @@ function ModelSelect() {
   const navigate = useNavigate();
 
   const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
+  const activeSessionId = useAppSelector((state) =>
+    selectActiveSessionId(state),
+  );
   const config = useAppSelector((state) => state.config.config);
   const isConfigLoading = useAppSelector((state) => state.config.loading);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -195,6 +200,13 @@ function ModelSelect() {
             modelTitle: newModelTitle,
           }),
         );
+        // The session records its own model choice (方案.md §七.8).
+        void dispatch(
+          setSessionChatModelAndSave({
+            sessionId: activeSessionId,
+            chatModelTitle: newModelTitle,
+          }),
+        );
       }
     };
 
@@ -244,6 +256,14 @@ function ModelSelect() {
             modelTitle: val,
           }),
         );
+        if (!isInEdit) {
+          void dispatch(
+            setSessionChatModelAndSave({
+              sessionId: activeSessionId,
+              chatModelTitle: val,
+            }),
+          );
+        }
       }}
     >
       <div className="relative flex">
