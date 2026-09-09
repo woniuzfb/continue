@@ -14,7 +14,10 @@ import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { updateSelectedModelByRole } from "../../redux/thunks/updateSelectedModelByRole";
 import { setSessionChatModelAndSave } from "../../redux/thunks/sessionChanges";
 import { useSessionIsInEdit } from "../../redux/selectors/sessionView";
-import { useSessionId } from "../mainInput/TipTapEditor/SessionScope";
+import {
+  useIsVisibleSession,
+  useSessionId,
+} from "../mainInput/TipTapEditor/SessionScope";
 import { getMetaKeyLabel, isMetaEquivalentKeyPressed } from "../../util";
 import { CONFIG_ROUTES } from "../../util/navigation";
 import {
@@ -126,6 +129,9 @@ function ModelSelect() {
 
   const isInEdit = useSessionIsInEdit();
   const activeSessionId = useSessionId();
+  // 方案.md §九.2: one global listener per *visible* tab; a hidden tree must
+  // not react to the model-selection shortcut.
+  const visible = useIsVisibleSession();
   const config = useAppSelector((state) => state.config.config);
   const isConfigLoading = useAppSelector((state) => state.config.loading);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -173,6 +179,9 @@ function ModelSelect() {
   }, [allModels]);
 
   useEffect(() => {
+    if (!visible) {
+      return;
+    }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         event.key === "'" &&
@@ -212,7 +221,7 @@ function ModelSelect() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [options, selectedModel]);
+  }, [visible, options, selectedModel]);
 
   function onClickAddModel(e: MouseEvent) {
     e.stopPropagation();

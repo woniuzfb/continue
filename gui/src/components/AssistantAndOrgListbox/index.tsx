@@ -11,6 +11,7 @@ import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { setSelectedProfile } from "../../redux/slices/profilesSlice";
 import { getMetaKeyLabel, isMetaEquivalentKeyPressed } from "../../util";
 import { cn } from "../../util/cn";
+import { useIsVisibleSession } from "../mainInput/TipTapEditor/SessionScope";
 import { CONFIG_ROUTES } from "../../util/navigation";
 import {
   Button,
@@ -31,6 +32,10 @@ export function AssistantAndOrgListbox({
 }: AssistantAndOrgListboxProps) {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  // 方案.md §九.2: the profile-switch shortcut is global, but this listbox is
+  // mounted inside every open tab. Only the visible tab may own the listener,
+  // otherwise one keystroke switches the profile once per tab.
+  const visible = useIsVisibleSession();
   const listboxRef = useRef<HTMLDivElement>(null);
   const ideMessenger = useContext(IdeMessengerContext);
   const { profiles, selectedProfile, refreshProfiles } = useAuth();
@@ -92,7 +97,7 @@ export function AssistantAndOrgListbox({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [selectedProfile]);
+  }, [visible, selectedProfile]);
 
   return (
     <Listbox>

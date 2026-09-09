@@ -14,7 +14,10 @@ import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
 import { setActiveSessionModeAndSave } from "../../redux/thunks/sessionChanges";
 import { useSessionMode } from "../../redux/selectors/sessionView";
-import { useSessionId } from "../mainInput/TipTapEditor/SessionScope";
+import {
+  useIsVisibleSession,
+  useSessionId,
+} from "../mainInput/TipTapEditor/SessionScope";
 import { getFontSize, getMetaKeyLabel } from "../../util";
 import { ToolTip } from "../gui/Tooltip";
 import { useMainEditor } from "../mainInput/TipTapEditor";
@@ -24,6 +27,10 @@ import { ModeIcon } from "./ModeIcon";
 export function ModeSelect() {
   const dispatch = useAppDispatch();
   const sessionId = useSessionId();
+  // 方案.md §九.2: Cmd+. is a global shortcut, but every mounted tab registers
+  // its own listener — without a visibility gate the mode would cycle once per
+  // open tab.
+  const visible = useIsVisibleSession();
   const mode = useSessionMode();
   const selectedModel = useAppSelector(selectSelectedChatModel);
 
@@ -44,11 +51,11 @@ export function ModeSelect() {
 
   const cycleMode = useCallback(() => {
     if (mode === "chat") {
-      dispatch(setActiveSessionModeAndSave({ mode: "plan" }));
+      void dispatch(setActiveSessionModeAndSave({ mode: "plan" }));
     } else if (mode === "plan") {
-      dispatch(setActiveSessionModeAndSave({ mode: "agent" }));
+      void dispatch(setActiveSessionModeAndSave({ mode: "agent" }));
     } else {
-      dispatch(setActiveSessionModeAndSave({ mode: "chat" }));
+      void dispatch(setActiveSessionModeAndSave({ mode: "chat" }));
     }
     // Only focus main editor if another one doesn't already have focus
     if (!document.activeElement?.classList?.contains("ProseMirror")) {
@@ -62,7 +69,7 @@ export function ModeSelect() {
         return;
       }
 
-      dispatch(setActiveSessionModeAndSave({ mode: newMode }));
+      void dispatch(setActiveSessionModeAndSave({ mode: newMode }));
 
       mainEditor?.commands.focus();
     },
@@ -70,6 +77,9 @@ export function ModeSelect() {
   );
 
   useEffect(() => {
+    if (!visible) {
+      return;
+    }
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "." && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
@@ -79,7 +89,7 @@ export function ModeSelect() {
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [cycleMode]);
+  }, [visible, cycleMode]);
 
   const notGreatAtAgent = (mode: string) => (
     <>

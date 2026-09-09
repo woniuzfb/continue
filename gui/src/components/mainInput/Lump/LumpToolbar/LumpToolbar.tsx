@@ -16,6 +16,7 @@ import { stopActiveSessionStream } from "../../../../redux/thunks/sessionStreams
 import { logToolUsage } from "../../../../redux/util";
 import { isJetBrains } from "../../../../util";
 import { useMainEditor } from "../../TipTapEditor";
+import { useIsVisibleSession } from "../../TipTapEditor/SessionScope";
 import { BlockSettingsTopToolbar } from "./BlockSettingsTopToolbar";
 import { EditOutcomeToolbar } from "./EditOutcomeToolbar";
 import { EditToolbar } from "./EditToolbar";
@@ -61,6 +62,7 @@ export function LumpToolbar() {
   const ttsActive = useAppSelector((state) => state.ui.ttsActive);
   const isStreaming = useSessionIsStreaming();
   const isInEdit = useSessionIsInEdit();
+  const visible = useIsVisibleSession();
   const jetbrains = isJetBrains();
   const pendingToolCalls = useAppSelector(selectPendingToolCalls);
   const firstPendingToolCall = useAppSelector(selectFirstPendingToolCall);
@@ -125,6 +127,12 @@ export function LumpToolbar() {
   };
 
   useEffect(() => {
+    // 方案.md §九.2: this listener dispatches active-session actions
+    // (approve/reject/stop). A hidden tab's tree must not register it —
+    // otherwise one keystroke would run it once per open tab.
+    if (!visible) {
+      return;
+    }
     if (!firstPendingToolCall && !hasRunningTerminalCommand) {
       return;
     }
@@ -166,6 +174,7 @@ export function LumpToolbar() {
       document.removeEventListener("keydown", handleToolCallKeyboardShortcuts);
     };
   }, [
+    visible,
     firstPendingToolCall,
     pendingToolCalls,
     editor,

@@ -180,6 +180,12 @@ export function Chat() {
   useAutoScroll(stepsDivRef, history, sessionId, jumpSuppressRef);
 
   useEffect(() => {
+    // 方案.md §九.2: every tab keeps its tree mounted, so a global listener
+    // registered per tab would fire once per open tab and act on the *active*
+    // session from a hidden tree. Only the visible tab owns it.
+    if (!visible) {
+      return;
+    }
     // Cmd + Backspace to delete current step
     const listener = (e: KeyboardEvent) => {
       if (
@@ -195,7 +201,7 @@ export function Chat() {
     return () => {
       window.removeEventListener("keydown", listener);
     };
-  }, [isStreaming, jetbrains, isInEdit]);
+  }, [visible, isStreaming, jetbrains, isInEdit]);
 
   const { widget, highlights } = useFindWidget(
     stepsDivRef,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { waitFor } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import type { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionHistory";
 import { initialSessionRuntime } from "../../redux/slices/sessionsSlice";
 import { createMockStore } from "../../util/test/mockStore";
@@ -76,6 +76,43 @@ describe("SessionViews", () => {
         container.querySelector("[data-testid^='editor-input']"),
       ).not.toBeNull();
     });
+  });
+
+  it("registers a per-tab global shortcut only for the visible tab", async () => {
+    // Cmd+. cycles the mode. Every mounted tab renders its own ModeSelect, so
+    // without a visibility gate one keystroke would cycle once per open tab
+    // (方案.md §九.2).
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: "tab-a",
+        tabOrder: ["tab-a", "tab-b"],
+        tabDescriptors: {
+          "tab-a": { sessionId: "tab-a", title: "A", loadState: "loaded" },
+          "tab-b": { sessionId: "tab-b", title: "B", loadState: "loaded" },
+        },
+        sessionsById: {
+          "tab-a": initialSessionRuntime("tab-a", "A", { mode: "agent" }),
+          "tab-b": initialSessionRuntime("tab-b", "B", { mode: "agent" }),
+        },
+      },
+    });
+
+    await renderWithProviders(<SessionViews />, { store: store as any });
+    store.clearActions();
+
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: ".", metaKey: true }),
+      );
+    });
+
+    const modeChanges = store
+      .getActions()
+      .filter((action: any) => action.type === "sessions/setSessionMode");
+    expect(modeChanges).toHaveLength(1);
+    expect((store.getState() as any).sessions.sessionsById["tab-a"].mode).toBe(
+      "chat",
+    );
   });
 
   it("keeps one mounted tree per tab and hides the inactive one", async () => {

@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { HeaderButton, Input } from "..";
+import { useIsVisibleSession } from "../mainInput/TipTapEditor/SessionScope";
 import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
 import {
   Rectangle,
@@ -60,6 +61,9 @@ export const useFindWidget = (
   headerRef: RefObject<HTMLDivElement>,
   disabled: boolean,
 ) => {
+  // 方案.md §九.2: Cmd+F is global, but this hook runs in every mounted tab.
+  // Only the visible tab may open/close its own widget.
+  const visible = useIsVisibleSession();
   // Search input, debounced
   const inputRef = useRef<HTMLInputElement>(null);
   const [currentValue, setCurrentValue] = useState<string>("");
@@ -112,6 +116,9 @@ export const useFindWidget = (
 
   // Handle keyboard shortcuts for navigation
   useEffect(() => {
+    if (!visible) {
+      return;
+    }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey && event.key.toLowerCase() === "f" && !event.shiftKey) {
         event.preventDefault();
@@ -135,7 +142,7 @@ export const useFindWidget = (
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [inputRef, matches, nextMatch]);
+  }, [visible, inputRef, matches, nextMatch]);
 
   // Handle container resize changes - highlight positions must adjust
   const { clientHeight: headerHeight, isResizing: headerResizing } =

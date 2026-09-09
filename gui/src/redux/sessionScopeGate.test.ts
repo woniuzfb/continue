@@ -28,6 +28,7 @@ const SRC = join(__dirname, "..");
 
 /** Path prefixes (posix, relative to `gui/src`) allowed to touch the visible tab. */
 const SHELL_ALLOWLIST = [
+  "components/AppShell.tsx",
   "components/Layout.tsx",
   "components/TabBar/",
   "components/History/HistoryTableRow.tsx",
@@ -55,12 +56,46 @@ const SHELL_ALLOWLIST = [
  * must never resolve the visible session, not even for "read-only" values.
  */
 const SESSION_VIEW_DIRS = [
+  "components/SessionLayout.tsx",
   "components/mainInput/",
   "components/StyledMarkdownPreview/",
   "components/UnifiedTerminal/",
   "components/StepContainer/",
   "components/AcceptRejectDiffButtons.tsx",
 ];
+
+/**
+ * 方案.md §九.0: the shell must not depend on a tab's editor provider or on any
+ * session-scoped hook. The tab bar, the history sidebar and the GUI route entry
+ * live here; they may only decide *which* tab is visible.
+ */
+const APP_SHELL_FILES = [
+  "components/AppShell.tsx",
+  "components/TabBar/",
+  "components/History/",
+  "pages/gui/index.tsx",
+];
+
+/** Session-scoped hooks/providers the shell must not use. */
+const SHELL_FORBIDDEN_SESSION_API = [
+  "MainEditorProvider",
+  "useMainEditor",
+  "useMainEditorForSession",
+  "useSessionId",
+  "useOptionalSessionId",
+  "useIsVisibleSession",
+  "useSessionHistory",
+  "useSessionRuntime",
+  "useSessionIsStreaming",
+  "useSessionMode",
+];
+
+/**
+ * Every per-tab global keyboard listener must be gated by visibility: a hidden
+ * tab's tree stays mounted, so an ungated listener fires once per open tab and
+ * dispatches active-session actions from a background tree.
+ */
+const KEYDOWN_LISTENER = /addEventListener\(\s*["']keydown/;
 
 /** Files inside the subtree that legitimately know about visibility. */
 const SESSION_VIEW_ALLOWLIST = [
@@ -151,6 +186,38 @@ describe("方案.md §五.20 session-scope static gate", () => {
       const hits = activeSelectorUses(source);
       if (hits.length > 0) {
         violations.push(`${rel(file)}: ${[...new Set(hits)].join(", ")}`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  test("the shell never depends on a tab provider or a session hook", () => {
+    const violations: string[] = [];
+    for (const file of files) {
+      if (!isAllowed(file, APP_SHELL_FILES)) continue;
+      const source = stripComments(readFileSync(file, "utf8"));
+      for (const api of SHELL_FORBIDDEN_SESSION_API) {
+        if (new RegExp(`\\b${api}\\b`).test(source)) {
+          violations.push(`${rel(file)}: uses ${api}`);
+        }
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  test("per-tab global keyboard listeners are visibility-gated", () => {
+    // Any component that is not shell-only may be mounted once per open tab.
+    // An ungated listener fires once per tab and acts on the visible session
+    // from a background tree (方案.md §九.2).
+    const violations: string[] = [];
+    for (const file of files) {
+      if (isAllowed(file, SHELL_ALLOWLIST)) continue;
+      const source = stripComments(readFileSync(file, "utf8"));
+      if (!KEYDOWN_LISTENER.test(source)) continue;
+      if (!/useIsVisibleSession/.test(source)) {
+        violations.push(
+          `${rel(file)}: keydown listener without a visibility gate`,
+        );
       }
     }
     expect(violations).toEqual([]);
