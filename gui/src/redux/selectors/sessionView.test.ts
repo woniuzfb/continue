@@ -102,21 +102,8 @@ describe("sessionView selectors", () => {
       },
     });
     const runtimeState = runtimeStore.getState() as any;
-    expect(selectActiveCompactionLoading(runtimeState, "m1", 0)).toBe(true);
-    expect(selectActiveCompactionLoading(runtimeState, "m2", 0)).toBe(false);
-
-    const legacyStore = createMockStore({
-      sessions: {
-        activeSessionId: undefined,
-        tabOrder: [],
-        tabDescriptors: {},
-        sessionsById: {},
-      },
-    });
-    const legacyState = legacyStore.getState() as any;
-    legacyState.session.compactionLoading = { 2: true };
-    expect(selectActiveCompactionLoading(legacyState, "m1", 2)).toBe(true);
-    expect(selectActiveCompactionLoading(legacyState, "m1", 0)).toBe(false);
+    expect(selectActiveCompactionLoading(runtimeState, "m1")).toBe(true);
+    expect(selectActiveCompactionLoading(runtimeState, "m2")).toBe(false);
   });
 
   it("prefers the catalog slice and keeps other fields reachable", () => {

@@ -3,7 +3,6 @@ import React, { useCallback, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import styled from "styled-components";
 import { defaultBorderRadius } from "..";
-import { newSession } from "../../redux/slices/sessionSlice";
 import {
   addTab,
   handleSessionChange,

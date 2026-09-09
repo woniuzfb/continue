@@ -6,7 +6,6 @@ import { useNavigate, useRouteError } from "react-router-dom";
 import { Button, SecondaryButton } from "../components";
 import { GithubIcon } from "../components/svg/GithubIcon";
 import { IdeMessengerContext } from "../context/IdeMessenger";
-import { newSession } from "../redux/slices/sessionSlice";
 import { createAndActivateSession } from "../redux/thunks/sessionActivation";
 
 const ErrorPage: React.FC = () => {

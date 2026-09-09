@@ -35,12 +35,8 @@ export const selectActiveHistory = (state: RootState) =>
 export const selectActiveMode = (state: RootState) =>
   activeRuntime(state)?.mode ?? "chat";
 
-export const selectActiveIsStreaming = (state: RootState): boolean => {
-  const runtime = activeRuntime(state);
-  return runtime
-    ? runtime.stream.status === "streaming"
-    : state.session.isStreaming;
-};
+export const selectActiveIsStreaming = (state: RootState): boolean =>
+  activeRuntime(state)?.stream.status === "streaming";
 
 export const selectActiveStreamAborter = (state: RootState) =>
   activeRuntime(state)?.stream.aborter;
@@ -122,21 +118,12 @@ export const selectActiveIsHistoryLoading = (state: RootState): boolean =>
 export const selectActiveLoadedDiskCount = (state: RootState) =>
   activeRuntime(state)?.pagination.loadedDiskCount;
 
-/**
- * Compaction loading is keyed by messageId in the runtime (方案.md §五.22) and
- * by history index in the legacy slice, so the migration reads both keys.
- */
+/** Compaction loading is keyed by messageId (方案.md §五.22). */
 export const selectActiveCompactionLoading = (
   state: RootState,
   messageId: string | undefined,
-  legacyIndex: number,
-): boolean => {
-  const runtime = activeRuntime(state);
-  if (runtime) {
-    return !!messageId && !!runtime.compactionLoading[messageId];
-  }
-  return !!state.session.compactionLoading[legacyIndex];
-};
+): boolean =>
+  !!messageId && !!activeRuntime(state)?.compactionLoading[messageId];
 
 /** Catalog fields (方案.md §五.6), preferring the catalog slice. */
 export const selectLastSessionId = (state: RootState): string | undefined =>

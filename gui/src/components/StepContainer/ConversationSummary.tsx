@@ -18,7 +18,7 @@ export default function ConversationSummary(props: ConversationSummaryProps) {
   const [open, setOpen] = useState(true);
   const messageId = (props.item.message as { id?: string }).id;
   const isLoading = useAppSelector((state) =>
-    selectActiveCompactionLoading(state, messageId, props.index),
+    selectActiveCompactionLoading(state, messageId),
   );
   const deleteCompaction = useDeleteCompaction();
 
