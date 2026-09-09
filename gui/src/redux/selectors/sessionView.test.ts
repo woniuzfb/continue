@@ -65,7 +65,7 @@ describe("sessionView selectors", () => {
     expect(selectActiveHasMoreHistory(state)).toBe(true);
   });
 
-  it("falls back to the legacy slice when no runtime exists", () => {
+  it("returns stable empty values when no runtime exists", () => {
     const store = createMockStore({
       sessions: {
         activeSessionId: undefined,
@@ -75,19 +75,15 @@ describe("sessionView selectors", () => {
       },
     });
     const state = store.getState() as any;
-    state.session.id = "legacy";
-    state.session.title = "Legacy";
-    state.session.history = [item("l1", "legacy")];
-    state.session.isStreaming = true;
-    state.session.historyTruncated = true;
-    state.session.contextPercentage = 0.42;
 
-    expect(selectActiveSessionId(state)).toBe("legacy");
-    expect(selectActiveTitle(state)).toBe("Legacy");
-    expect(selectActiveHistory(state)[0].message.content).toBe("legacy");
-    expect(selectActiveIsStreaming(state)).toBe(true);
-    expect(selectActiveHistoryTruncated(state)).toBe(true);
-    expect(selectActiveContextPercentage(state)).toBe(0.42);
+    expect(selectActiveSessionId(state)).toBe("");
+    expect(selectActiveTitle(state)).toBe("");
+    expect(selectActiveHistory(state)).toEqual([]);
+    expect(selectActiveMode(state)).toBe("chat");
+    expect(selectActiveIsStreaming(state)).toBe(false);
+    expect(selectActiveContextPercentage(state)).toBeUndefined();
+    // Stable references: useSelector must not see a new array each call.
+    expect(selectActiveHistory(state)).toBe(selectActiveHistory(state));
   });
 
   it("reads compaction loading by messageId from the runtime and by index from legacy", () => {

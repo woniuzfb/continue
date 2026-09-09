@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionSlice";
 import { useAppSelector } from "../../redux/hooks";
 import { createMockStore, getEmptyRootState } from "../../util/test/mockStore";
+import { initialSessionRuntime } from "../../redux/slices/sessionsSlice";
 import { useAutoScroll } from "./useAutoScroll";
 
 /**
@@ -286,22 +287,43 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
 
   function mountLazy(initialHistoryCount: number) {
     const state = getEmptyRootState() as any;
-    state.session.id = "lazy-session";
-    state.session.history = diskItems(initialHistoryCount).map((it: any) => ({
+    const history = diskItems(initialHistoryCount).map((it: any) => ({
       ...it,
       message: { ...it.message, id: `m-${it.message.content}` },
     }));
-    state.session.historyTruncated = true;
-    state.session.hasMoreHistory = true;
-    state.session.historyLoadedOffset = 20 - initialHistoryCount;
-    state.session.loadedDiskCount = initialHistoryCount;
-    state.session.isStreaming = false;
-    state.session.isHistoryLoading = false;
+    // The runtime owns the session now (方案.md §九).
+    state.sessions = {
+      activeSessionId: "lazy-session",
+      tabOrder: ["lazy-session"],
+      tabDescriptors: {
+        "lazy-session": {
+          sessionId: "lazy-session",
+          title: "t",
+          loadState: "loaded",
+        },
+      },
+      sessionsById: {
+        "lazy-session": initialSessionRuntime("lazy-session", "t", {
+          history,
+          pagination: {
+            truncated: true,
+            loadedOffset: 20 - initialHistoryCount,
+            loadedDiskCount: initialHistoryCount,
+            hasMore: true,
+            loading: false,
+            requestGeneration: 0,
+            persistPending: false,
+          },
+        }),
+      },
+    };
     const store = createMockStore(state);
     element.historyLength = initialHistoryCount;
     // Sync the fake height with the store as pages are prepended.
     store.subscribe(() => {
-      element.historyLength = (store.getState() as any).session.history.length;
+      element.historyLength = (store.getState() as any).sessions.sessionsById[
+        "lazy-session"
+      ].history.length;
     });
 
     const hooks = renderHook(
@@ -309,7 +331,9 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
         const ref = useRef<HTMLDivElement | null>(null);
         (ref as { current: HTMLDivElement | null }).current =
           element as unknown as HTMLDivElement;
-        const history = useAppSelector((s) => s.session.history);
+        const history = useAppSelector(
+          (s) => s.sessions.sessionsById["lazy-session"]?.history ?? [],
+        );
         useAutoScroll(
           ref as React.RefObject<HTMLDivElement>,
           history,
@@ -369,10 +393,10 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
     // 2 items (60px) under-fill the 100px viewport → one 4-item page is
     // prepended → 6 items (180px) now overflow → loading stops.
     expect(handler).toHaveBeenCalledTimes(1);
-    const s = (store.getState() as any).session;
+    const s = (store.getState() as any).sessions.sessionsById["lazy-session"];
     expect(s.history.length).toBe(6);
     expect(s.history[0].message.content).toBe("d-14");
-    expect(s.hasMoreHistory).toBe(true);
+    expect(s.pagination.hasMore).toBe(true);
   });
 
   it("stops retrying after repeated failed page loads (no infinite loop)", async () => {
@@ -387,7 +411,10 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
 
     // Failed loads never grow history → attempts cap at 3, then give up.
     expect(handler.mock.calls.length).toBeLessThanOrEqual(3);
-    expect((store.getState() as any).session.history.length).toBe(2);
+    expect(
+      (store.getState() as any).sessions.sessionsById["lazy-session"].history
+        .length,
+    ).toBe(2);
   });
 
   it("does not paginate when content already overflows the viewport", async () => {

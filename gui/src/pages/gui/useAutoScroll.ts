@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
-import { loadMoreHistory } from "../../redux/thunks/loadMoreHistory";
+import { useStore } from "react-redux";
+import type { RootState } from "../../redux/store";
+import { loadMoreHistory as loadMoreHistoryThunk } from "../../redux/thunks/sessionPaging";
 import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionSlice";
 import {
   selectActiveHasMoreHistory,
@@ -54,6 +56,7 @@ export const useAutoScroll = (
   suppressAutoScrollRef?: React.MutableRefObject<boolean>,
 ) => {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const hasMoreHistory = useAppSelector((state) =>
     selectActiveHasMoreHistory(state),
   );
@@ -296,7 +299,14 @@ export const useAutoScroll = (
               }
             : null;
           isPrependingRef.current = true;
-          void dispatch(loadMoreHistory());
+          void dispatch(
+            loadMoreHistoryThunk({
+              sessionId,
+              requestGeneration:
+                store.getState().sessions.sessionsById[sessionId]?.pagination
+                  .requestGeneration ?? 0,
+            }),
+          );
         }
       });
     };
@@ -392,7 +402,14 @@ export const useAutoScroll = (
           prevScrollHeightRef.current = elem.scrollHeight;
           prevScrollTopRef.current = elem.scrollTop;
           prependAnchorRef.current = null; // 顶部无可见锚，prepend 后走 scrollHeight-delta 恢复
-          void dispatch(loadMoreHistory());
+          void dispatch(
+            loadMoreHistoryThunk({
+              sessionId,
+              requestGeneration:
+                store.getState().sessions.sessionsById[sessionId]?.pagination
+                  .requestGeneration ?? 0,
+            }),
+          );
           // prepend 成功（history 增长）由上面的 effect 链路重置 isPrependingRef；
           // 这里只兜底失败场景：若干帧后 history 未增长则立即解锁并允许重试。
           setTimeout(() => {

@@ -9,14 +9,15 @@ import {
 } from "../util";
 
 /**
- * Phase 4 compat layer (方案.md §九): these selectors used to read
- * `state.session` (the legacy slice). They now prefer the active runtime in
- * `sessionsById[activeSessionId]` and fall back to the legacy slice while the
- * remaining writers migrate. The fallback disappears with the legacy slice.
+ * Phase 4 (方案.md §九): tool-call and apply-state selectors read the active
+ * runtime in `sessionsById[activeSessionId]` only.
  *
  * Every selector stays memoized: React's `useSelector` requires a stable
  * reference when the derived value is an array.
  */
+
+const EMPTY_HISTORY: never[] = [];
+const EMPTY_APPLY_STATES: never[] = [];
 
 const selectActiveRuntime = (state: RootState) => {
   const sessionId = state.sessions.activeSessionId;
@@ -24,11 +25,10 @@ const selectActiveRuntime = (state: RootState) => {
 };
 
 const selectCompatHistory = (state: RootState) =>
-  selectActiveRuntime(state)?.history ?? state.session.history;
+  selectActiveRuntime(state)?.history ?? EMPTY_HISTORY;
 
 const selectCompatApplyStates = (state: RootState) =>
-  selectActiveRuntime(state)?.codeBlockApplyStates.states ??
-  state.session.codeBlockApplyStates.states;
+  selectActiveRuntime(state)?.codeBlockApplyStates.states ?? EMPTY_APPLY_STATES;
 
 // Primary selectors for tool calls
 export const selectCurrentToolCalls = createSelector(
