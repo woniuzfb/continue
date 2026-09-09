@@ -87,8 +87,14 @@ export const createMockStore = (
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
         serializableCheck: {
-          ignoredPaths: ["session.streamAborter", "ui.dialogMessage"],
-          ignoredActions: ["ui/setDialogMessage"],
+          ignoredPaths: [
+            "session.streamAborter",
+            "sessions.sessionsById.*.stream.aborter",
+          ],
+          ignoredActions: [
+            "ui/setDialogMessage",
+            "sessions/beginSessionStream",
+          ],
         },
         thunk: {
           extraArgument: {

@@ -609,8 +609,12 @@ export const sessionsSlice = createSlice({
       if (!session || session.stream.requestId !== action.payload.requestId) {
         return;
       }
+      const { error } = session.stream;
       session.stream = {
         status: action.payload.status === "completed" ? "idle" : "failed",
+        // Terminal failure keeps its error metadata for the recovery entry
+        // (方案.md §七.4); the requestId itself is released.
+        ...(action.payload.status === "failed" && error ? { error } : {}),
       };
     },
     setSessionStreamError: (
