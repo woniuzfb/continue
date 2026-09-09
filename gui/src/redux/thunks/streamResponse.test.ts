@@ -210,9 +210,9 @@ describe("streamResponseThunk", () => {
         payload: undefined,
       },
       {
-        type: "session/setAppliedRulesAtIndex",
+        type: "session/setAppliedRulesByMessageId",
         payload: {
-          index: 1,
+          messageId: "mock-uuid-123",
           appliedRules: [],
         },
       },
@@ -613,7 +613,7 @@ describe("streamResponseThunk", () => {
       "symbols/updateFromContextItems/pending",
       "session/updateHistoryItemAtIndex",
       "chat/streamNormalInput/pending",
-      "session/setAppliedRulesAtIndex",
+      "session/setAppliedRulesByMessageId",
       "session/setActive",
       "session/setInlineErrorMessage",
       "session/setIsPruned",
@@ -633,7 +633,7 @@ describe("streamResponseThunk", () => {
       "session/resetNextCodeBlockToApplyIndex",
       "session/streamUpdate",
       "chat/streamNormalInput/pending",
-      "session/setAppliedRulesAtIndex",
+      "session/setAppliedRulesByMessageId",
       "session/setActive",
       "session/setInlineErrorMessage",
       "session/setIsPruned",
@@ -1030,10 +1030,10 @@ describe("streamResponseThunk", () => {
         payload: undefined,
       },
       {
-        type: "session/setAppliedRulesAtIndex",
+        type: "session/setAppliedRulesByMessageId",
         payload: {
           appliedRules: [],
-          index: 1,
+          messageId: "mock-uuid-123",
         },
       },
       {

@@ -615,13 +615,10 @@ export const saveCurrentSession = createAsyncThunk<
 
         if (assistantResponse) {
           // 复用 constructMessages，与发送消息路径对齐：
-          // 注入 contextItems、过滤 thinking、处理 file_content 块等
-          const withoutMessageIds = session.history.map((item) => {
-            const { id, ...messageWithoutId } = item.message;
-            return { ...item, message: messageWithoutId };
-          });
+          // 注入 contextItems、过滤 thinking、处理 file_content 块等。
+          // Provider ID 剥离由 constructMessages 统一完成。
           const { messages: compiledMessages } = constructMessages(
-            withoutMessageIds,
+            session.history,
             undefined,
             [],
             {},

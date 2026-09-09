@@ -123,13 +123,9 @@ export const compileChatForContextMetrics = createAsyncThunk<
         )
       : baseSystemMessage;
 
-    const withoutMessageIds = historyForCompile.map((item) => {
-      const { id, ...messageWithoutId } = item.message;
-      return { ...item, message: messageWithoutId };
-    });
-
+    // Provider ID 剥离由 constructMessages 统一完成（§十二 Message ID Strip）。
     const { messages } = constructMessages(
-      withoutMessageIds,
+      historyForCompile,
       systemMessage,
       state.config.config.rules,
       state.ui.ruleSettings,

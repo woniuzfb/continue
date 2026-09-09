@@ -6,6 +6,29 @@ import {
   TextMessagePart,
 } from "../index";
 
+/**
+ * Remove the GUI runtime `message.id` at the Provider request boundary only.
+ *
+ * Message identity is what appliedRules / compactionLoading key on, and disk
+ * persistence must keep IDs (see history.ts). Only the outbound Provider
+ * payload is stripped, so every caller shares this single implementation
+ * instead of inlining `const { id, ...rest } = item.message`.
+ */
+export function stripRuntimeMessageIdsForProvider(
+  messages: ChatMessage[],
+): ChatMessage[] {
+  return messages.map((message) => {
+    if (typeof message !== "object" || message === null) {
+      return message;
+    }
+    if (!("id" in message)) {
+      return message;
+    }
+    const { id: _id, ...rest } = message as ChatMessage & { id?: string };
+    return rest as ChatMessage;
+  });
+}
+
 export function stripImages(messageContent: MessageContent): string {
   if (typeof messageContent === "string") {
     return messageContent;

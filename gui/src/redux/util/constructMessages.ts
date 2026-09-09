@@ -26,6 +26,7 @@ import {
   renderContextItemsWithStatus,
   replaceFileContentBlocks,
   stripInlineImageBase64,
+  stripRuntimeMessageIdsForProvider,
 } from "core/util/messageContent";
 import { toolCallStateToContextItems } from "../../pages/gui/ToolCallDiv/utils";
 
@@ -45,7 +46,12 @@ export function constructMessages(
 ): {
   messages: ChatMessage[];
   appliedRules: RuleMetadata[];
-  appliedRuleIndex: number;
+  /**
+   * `message.id` of the user message the applied rules belong to. Replaces
+   * `appliedRuleIndex`, which was an index into the summary-filtered history
+   * and therefore wrote applied rules to the wrong item after a compaction.
+   */
+  appliedRulesSourceMessageId?: string;
 } {
   // Find the most recent conversation summary and filter history accordingly
   let summaryContent = "";
@@ -75,7 +81,7 @@ export function constructMessages(
   }
 
   const msgs: MessageWithContextItems[] = [];
-  let appliedRuleIndex = -1;
+  let appliedRulesSourceMessageId: string | undefined;
   let index = -1;
   for (const item of historyCopy) {
     index++;
@@ -91,7 +97,7 @@ export function constructMessages(
     }
 
     if (item.message.role === "user") {
-      appliedRuleIndex = index;
+      appliedRulesSourceMessageId = (item.message as { id?: string }).id;
       // Gather context items for user messages
       let content = normalizeToMessageParts(item.message);
 
@@ -279,8 +285,10 @@ export function constructMessages(
 
   const messages = msgs.map((m) => m.message);
   return {
-    messages,
+    // Provider boundary: strip the GUI runtime message IDs. Disk persistence
+    // keeps them; only the outbound payload is normalized.
+    messages: stripRuntimeMessageIdsForProvider(messages),
     appliedRules,
-    appliedRuleIndex,
+    appliedRulesSourceMessageId,
   };
 }

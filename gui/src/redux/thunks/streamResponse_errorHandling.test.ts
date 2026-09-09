@@ -324,10 +324,10 @@ describe("streamResponseThunk", () => {
         payload: undefined,
       },
       {
-        type: "session/setAppliedRulesAtIndex",
+        type: "session/setAppliedRulesByMessageId",
         payload: {
           appliedRules: [],
-          index: 1,
+          messageId: "mock-uuid-123",
         },
       },
       {
@@ -670,10 +670,10 @@ describe("streamResponseThunk", () => {
         payload: undefined,
       },
       {
-        type: "session/setAppliedRulesAtIndex",
+        type: "session/setAppliedRulesByMessageId",
         payload: {
           appliedRules: [],
-          index: 1,
+          messageId: "mock-uuid-123",
         },
       },
       {

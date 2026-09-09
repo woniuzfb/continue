@@ -1047,19 +1047,26 @@ export const sessionSlice = createSlice({
         ...payload.contextItems,
       ];
     },
-    setAppliedRulesAtIndex: (
+    setAppliedRulesByMessageId: (
       state,
       {
         payload,
       }: PayloadAction<{
-        index: number;
+        messageId: string;
         appliedRules: RuleMetadata[];
       }>,
     ) => {
-      if (state.history[payload.index]) {
-        state.dirty = true;
-        state.history[payload.index].appliedRules = payload.appliedRules;
+      // Message identity, not a positional index: `constructMessages` may
+      // report rules against a summary-filtered array, so an index would land
+      // on the wrong item once a compaction exists.
+      const historyItem = state.history.find(
+        (item) => item.message.id === payload.messageId,
+      );
+      if (!historyItem) {
+        return;
       }
+      state.dirty = true;
+      historyItem.appliedRules = payload.appliedRules;
     },
     setInactive: (state) => {
       const curMessage = state.history.at(-1);
@@ -1684,7 +1691,7 @@ export const {
   updateFileSymbols,
   setContextItemsAtIndex,
   addContextItemsAtIndex,
-  setAppliedRulesAtIndex,
+  setAppliedRulesByMessageId,
   setInactive,
   streamUpdate,
   newSession,

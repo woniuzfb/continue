@@ -15,7 +15,7 @@ import {
   getCachedSession,
   registerStreamAborter,
   setActive,
-  setAppliedRulesAtIndex,
+  setAppliedRulesByMessageId,
   setContextInputTokens,
   setContextLength,
   setContextMetrics,
@@ -180,25 +180,21 @@ export const streamNormalInput = createAsyncThunk<
         )
       : baseSystemMessage;
 
-    const withoutMessageIds = state.session.history.map((item) => {
-      const { id, ...messageWithoutId } = item.message;
-      return { ...item, message: messageWithoutId };
-    });
-
-    const { messages, appliedRules, appliedRuleIndex } = constructMessages(
-      withoutMessageIds,
-      systemMessage,
-      state.config.config.rules,
-      state.ui.ruleSettings,
-      systemToolsFramework,
-    );
+    const { messages, appliedRules, appliedRulesSourceMessageId } =
+      constructMessages(
+        state.session.history,
+        systemMessage,
+        state.config.config.rules,
+        state.ui.ruleSettings,
+        systemToolsFramework,
+      );
 
     // TODO parallel tool calls will cause issues with this
     // because there will be multiple tool messages, so which one should have applied rules?
-    if (appliedRuleIndex >= 0) {
+    if (appliedRulesSourceMessageId) {
       dispatch(
-        setAppliedRulesAtIndex({
-          index: appliedRuleIndex,
+        setAppliedRulesByMessageId({
+          messageId: appliedRulesSourceMessageId,
           appliedRules: appliedRules,
         }),
       );
