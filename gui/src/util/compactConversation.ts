@@ -1,4 +1,5 @@
 import { useContext } from "react";
+import { useStore } from "react-redux";
 import { IdeMessengerContext } from "../context/IdeMessenger";
 import { useAppDispatch } from "../redux/hooks";
 import {
@@ -9,21 +10,22 @@ import {
 import { loadFullHistory } from "../redux/thunks/sessionPaging";
 import { enqueueSessionSave } from "../redux/thunks/sessionPersistence";
 import {
-  useSessionHistory,
+  selectSessionHistory,
   useSessionHistoryLoadedOffset,
   useSessionHistoryTruncated,
 } from "../redux/selectors/sessionView";
 import { useSessionId } from "../components/mainInput/TipTapEditor/SessionScope";
+import type { RootState } from "../redux/store";
 
 export const useCompactConversation = () => {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
+  const store = useStore<RootState>();
   // 方案.md §五.20: these hooks read the session from SessionScope, so a
   // compaction started in one tab can never target another tab's history.
   const sessionId = useSessionId();
   const historyTruncated = useSessionHistoryTruncated();
   const historyLoadedOffset = useSessionHistoryLoadedOffset() ?? 0;
-  const history = useSessionHistory();
 
   return async (index: number) => {
     // 懒加载兼容：前端 index 是基于部分 history 的相对位置，
@@ -53,7 +55,11 @@ export const useCompactConversation = () => {
       return;
     }
 
-    const messageId = history[index]?.message.id;
+    // 必须在 await 之后重新读取 history：loadFullHistory 完成后 store 里才是
+    // 完整 history，而渲染期捕获的数组仍是截断窗口，用绝对 index 去索引会
+    // 取到错误/undefined 的消息，导致 compact 结果写不回 state。
+    const messageId = selectSessionHistory(store.getState(), sessionId)[index]
+      ?.message.id;
     try {
       if (messageId) {
         dispatch(
@@ -75,7 +81,10 @@ export const useCompactConversation = () => {
       // summary。此时 history 已完整加载，absoluteIndex 即前端 state index。
       // 后端返回 content 即为生成的 summary 文本。
       if (result?.status === "success" && result.content) {
-        const absoluteMessageId = history[absoluteIndex]?.message.id;
+        const absoluteMessageId = selectSessionHistory(
+          store.getState(),
+          sessionId,
+        )[absoluteIndex]?.message.id;
         if (absoluteMessageId) {
           dispatch(
             updateHistoryItemByMessageId({
@@ -112,10 +121,10 @@ export const useCompactConversation = () => {
 
 export const useDeleteCompaction = () => {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const sessionId = useSessionId();
   const historyTruncated = useSessionHistoryTruncated();
   const historyLoadedOffset = useSessionHistoryLoadedOffset() ?? 0;
-  const history = useSessionHistory();
 
   return async (index: number) => {
     // 懒加载兼容：前端 index 是基于部分 history 的相对位置，
@@ -140,7 +149,9 @@ export const useDeleteCompaction = () => {
     }
 
     // Update local state and save to persistence
-    const messageId = history[absoluteIndex]?.message.id;
+    const messageId = selectSessionHistory(store.getState(), sessionId)[
+      absoluteIndex
+    ]?.message.id;
     if (messageId) {
       dispatch(deleteCompactionByMessageId({ sessionId, messageId }));
     }
