@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useDispatch } from "react-redux";
 import { useAppSelector } from "../../redux/hooks";
 import { selectUIConfig } from "../../redux/slices/configSlice";
-import { deleteMessage } from "../../redux/slices/sessionSlice";
+import { deleteTurnByMessageId } from "../../redux/slices/sessionsSlice";
 import ThinkingBlockPeek from "../mainInput/belowMainInput/ThinkingBlockPeek";
 import StyledMarkdownPreview from "../StyledMarkdownPreview";
 import ConversationSummary from "./ConversationSummary";
@@ -13,6 +13,7 @@ import ThinkingIndicator from "./ThinkingIndicator";
 import {
   selectActiveHistory,
   selectActiveIsStreaming,
+  selectActiveSessionId,
 } from "../../redux/selectors/sessionView";
 
 interface StepContainerProps {
@@ -25,6 +26,8 @@ interface StepContainerProps {
 
 export default function StepContainer(props: StepContainerProps) {
   const dispatch = useDispatch();
+  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
+  const activeHistory = useAppSelector((state) => selectActiveHistory(state));
   const [isTruncated, setIsTruncated] = useState(false);
   const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
   const uiConfig = useAppSelector(selectUIConfig);
@@ -74,7 +77,10 @@ export default function StepContainer(props: StepContainerProps) {
   }, [props.item.message.content, isStreaming]);
 
   function onDelete() {
-    dispatch(deleteMessage(props.index));
+    const messageId = activeHistory[props.index]?.message.id;
+    if (messageId) {
+      dispatch(deleteTurnByMessageId({ sessionId, messageId }));
+    }
   }
 
   function onContinueGeneration() {

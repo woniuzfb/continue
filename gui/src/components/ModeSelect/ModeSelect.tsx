@@ -12,7 +12,11 @@ import {
 import { useCallback, useEffect, useMemo } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
-import { setMode } from "../../redux/slices/sessionSlice";
+import { setSessionMode } from "../../redux/slices/sessionsSlice";
+import {
+  selectActiveMode,
+  selectActiveSessionId,
+} from "../../redux/selectors/sessionView";
 import { getFontSize, getMetaKeyLabel } from "../../util";
 import { ToolTip } from "../gui/Tooltip";
 import { useMainEditor } from "../mainInput/TipTapEditor";
@@ -21,7 +25,8 @@ import { ModeIcon } from "./ModeIcon";
 
 export function ModeSelect() {
   const dispatch = useAppDispatch();
-  const mode = useAppSelector((store) => store.session.mode);
+  const sessionId = useAppSelector(selectActiveSessionId);
+  const mode = useAppSelector((store) => selectActiveMode(store));
   const selectedModel = useAppSelector(selectSelectedChatModel);
 
   const isGoodAtAgentMode = useMemo(() => {
@@ -41,11 +46,26 @@ export function ModeSelect() {
 
   const cycleMode = useCallback(() => {
     if (mode === "chat") {
-      dispatch(setMode("plan"));
+      dispatch(
+        setSessionMode({
+          sessionId,
+          mode: "plan",
+        }),
+      );
     } else if (mode === "plan") {
-      dispatch(setMode("agent"));
+      dispatch(
+        setSessionMode({
+          sessionId,
+          mode: "agent",
+        }),
+      );
     } else {
-      dispatch(setMode("chat"));
+      dispatch(
+        setSessionMode({
+          sessionId,
+          mode: "chat",
+        }),
+      );
     }
     // Only focus main editor if another one doesn't already have focus
     if (!document.activeElement?.classList?.contains("ProseMirror")) {
@@ -59,7 +79,12 @@ export function ModeSelect() {
         return;
       }
 
-      dispatch(setMode(newMode));
+      dispatch(
+        setSessionMode({
+          sessionId,
+          mode: newMode,
+        }),
+      );
 
       mainEditor?.commands.focus();
     },

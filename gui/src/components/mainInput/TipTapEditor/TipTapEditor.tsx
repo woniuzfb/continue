@@ -38,7 +38,13 @@ import "./TipTapEditor.css";
 import { createEditorConfig, getPlaceholderText } from "./utils/editorConfig";
 import { handleImageFile } from "./utils/imageUtils";
 import { useEditorEventHandlers } from "./utils/keyHandlers";
-import { selectActiveIsStreaming } from "../../../redux/selectors/sessionView";
+import {
+  selectActiveHistory,
+  selectActiveIsInEdit,
+  selectActiveIsStreaming,
+  selectActiveMainEditorAttachmentsRestore,
+  selectActiveMainEditorDraft,
+} from "../../../redux/selectors/sessionView";
 
 /** Cap for packing a single binary attachment (~112 MB of raw data). Larger
  * files would freeze the webview; fall back to the legacy text attach. */
@@ -204,10 +210,12 @@ function TipTapEditorInner(props: TipTapEditorProps) {
       (state.config.config.ui?.attachmentSplitThresholdMB ?? 1) * 1024 * 1024,
   );
   const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
-  const historyLength = useAppSelector((store) => store.session.history.length);
-  const isInEdit = useAppSelector((store) => store.session.isInEdit);
-  const mainEditorDraft = useAppSelector(
-    (store) => store.session.mainEditorDraft,
+  const historyLength = useAppSelector(
+    (store) => selectActiveHistory(store).length,
+  );
+  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
+  const mainEditorDraft = useAppSelector((store) =>
+    selectActiveMainEditorDraft(store),
   );
 
   // For the main input, fall back to any persisted draft so that text entered
@@ -222,8 +230,8 @@ function TipTapEditorInner(props: TipTapEditorProps) {
   // the rolled-back user message's attachments here (paths + contents) when
   // the send failed/canceled before the assistant received anything. If the
   // user already picked new files meanwhile, keep those instead.
-  const attachmentsRestore = useAppSelector(
-    (store) => store.session.mainEditorAttachmentsRestore,
+  const attachmentsRestore = useAppSelector((store) =>
+    selectActiveMainEditorAttachmentsRestore(store),
   );
   useEffect(() => {
     if (!props.isMainInput || !attachmentsRestore?.length) {

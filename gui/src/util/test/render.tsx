@@ -61,7 +61,12 @@ export async function renderWithProviders(
     const sessionId = bootState.session.id;
     await store.dispatch(
       createSessionRuntime({
-        session: initialSessionRuntime(sessionId, bootState.session.title),
+        session: initialSessionRuntime(sessionId, bootState.session.title, {
+          // Inherit the legacy slice's initial UI state so the seeded runtime
+          // matches what the rendered app expects.
+          mode: bootState.session.mode,
+          isInEdit: bootState.session.isInEdit,
+        }),
       }) as any,
     );
     await store.dispatch(setActiveSessionId({ sessionId }) as any);

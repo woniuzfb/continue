@@ -17,7 +17,12 @@ import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectUseActiveFile } from "../../redux/selectors";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
-import { setHasReasoningEnabled } from "../../redux/slices/sessionSlice";
+import { setSessionReasoningEnabled } from "../../redux/slices/sessionsSlice";
+import {
+  selectActiveHasReasoningEnabled,
+  selectActiveIsInEdit,
+  selectActiveSessionId,
+} from "../../redux/selectors/sessionView";
 import { setReasoningSetting } from "../../redux/slices/uiSlice";
 import { exitEdit } from "../../redux/thunks/edit";
 import { getMetaKeyLabel, isMetaEquivalentKeyPressed } from "../../util";
@@ -59,14 +64,15 @@ interface InputToolbarProps {
 
 function InputToolbar(props: InputToolbarProps) {
   const dispatch = useAppDispatch();
+  const sessionId = useAppSelector(selectActiveSessionId);
   const ideMessenger = useContext(IdeMessengerContext);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const defaultModel = useAppSelector(selectSelectedChatModel);
   const useActiveFile = useAppSelector(selectUseActiveFile);
-  const isInEdit = useAppSelector((store) => store.session.isInEdit);
+  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
   const codeToEdit = useAppSelector((store) => store.editModeState.codeToEdit);
-  const hasReasoningEnabled = useAppSelector(
-    (store) => store.session.hasReasoningEnabled,
+  const hasReasoningEnabled = useAppSelector((store) =>
+    selectActiveHasReasoningEnabled(store),
   );
   const isEnterDisabled =
     props.disabled || (isInEdit && codeToEdit.length === 0);
@@ -156,7 +162,12 @@ function InputToolbar(props: InputToolbarProps) {
             {supportsReasoning && (
               <HoverItem
                 onClick={() => {
-                  dispatch(setHasReasoningEnabled(!hasReasoningEnabled));
+                  dispatch(
+                    setSessionReasoningEnabled({
+                      sessionId,
+                      enabled: !hasReasoningEnabled,
+                    }),
+                  );
                   if (defaultModel?.title) {
                     dispatch(
                       setReasoningSetting({

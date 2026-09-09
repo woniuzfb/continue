@@ -3,7 +3,7 @@ import { ApplyState } from "core";
 import { useContext } from "react";
 import { IdeMessengerContext } from "../context/IdeMessenger";
 import { useAppDispatch } from "../redux/hooks";
-import { cancelToolCall } from "../redux/slices/sessionSlice";
+import { rejectActiveToolCall } from "../redux/thunks/sessionTools";
 import { getMetaKeyLabel } from "../util";
 import { ToolTip } from "./gui/Tooltip";
 
@@ -28,10 +28,8 @@ export default function AcceptRejectAllButtons({
     if (status === "rejectDiff") {
       for (const applyState of pendingApplyStates) {
         if (applyState.toolCallId && applyState.status === "done") {
-          dispatch(
-            cancelToolCall({
-              toolCallId: applyState.toolCallId,
-            }),
+          void dispatch(
+            rejectActiveToolCall({ toolCallId: applyState.toolCallId }),
           );
         }
       }

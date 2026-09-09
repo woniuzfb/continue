@@ -23,6 +23,7 @@ import {
   useFontSize,
 } from "../ui";
 import { Divider } from "../ui/Divider";
+import { selectActiveIsInEdit } from "../../redux/selectors/sessionView";
 
 interface ModelOptionProps {
   option: Option;
@@ -121,7 +122,7 @@ function ModelSelect() {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
 
-  const isInEdit = useAppSelector((store) => store.session.isInEdit);
+  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
   const config = useAppSelector((state) => state.config.config);
   const isConfigLoading = useAppSelector((state) => state.config.loading);
   const buttonRef = useRef<HTMLButtonElement>(null);

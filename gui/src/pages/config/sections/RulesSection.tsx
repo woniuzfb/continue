@@ -43,6 +43,7 @@ import {
 } from "../../../redux/slices/uiSlice";
 import { fontSize } from "../../../util";
 import { ConfigHeader } from "../components/ConfigHeader";
+import { selectActiveMode } from "../../../redux/selectors/sessionView";
 
 interface PromptCommandWithSlug extends SlashCommandDescWithSource {
   slug?: string;
@@ -420,7 +421,7 @@ const globalRulesOptions = [
 function RulesSubSection() {
   const { selectedProfile } = useAuth();
   const config = useAppSelector((store) => store.config.config);
-  const mode = useAppSelector((store) => store.session.mode);
+  const mode = useAppSelector((store) => selectActiveMode(store));
   const ideMessenger = useContext(IdeMessengerContext);
   const dispatch = useAppDispatch();
   const [globalRulesMode, setGlobalRulesMode] = useState<string>("workspace");

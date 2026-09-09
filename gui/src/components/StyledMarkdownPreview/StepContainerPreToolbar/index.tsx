@@ -28,6 +28,7 @@ import { RunInTerminalButton } from "./RunInTerminalButton";
 import {
   selectActiveCodeBlockApplyStates,
   selectActiveHistory,
+  selectActiveIsStreaming,
 } from "../../../redux/selectors/sessionView";
 
 export interface StepContainerPreToolbarProps {
@@ -127,7 +128,7 @@ export function StepContainerPreToolbar({
   const hasFileExtension =
     relativeFilepath && /\.[0-9a-z]+$/i.test(relativeFilepath);
 
-  const isStreaming = useAppSelector((store) => store.session.isStreaming);
+  const isStreaming = useAppSelector((store) => selectActiveIsStreaming(store));
 
   const isLastItem = itemIndex === historyLength - 1;
 

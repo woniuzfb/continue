@@ -20,7 +20,10 @@ import { TipTapEditor } from "./TipTapEditor";
 import { InputBoxDiv } from "./TipTapEditor/components/StyledComponents";
 import { getUserInputStaticHtml } from "./userInputHtmlCache";
 import { AttachmentMeta, AttachedFile } from "./types";
-import { selectActiveIsStreaming } from "../../redux/selectors/sessionView";
+import {
+  selectActiveIsInEdit,
+  selectActiveIsStreaming,
+} from "../../redux/selectors/sessionView";
 
 interface ContinueInputBoxProps {
   isLastUserInput: boolean;
@@ -76,7 +79,7 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
   const availableContextProviders = useAppSelector(
     (state) => state.config.config.contextProviders,
   );
-  const isInEdit = useAppSelector((store) => store.session.isInEdit);
+  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
   const editModeState = useAppSelector((state) => state.editModeState);
 
   const filteredSlashCommands = useMemo(() => {

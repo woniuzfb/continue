@@ -155,7 +155,7 @@ export function Chat() {
     (state) => state.config.config.ui?.showChatScrollbar,
   );
   const codeToEdit = useAppSelector((state) => state.editModeState.codeToEdit);
-  const isInEdit = useAppSelector((store) => store.session.isInEdit);
+  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
 
   const lastSessionId = useAppSelector((state) => selectLastSessionId(state));
   const hasDismissedExploreDialog = useAppSelector(

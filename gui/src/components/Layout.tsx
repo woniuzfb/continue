@@ -23,6 +23,7 @@ import TextDialog from "./dialogs";
 import { useMainEditor } from "./mainInput/TipTapEditor";
 import { isNewUserOnboarding, useOnboardingCard } from "./OnboardingCard";
 import OSRContextMenu from "./OSRContextMenu";
+import { selectActiveIsInEdit } from "../redux/selectors/sessionView";
 
 const LayoutTopDiv = styled(CustomScrollbarDiv)`
   height: 100%;
@@ -65,7 +66,7 @@ const Layout = () => {
   }, [dontMergeHistoricalReplyBubbles, dispatch]);
 
   const showDialog = useAppSelector((state) => state.ui.showDialog);
-  const isInEdit = useAppSelector((store) => store.session.isInEdit);
+  const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
   const isHome =
     location.pathname === ROUTES.HOME ||
     location.pathname === ROUTES.HOME_INDEX;

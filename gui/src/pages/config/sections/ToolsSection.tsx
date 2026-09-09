@@ -32,6 +32,7 @@ import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { updateConfig } from "../../../redux/slices/configSlice";
 import { ConfigHeader } from "../components/ConfigHeader";
 import { ToolPoliciesGroup } from "../components/ToolPoliciesGroup";
+import { selectActiveMode } from "../../../redux/selectors/sessionView";
 
 interface MCPServerStatusProps {
   allToolsOff: boolean;
@@ -407,7 +408,7 @@ function MCPServerPreview({
 export function ToolsSection() {
   const availableTools = useAppSelector((state) => state.config.config.tools);
 
-  const mode = useAppSelector((store) => store.session.mode);
+  const mode = useAppSelector((store) => selectActiveMode(store));
   const servers = useAppSelector(
     (store) => store.config.config.mcpServerStatuses,
   );

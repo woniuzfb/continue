@@ -10,6 +10,10 @@ import React, {
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { setMainEditorContentTrigger } from "../../../redux/slices/sessionSlice";
 import { useMainEditorWebviewListeners } from "./useMainEditorWebviewListeners";
+import {
+  selectActiveHistory,
+  selectActiveMainEditorContentTrigger,
+} from "../../../redux/selectors/sessionView";
 
 /**
  * Context for accessing the main editor instance
@@ -50,11 +54,13 @@ export const MainEditorProvider: React.FC<{ children: React.ReactNode }> = ({
   const [inputId, setInputId] = useState<string | null>(initialState.inputId);
   const onEnterRef = useRef<(modifiers: InputModifiers) => void>(() => {});
   const editorFocusedRef = useRef<boolean>(false);
-  const historyLength = useAppSelector((store) => store.session.history.length);
+  const historyLength = useAppSelector(
+    (store) => selectActiveHistory(store).length,
+  );
 
   // Listen for changes to mainEditorContentTrigger in Redux
-  const mainEditorContentTrigger = useAppSelector(
-    (store) => store.session.mainEditorContentTrigger,
+  const mainEditorContentTrigger = useAppSelector((store) =>
+    selectActiveMainEditorContentTrigger(store),
   );
 
   useEffect(() => {

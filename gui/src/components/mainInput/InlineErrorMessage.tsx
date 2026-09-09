@@ -1,13 +1,15 @@
 import { useContext } from "react";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
-import { setInlineErrorMessage } from "../../redux/slices/sessionSlice";
+import { setSessionInlineError } from "../../redux/slices/sessionsSlice";
+import { selectActiveSessionId } from "../../redux/selectors/sessionView";
 import { selectActiveInlineErrorMessage } from "../../redux/selectors/sessionView";
 
 export type InlineErrorMessageType = "out-of-context";
 
 export default function InlineErrorMessage() {
   const dispatch = useAppDispatch();
+  const sessionId = useAppSelector(selectActiveSessionId);
   const ideMessenger = useContext(IdeMessengerContext);
   const inlineErrorMessage = useAppSelector((state) =>
     selectActiveInlineErrorMessage(state),
@@ -36,7 +38,12 @@ export default function InlineErrorMessage() {
           <span
             className="cursor-pointer text-xs hover:underline"
             onClick={() => {
-              dispatch(setInlineErrorMessage(undefined));
+              dispatch(
+                setSessionInlineError({
+                  sessionId,
+                  error: undefined,
+                }),
+              );
             }}
           >
             Hide
