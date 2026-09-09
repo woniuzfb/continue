@@ -473,6 +473,7 @@ function compileChatMessages({
   tools,
   excludeToolOutputsFromTokenCount,
   excludeToolOutputsFromTokenCountMinTokens,
+  protectedMessageIndexes,
 }: {
   modelName: string;
   msgs: ChatMessage[];
@@ -497,6 +498,15 @@ function compileChatMessages({
    * big `read_file` results) are excluded. Defaults to 6000.
    */
   excludeToolOutputsFromTokenCountMinTokens?: number;
+  /**
+   * 方案.md §十四: indexes into the *input* `msgs` array that must never be
+   * pruned (system, first turn and current turn for a Local Provider request,
+   * which has no legitimate prunable middle history). If the budget cannot be
+   * met without dropping one of them, this throws the "Not enough context"
+   * error so the caller surfaces out-of-context instead of silently sending a
+   * truncated conversation.
+   */
+  protectedMessageIndexes?: number[];
 }): CompiledMessagesResult {
   let didPrune = false;
 
@@ -519,6 +529,18 @@ function compileChatMessages({
   };
 
   let msgsCopy: ChatMessage[] = msgs.map((m) => ({ ...m }));
+
+  // Resolve the protected set against the copied objects before any filtering
+  // mutates the array, so indexes always refer to the caller's input.
+  const protectedMessages = new Set<ChatMessage>();
+  if (protectedMessageIndexes?.length) {
+    for (const index of protectedMessageIndexes) {
+      const message = msgsCopy[index];
+      if (message) {
+        protectedMessages.add(message);
+      }
+    }
+  }
 
   // If images not supported, convert MessagePart[] to string
   if (!supportsImages) {
@@ -602,16 +624,33 @@ function compileChatMessages({
     return {
       ...message,
       tokens,
+      isProtected: protectedMessages.has(message),
     };
   });
 
   while (historyWithTokens.length > 0 && currentTotal > inputTokensAvailable) {
+    // Pruning removes a prefix, so a protected message at the head means no
+    // legal pruning is left: fail loudly instead of sending a partial prompt.
+    if (historyWithTokens[0].isProtected) {
+      throw new Error(
+        `Not enough context available to include all protected messages ` +
+          `(方案.md §十四). Request had the following token counts: ` +
+          `- contextLength: ${knownContextLength} ` +
+          `- max output: ${maxTokens} ` +
+          `- system: ~${systemMsgTokens} ` +
+          `- tools: ~${toolTokens} ` +
+          `- protected history: ~${currentTotal}`,
+      );
+    }
     const message = historyWithTokens.shift()!;
     currentTotal -= message.tokens;
     didPrune = true;
 
     // At this point make sure no latent tool response without corresponding call
     while (historyWithTokens[0]?.role === "tool") {
+      if (historyWithTokens[0].isProtected) {
+        break;
+      }
       const message = historyWithTokens.shift()!;
       currentTotal -= message.tokens;
     }
@@ -622,7 +661,9 @@ function compileChatMessages({
   if (systemMsg) {
     reassembled.push(systemMsg);
   }
-  reassembled.push(...historyWithTokens.map(({ tokens, ...rest }) => rest));
+  reassembled.push(
+    ...historyWithTokens.map(({ tokens, isProtected, ...rest }) => rest),
+  );
   reassembled.push(...toolSequence);
 
   const inputTokens =

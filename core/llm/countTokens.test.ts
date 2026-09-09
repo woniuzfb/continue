@@ -182,6 +182,97 @@ describe.skip("compileChatMessages", () => {
   });
 });
 
+describe("compileChatMessages protected indexes (方案.md §十四)", () => {
+  const longText = "word ".repeat(400); // ~400 tokens per message
+
+  it("prunes unprotected history when over budget", () => {
+    const msgs: ChatMessage[] = [
+      { role: "system", content: "system" },
+      { role: "user", content: longText },
+      { role: "assistant", content: longText },
+      { role: "user", content: "latest" },
+    ];
+    const compiled = compileChatMessages({
+      modelName: "gpt-4",
+      msgs,
+      knownContextLength: 900,
+      maxTokens: 100,
+      supportsImages: false,
+    });
+    expect(compiled.didPrune).toBe(true);
+    // The system message and the last message always survive.
+    expect(compiled.compiledChatMessages[0].role).toBe("system");
+    expect(
+      compiled.compiledChatMessages[compiled.compiledChatMessages.length - 1]
+        .content,
+    ).toBe("latest");
+  });
+
+  it("never prunes a protected message and fails as out-of-context instead", () => {
+    const msgs: ChatMessage[] = [
+      { role: "system", content: "system" },
+      { role: "user", content: longText },
+      { role: "assistant", content: longText },
+      { role: "user", content: "latest" },
+    ];
+    expect(() =>
+      compileChatMessages({
+        modelName: "gpt-4",
+        msgs,
+        knownContextLength: 900,
+        maxTokens: 100,
+        supportsImages: false,
+        protectedMessageIndexes: msgs.map((_, index) => index),
+      }),
+    ).toThrow(/Not enough context/);
+  });
+
+  it("still compiles a protected request that fits", () => {
+    const msgs: ChatMessage[] = [
+      { role: "system", content: "system" },
+      { role: "user", content: "first turn" },
+      { role: "user", content: "current turn" },
+    ];
+    const compiled = compileChatMessages({
+      modelName: "gpt-4",
+      msgs,
+      knownContextLength: 100000,
+      maxTokens: 100,
+      supportsImages: false,
+      protectedMessageIndexes: msgs.map((_, index) => index),
+    });
+    expect(compiled.didPrune).toBe(false);
+    expect(compiled.compiledChatMessages.map((m) => m.content)).toEqual([
+      "system",
+      "first turn",
+      "current turn",
+    ]);
+  });
+
+  it("protects only the named indexes", () => {
+    const msgs: ChatMessage[] = [
+      { role: "system", content: "system" },
+      { role: "user", content: longText },
+      { role: "assistant", content: longText },
+      { role: "user", content: "latest" },
+    ];
+    const compiled = compileChatMessages({
+      modelName: "gpt-4",
+      msgs,
+      knownContextLength: 900,
+      maxTokens: 100,
+      supportsImages: false,
+      // Only the system message and the final user turn are protected.
+      protectedMessageIndexes: [0, 3],
+    });
+    expect(compiled.didPrune).toBe(true);
+    expect(
+      compiled.compiledChatMessages[compiled.compiledChatMessages.length - 1]
+        .content,
+    ).toBe("latest");
+  });
+});
+
 describe("extractToolSequence", () => {
   // Helper function to create mock messages
   const createUserMessage = (content: string): ChatMessage => ({

@@ -214,6 +214,23 @@ describe("ensureSessionContextMetrics", () => {
     );
   });
 
+  it("uses the same completion options as the real send", async () => {
+    const store = makeStore({ historyRevision: 9, hasReasoningEnabled: true });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, ensureSessionContextMetrics({ sessionId: "s1" }));
+
+    const compileCall = request.mock.calls.find(
+      ([messageType]) => messageType === "llm/compileChat",
+    );
+    expect(compileCall).toBeDefined();
+    // The session's reasoning preference must reach the metrics compile,
+    // otherwise the reported context percentage describes another request.
+    expect((compileCall![1] as any).options).toMatchObject({
+      reasoning: true,
+    });
+  });
+
   it("compiles a background session when its snapshot is stale", async () => {
     const store = makeStore({ historyRevision: 9 });
     const request = vi.spyOn(store.mockIdeMessenger, "request");

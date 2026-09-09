@@ -1028,6 +1028,7 @@ export abstract class BaseLLM implements ILLM {
   compileChatMessages(
     message: ChatMessage[],
     options: LLMFullCompletionOptions,
+    protectedMessageIndexes?: number[],
   ) {
     let { completionOptions } = this._parseCompletionOptions(options);
     completionOptions = this._modifyCompletionOptions(completionOptions);
@@ -1042,6 +1043,7 @@ export abstract class BaseLLM implements ILLM {
       excludeToolOutputsFromTokenCount: this.excludeToolOutputsFromTokenCount,
       excludeToolOutputsFromTokenCountMinTokens:
         this.excludeToolOutputsFromTokenCountMinTokens,
+      protectedMessageIndexes,
     });
   }
 

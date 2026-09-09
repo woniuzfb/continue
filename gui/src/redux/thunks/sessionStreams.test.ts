@@ -162,6 +162,42 @@ describe("sessionStreams", () => {
     expect(session(store, "s2").history).toHaveLength(1);
   });
 
+  it("protects every message of a Local Provider request from pruning", async () => {
+    const localModel = {
+      title: "local",
+      provider: "continue-local",
+      model: "LLM:local",
+      underlyingProviderName: "continue-local",
+    } as ModelDescription;
+    const store = makeStore({ models: [localModel], chatModelTitle: "local" });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    const compileCall = request.mock.calls.find(
+      ([messageType]) => messageType === "llm/compileChat",
+    );
+    expect(compileCall).toBeDefined();
+    const payload = compileCall![1] as any;
+    // 方案.md §十四: system + first turn + current turn are all protected, so an
+    // over-budget request must fail as out-of-context instead of being pruned.
+    expect(payload.protectedMessageIndexes).toEqual(
+      payload.messages.map((_: unknown, index: number) => index),
+    );
+  });
+
+  it("does not protect messages for a normal provider", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    const compileCall = request.mock.calls.find(
+      ([messageType]) => messageType === "llm/compileChat",
+    );
+    expect((compileCall![1] as any).protectedMessageIndexes).toBeUndefined();
+  });
+
   it("ignores a continuation whose predecessor request is no longer live", async () => {
     const store = makeStore({
       stream: { status: "streaming", requestId: "req-2" },

@@ -1,19 +1,26 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
-import { LLMFullCompletionOptions, ModelDescription, PromptLog } from "core";
+import {
+  LLMFullCompletionOptions,
+  ModelDescription,
+  PromptLog,
+  Tool,
+} from "core";
 import { getRuleId } from "core/llm/rules/getSystemMessageWithRules";
-import { modelSupportsNativeTools } from "core/llm/toolSupport";
 import { ToCoreProtocol } from "core/protocol";
 import { BUILT_IN_GROUP_NAME } from "core/tools/builtIn";
-import { applyToolOverrides } from "core/tools/applyToolOverrides";
 import { addSystemMessageToolsToSystemMessage } from "core/tools/systemMessageTools/buildToolsSystemMessage";
 import { interceptSystemToolCalls } from "core/tools/systemMessageTools/interceptSystemToolCalls";
-import { SystemMessageToolCodeblocksFramework } from "core/tools/systemMessageTools/toolCodeblocks";
 import { v4 as uuidv4 } from "uuid";
 import {
   selectSessionActiveTools,
   selectSessionPendingToolCalls,
   selectSessionToolCalls,
 } from "../selectors/sessionToolCalls";
+import {
+  buildSessionCompletionOptions,
+  resolveNativeTooling,
+  resolveSessionActiveTools,
+} from "../util/sessionRequestOptions";
 import {
   selectSessionById,
   selectSessionChatModel,
@@ -130,25 +137,6 @@ function sessionContentLength(session: SessionRuntimeState): number {
     }
   }
   return total;
-}
-
-function buildReasoningCompletionOptions(
-  baseOptions: LLMFullCompletionOptions,
-  hasReasoningEnabled: boolean | undefined,
-  model: ModelDescription,
-): LLMFullCompletionOptions {
-  if (hasReasoningEnabled === undefined) {
-    return baseOptions;
-  }
-  const reasoningOptions: LLMFullCompletionOptions = {
-    ...baseOptions,
-    reasoning: !!hasReasoningEnabled,
-  };
-  if (hasReasoningEnabled && model.underlyingProviderName !== "ollama") {
-    reasoningOptions.reasoningBudgetTokens =
-      model.completionOptions?.reasoningBudgetTokens ?? 2048;
-  }
-  return reasoningOptions;
 }
 
 // ── Terminal / checkpoint workflow ──────────────────────────────────────
@@ -504,38 +492,24 @@ async function streamModelTurn(
     return { kind: "already-finished" };
   }
 
-  // Tools: model-level overrides win over the global list.
-  let activeTools = selectSessionActiveTools(state, sessionId);
-  if (selectedChatModel.toolOverrides?.length) {
-    const { tools: overriddenTools, errors } = applyToolOverrides(
-      activeTools,
-      selectedChatModel.toolOverrides,
-    );
-    activeTools = overriddenTools;
-    for (const error of errors) {
-      if (!error.fatal) {
-        console.warn(`Tool override warning: ${error.message}`);
-      }
-    }
-  }
-
-  const useNativeTools = state.config.config.experimental
-    ?.onlyUseSystemMessageTools
-    ? false
-    : modelSupportsNativeTools(selectedChatModel);
-  const systemToolsFramework = !useNativeTools
-    ? new SystemMessageToolCodeblocksFramework()
-    : undefined;
-
-  let completionOptions: LLMFullCompletionOptions = {};
-  if (useNativeTools && activeTools.length > 0) {
-    completionOptions = { tools: activeTools };
-  }
-  completionOptions = buildReasoningCompletionOptions(
-    completionOptions,
-    session.hasReasoningEnabled,
+  // Tools: model-level overrides win over the global list. The metrics
+  // compile uses the same helpers so both requests are identical (方案.md §五.16).
+  const activeTools = resolveSessionActiveTools(
+    state,
+    sessionId,
     selectedChatModel,
   );
+  const { useNativeTools, systemToolsFramework } = resolveNativeTooling(
+    state,
+    selectedChatModel,
+    activeTools,
+  );
+  const completionOptions = buildSessionCompletionOptions({
+    activeTools,
+    useNativeTools,
+    hasReasoningEnabled: session.hasReasoningEnabled,
+    model: selectedChatModel,
+  });
 
   const baseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
     ? ""
@@ -601,9 +575,18 @@ async function streamModelTurn(
 
   dispatch(setSessionInlineError({ sessionId, error: undefined }));
 
+  // 方案.md §十四: a Local Provider request has no prunable middle history, so
+  // every message (system + first turn + current turn) is protected and an
+  // over-budget request fails as out-of-context instead of silently dropping
+  // the first turn.
+  const protectedMessageIndexes = localConversation
+    ? messages.map((_, index) => index)
+    : undefined;
+
   const precompiledRes = await ideMessenger.request("llm/compileChat", {
     messages,
     options: completionOptions,
+    protectedMessageIndexes,
   });
 
   if (precompiledRes.status === "error") {
@@ -691,7 +674,7 @@ async function streamModelTurn(
             modelTitle: selectedChatModel.title,
             sessionId,
             ...(activeTools.length > 0 && {
-              tools: activeTools.map((tool) => tool.function.name),
+              tools: activeTools.map((tool: Tool) => tool.function.name),
             }),
             ...(appliedRules.length > 0 && {
               rules: appliedRules.map((rule) => ({

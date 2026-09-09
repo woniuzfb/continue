@@ -1,10 +1,5 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
-import { LLMFullCompletionOptions } from "core";
-import { modelSupportsNativeTools } from "core/llm/toolSupport";
-import { applyToolOverrides } from "core/tools/applyToolOverrides";
 import { addSystemMessageToolsToSystemMessage } from "core/tools/systemMessageTools/buildToolsSystemMessage";
-import { SystemMessageToolCodeblocksFramework } from "core/tools/systemMessageTools/toolCodeblocks";
-import { selectSessionActiveTools } from "../selectors/sessionToolCalls";
 import {
   selectSessionById,
   selectSessionChatModel,
@@ -16,6 +11,11 @@ import { constructMessages } from "../util/constructMessages";
 import { buildRequestHistoryForSession } from "../util/requestHistory";
 import { isLocalConversationModel } from "core/llm/localConversation";
 import { getBaseSystemMessage } from "../util/getBaseSystemMessage";
+import {
+  buildSessionCompletionOptions,
+  resolveNativeTooling,
+  resolveSessionActiveTools,
+} from "../util/sessionRequestOptions";
 
 /**
  * Phase 1 session-scoped context metrics (方案.md §五.16).
@@ -118,32 +118,24 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
       }
     }
 
-    let activeTools = selectSessionActiveTools(state, sessionId);
-    if (selectedChatModel.toolOverrides?.length) {
-      const { tools: overriddenTools, errors } = applyToolOverrides(
-        activeTools,
-        selectedChatModel.toolOverrides,
-      );
-      activeTools = overriddenTools;
-      for (const error of errors) {
-        if (!error.fatal) {
-          console.warn(`Tool override warning: ${error.message}`);
-        }
-      }
-    }
-
-    const useNativeTools = state.config.config.experimental
-      ?.onlyUseSystemMessageTools
-      ? false
-      : modelSupportsNativeTools(selectedChatModel);
-    const systemToolsFramework = !useNativeTools
-      ? new SystemMessageToolCodeblocksFramework()
-      : undefined;
-
-    let completionOptions: LLMFullCompletionOptions = {};
-    if (useNativeTools && activeTools.length > 0) {
-      completionOptions = { tools: activeTools };
-    }
+    // Same tool resolution and completion options as the real send
+    // (方案.md §五.16): otherwise the metrics describe a different prompt.
+    const activeTools = resolveSessionActiveTools(
+      state,
+      sessionId,
+      selectedChatModel,
+    );
+    const { useNativeTools, systemToolsFramework } = resolveNativeTooling(
+      state,
+      selectedChatModel,
+      activeTools,
+    );
+    const completionOptions = buildSessionCompletionOptions({
+      activeTools,
+      useNativeTools,
+      hasReasoningEnabled: session.hasReasoningEnabled,
+      model: selectedChatModel,
+    });
 
     const baseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
       ? ""
@@ -170,9 +162,14 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
         : undefined,
     );
 
+    // Same protection as the send (方案.md §十四): metrics must describe the
+    // prompt that would actually be sent.
     const precompiledRes = await extra.ideMessenger.request("llm/compileChat", {
       messages,
       options: completionOptions,
+      protectedMessageIndexes: localConversation
+        ? messages.map((_, index) => index)
+        : undefined,
     });
     if (precompiledRes.status === "error") {
       console.warn(
