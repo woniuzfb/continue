@@ -428,4 +428,26 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
 
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it("does not fill the viewport or page while the session is hidden", async () => {
+    const { store } = mountLazy(2);
+    const handler = vi.fn(() => ({
+      items: [],
+      firstTurnItems: [],
+      hasMore: true,
+      total: 20,
+      session: {},
+    }));
+    store.mockIdeMessenger.responseHandlers["history/loadPage"] =
+      handler as any;
+    // Another session is visible: this tree is mounted but hidden.
+    store.dispatch({
+      type: "sessions/setActiveSessionId",
+      payload: { sessionId: "other-session" },
+    });
+
+    await settle();
+
+    expect(handler).not.toHaveBeenCalled();
+  });
 });

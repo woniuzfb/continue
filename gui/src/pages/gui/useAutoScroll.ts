@@ -378,6 +378,9 @@ export const useAutoScroll = (
     lastFillCheckLengthRef.current = history.length;
   }, [history.length]);
   useEffect(() => {
+    // 方案.md §九.2: a hidden tab must not fill its viewport or page in more
+    // history; only the visible session may do that.
+    if (store.getState().sessions.activeSessionId !== sessionId) return;
     if (!hasMoreHistory || isHistoryLoading || isStreaming) return;
     if (isPrependingRef.current) return;
     if (fillViewportAttemptsRef.current >= 3) return;
