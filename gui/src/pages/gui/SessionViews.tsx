@@ -4,10 +4,8 @@ import {
   selectActiveSessionId,
   selectTabOrder,
 } from "../../redux/selectors/sessions";
-import { MainEditorProvider } from "../../components/mainInput/TipTapEditor";
-import { SessionScope } from "../../components/mainInput/TipTapEditor/SessionScope";
-import { Chat } from "./Chat";
 import { SessionBootstrapView } from "./SessionBootstrapView";
+import { SessionLayout } from "../../components/SessionLayout";
 
 /**
  * 方案.md §九.1/§九.2: every open tab stays mounted with its own editor and its
@@ -15,26 +13,9 @@ import { SessionBootstrapView } from "./SessionBootstrapView";
  * paint without unmounting them, so undo stacks, selections and plugin state
  * survive a tab switch.
  *
- * The session identity is passed explicitly: a `SessionScope` carries the
- * `sessionId` (never a faked Redux store), every session-scoped selector reads
- * `sessionsById[sessionId]`, and every action/thunk still carries the id in its
- * payload. `activeSessionId` keeps exactly one real meaning: the visible tab.
+ * This component only maps `tabOrder` to per-tab `SessionLayout` trees; the
+ * scope, the editor provider and the tab-local UI live there.
  */
-
-const MemoizedChat = React.memo(Chat);
-
-function SessionTab({ sessionId }: { sessionId: string }) {
-  return (
-    <SessionScope sessionId={sessionId}>
-      <MainEditorProvider sessionId={sessionId}>
-        <MemoizedChat />
-      </MainEditorProvider>
-    </SessionScope>
-  );
-}
-
-const MemoizedSessionTab = React.memo(SessionTab);
-
 export function SessionViews() {
   const tabOrder = useAppSelector(selectTabOrder);
   const activeSessionId = useAppSelector(selectActiveSessionId);
@@ -55,7 +36,7 @@ export function SessionViews() {
             display: sessionId === activeSessionId ? "flex" : "none",
           }}
         >
-          <MemoizedSessionTab sessionId={sessionId} />
+          <SessionLayout sessionId={sessionId} />
         </div>
       ))}
     </>
