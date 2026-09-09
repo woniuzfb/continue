@@ -151,7 +151,16 @@ describe("sessionPersistence.saveSession response handling", () => {
     store.mockIdeMessenger.request = vi.fn().mockResolvedValue({
       status: "success",
       content: {
-        firstTurnItems: [],
+        firstTurnItems: [
+          {
+            message: { id: "d1", role: "user", content: "first" },
+            contextItems: [],
+          },
+          {
+            message: { id: "d2", role: "assistant", content: "reply" },
+            contextItems: [],
+          },
+        ],
         totalHistoryCount: 42,
         latestConversationSummary: {
           sourceMessageId: "a1",
@@ -166,6 +175,10 @@ describe("sessionPersistence.saveSession response handling", () => {
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.pagination.totalCount).toBe(42);
+    expect(session.firstTurnItems.map((item) => item.message.content)).toEqual([
+      "first",
+      "reply",
+    ]);
     expect(session.latestConversationSummary).toEqual({
       sourceMessageId: "a1",
       content: "summary text",

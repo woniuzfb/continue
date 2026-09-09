@@ -557,3 +557,32 @@ export function applyStreamUpdatesToHistory(
     }
   }
 }
+
+/**
+ * 磁盘首轮条目（方案.md §五.5）：从第一条 user 消息到第二条 user 消息之前
+ * （不含），直接来自未经过 GUI bubble merge 的条目序列。与 Core
+ * `history.save` 的 `firstTurnItems` 使用同一规则。
+ *
+ * 懒加载窗口只有尾部时返回空数组 —— 首轮必须来自磁盘头部，不能从尾部猜。
+ */
+export function firstTurnItemsOf(
+  history: ChatHistoryItemWithMessageId[],
+): ChatHistoryItemWithMessageId[] {
+  if (history.length === 0) {
+    return [];
+  }
+  const firstUserIndex = history.findIndex(
+    (item) => item.message.role === "user",
+  );
+  if (firstUserIndex < 0) {
+    return [];
+  }
+  let end = history.length;
+  for (let i = firstUserIndex + 1; i < history.length; i++) {
+    if (history[i].message.role === "user") {
+      end = i;
+      break;
+    }
+  }
+  return history.slice(firstUserIndex, end);
+}

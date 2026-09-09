@@ -14,6 +14,7 @@ import {
 } from "../slices/sessionsSlice";
 import type { RootState, ThunkApiType } from "../store";
 import { ensureMessageIds } from "../util/messageIds";
+import { firstTurnItemsOf } from "../slices/sessionHistory";
 import {
   compileSessionChatForContextMetrics,
   needsContextMetricsRecompute,
@@ -100,6 +101,10 @@ export const loadSessionRuntime = createAsyncThunk<
       const history = ensureMessageIds(session.history);
       const runtime = initialSessionRuntime(sessionId, session.title, {
         history,
+        // Phase 4 (方案.md §五.5): a full load knows the head, so the first
+        // turn can be captured. A lazy window only has the tail and stays
+        // empty until the save response supplies it.
+        firstTurnItems: hasMore ? [] : firstTurnItemsOf(history),
         mode: session.mode ?? "chat",
         chatModelTitle: session.chatModelTitle ?? undefined,
         hasReasoningEnabled: (session as { hasReasoningEnabled?: boolean })

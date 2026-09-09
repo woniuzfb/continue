@@ -322,3 +322,52 @@ describe("releaseClosingSessionIfClean", () => {
     ).toBe(false);
   });
 });
+
+describe("firstTurnItems hydration", () => {
+  it("captures the disk first turn on a full load", async () => {
+    const store = makeStore({ catalog: [{ sessionId: "s1" }] });
+    store.mockIdeMessenger.responses["history/load"] = {
+      sessionId: "s1",
+      title: "From disk",
+      workspaceDirectory: "/w",
+      history: [
+        item("d1", "user", "first"),
+        item("d2", "assistant", "reply"),
+        item("d3", "user", "second"),
+        item("d4", "assistant", "reply 2"),
+      ],
+    } as any;
+
+    await run(store, openSessionTab({ sessionId: "s1" }));
+
+    const runtime = sessions(store).sessionsById["s1"];
+    expect(runtime.firstTurnItems.map((i: any) => i.message.content)).toEqual([
+      "first",
+      "reply",
+    ]);
+  });
+
+  it("leaves firstTurnItems empty for a lazy window", async () => {
+    const store = makeStore({ catalog: [{ sessionId: "s1" }] });
+    (store.getState() as any).config.config.ui = { lazyLoadHistory: true };
+    store.mockIdeMessenger.responses["history/loadPage"] = {
+      items: [
+        item("t1", "user", "tail"),
+        item("t2", "assistant", "tail reply"),
+      ],
+      hasMore: true,
+      total: 20,
+      session: {
+        title: "From disk",
+        mode: "agent",
+        chatModelTitle: undefined,
+        workspaceDirectory: "/w",
+        contextMetrics: undefined,
+      },
+    } as any;
+
+    await run(store, openSessionTab({ sessionId: "s1" }));
+
+    expect(sessions(store).sessionsById["s1"].firstTurnItems).toEqual([]);
+  });
+});

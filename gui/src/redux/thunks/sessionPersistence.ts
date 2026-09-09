@@ -2,9 +2,11 @@ import { createAsyncThunk } from "@reduxjs/toolkit";
 import { NEW_SESSION_TITLE } from "core/util/constants";
 import { Session } from "core";
 import { selectSessionById } from "../selectors/sessions";
+import { ensureMessageIds } from "../util/messageIds";
 import {
   markSessionPersisted,
   setSessionConversationSummary,
+  setSessionFirstTurn,
   setSessionPagination,
   setSessionPersistenceState,
   SessionPersistenceState,
@@ -116,6 +118,14 @@ async function performSave(
       setSessionPagination({
         sessionId,
         pagination: { totalCount: result.content.totalHistoryCount },
+      }),
+    );
+  }
+  if (result.content?.firstTurnItems?.length) {
+    dispatch(
+      setSessionFirstTurn({
+        sessionId,
+        firstTurnItems: ensureMessageIds(result.content.firstTurnItems),
       }),
     );
   }
