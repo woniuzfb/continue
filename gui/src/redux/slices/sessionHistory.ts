@@ -586,3 +586,18 @@ export function firstTurnItemsOf(
   }
   return history.slice(firstUserIndex, end);
 }
+
+/**
+ * 当前回合条目（方案.md §十三.5）：从最新 user message 开始到 history 尾部。
+ * tool loop 的每一轮都必须重新调用，不能缓存发送时刻的快照（§十三.6）。
+ */
+export function getCurrentTurnItems(
+  history: ChatHistoryItemWithMessageId[],
+): ChatHistoryItemWithMessageId[] {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].message.role === "user") {
+      return history.slice(i);
+    }
+  }
+  return [];
+}

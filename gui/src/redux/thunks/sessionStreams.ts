@@ -24,6 +24,7 @@ import {
   beginSessionStream,
   finishSessionStream,
   pauseSessionStream,
+  setSessionFirstTurn,
   setSessionContextMetrics,
   setSessionInlineError,
   setSessionStreamError,
@@ -44,7 +45,12 @@ import {
 import { evaluateSessionToolPolicies } from "./evaluateToolPolicies";
 import { preprocessSessionToolCalls } from "./preprocessToolCallArgs";
 import { enqueueSessionSave } from "./sessionPersistence";
+import {
+  buildRequestHistoryForSession,
+  requestHistoryFromFullHistory,
+} from "../util/requestHistory";
 import { generateSessionTitle } from "./sessionTitle";
+import { loadFullHistory } from "./sessionPaging";
 import { CONTEXT_METRICS_SCHEMA_VERSION } from "./sessionMetrics";
 import {
   approveToolCalls,
@@ -541,9 +547,32 @@ async function streamModelTurn(
       )
     : baseSystemMessage;
 
+  // 方案.md §十三 Phase 5: Local Provider fast path = first turn + current
+  // turn; anything else falls back to the full history (loading it first when
+  // the window is truncated).
+  let historyForRequest = session.history;
+  const plan = buildRequestHistoryForSession(session);
+  if (plan.kind === "ready") {
+    historyForRequest = plan.requestHistory;
+  } else {
+    await dispatch(loadFullHistory({ sessionId })).unwrap();
+    const full = selectSessionById(getState(), sessionId);
+    if (!full) {
+      return { kind: "gone" };
+    }
+    const rebuilt = requestHistoryFromFullHistory(full.history);
+    historyForRequest = rebuilt.requestHistory;
+    dispatch(
+      setSessionFirstTurn({
+        sessionId,
+        firstTurnItems: rebuilt.firstTurnItems,
+      }),
+    );
+  }
+
   const { messages, appliedRules, appliedRulesSourceMessageId } =
     constructMessages(
-      session.history,
+      historyForRequest,
       systemMessage,
       state.config.config.rules,
       state.ui.ruleSettings,
