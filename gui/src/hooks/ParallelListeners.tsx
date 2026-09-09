@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef } from "react";
 import { IdeMessengerContext } from "../context/IdeMessenger";
 
 import { FromCoreProtocol } from "core/protocol";
@@ -25,7 +25,10 @@ import {
   lookupApplyOrigin,
 } from "../redux/thunks/sessionApplyState";
 
-import { refreshSessionCatalog } from "../redux/thunks/sessionLifecycle";
+import {
+  ensureActiveSessionLoaded,
+  refreshSessionCatalog,
+} from "../redux/thunks/sessionLifecycle";
 import { updateSessionFileSymbolsFromHistory } from "../redux/thunks/updateFileSymbols";
 import {
   setDocumentStylesFromLocalStorage,
@@ -39,9 +42,7 @@ import {
   selectActiveHistory,
   selectActiveIsInEdit,
   selectActiveSessionId,
-  selectLastSessionId,
 } from "../redux/selectors/sessionView";
-import { openSessionTab } from "../redux/thunks/sessionLifecycle";
 
 function ParallelListeners() {
   const dispatch = useAppDispatch();
@@ -58,8 +59,6 @@ function ParallelListeners() {
 
   // Load symbols for chat on any session change
   const sessionId = useAppSelector((state) => selectActiveSessionId(state));
-  const lastSessionId = useAppSelector(selectLastSessionId);
-  const [initialSessionId] = useState(sessionId || lastSessionId);
 
   const handleConfigUpdate = useCallback(
     async (isInitial: boolean, result: FromCoreProtocol["configUpdate"][0]) => {
@@ -134,9 +133,11 @@ function ParallelListeners() {
         await handleConfigUpdate(true, result.content);
       }
       dispatch(setConfigLoading(false));
-      if (initialSessionId) {
-        await dispatch(openSessionTab({ sessionId: initialSessionId }));
-      }
+      // 方案.md §五.16: redux-persist rehydrates asynchronously, so the tab to
+      // load is resolved here (after the config round-trip) rather than being
+      // captured at first render — at first render `activeSessionId` is still
+      // empty and the restored tabs would never be loaded from disk.
+      await dispatch(ensureActiveSessionLoaded());
     }
     void initialLoadConfig();
     const interval = setInterval(() => {
@@ -154,7 +155,7 @@ function ParallelListeners() {
     }, 2_000);
 
     return () => clearInterval(interval);
-  }, [hasDoneInitialConfigLoad, ideMessenger, initialSessionId]);
+  }, [hasDoneInitialConfigLoad, ideMessenger]);
 
   useWebviewListener(
     "configUpdate",

@@ -5,7 +5,10 @@ import { MockIdeMessenger } from "../context/MockIdeMessenger";
 import { updateConfig } from "./slices/configSlice";
 import { EMPTY_CONFIG } from "./slices/configSlice";
 import { setupStore } from "./store";
-import { bootstrapLastSession } from "./thunks/sessionLifecycle";
+import {
+  bootstrapLastSession,
+  ensureActiveSessionLoaded,
+} from "./thunks/sessionLifecycle";
 
 /**
  * Real boot smoke test (方案.md §五.23 + §九): the GUI is normally only ever
@@ -175,6 +178,28 @@ describe("store boot with a persisted v1 snapshot", () => {
     const messageTypes = requestSpy.mock.calls.map(([type]) => type);
     expect(messageTypes).not.toContain("history/save");
     expect(messageTypes).not.toContain("config/updateSelectedModel");
+  });
+
+  it("loads the rehydrated active tab through the startup entry point", async () => {
+    seedV1Snapshot();
+    const { store } = await boot();
+    store.dispatch(
+      updateConfig({
+        ...EMPTY_CONFIG,
+        ui: { lazyLoadHistory: true, lazyLoadHistoryInitialCount: 4 } as any,
+      }),
+    );
+
+    // This is exactly what ParallelListeners does after the config
+    // round-trip: resolve the tab to open at that moment, not at first render.
+    await (store.dispatch(ensureActiveSessionLoaded()) as any).unwrap();
+
+    const state = store.getState() as any;
+    expect(state.sessions.activeSessionId).toBe("s-active");
+    expect(state.sessions.tabDescriptors["s-active"].loadState).toBe("loaded");
+    expect(state.sessions.sessionsById["s-active"].history).toHaveLength(2);
+    // A restored tab that is not visible is not loaded yet.
+    expect(state.sessions.sessionsById["s-other"]).toBeUndefined();
   });
 
   it("runs the v0 migration chain in the real store", async () => {

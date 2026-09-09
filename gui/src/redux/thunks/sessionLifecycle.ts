@@ -127,6 +127,39 @@ export const bootstrapLastSession = createAsyncThunk<void, void, ThunkApiType>(
 );
 
 /**
+ * Startup entry point for a rehydrated store (方案.md §五.16).
+ *
+ * After redux-persist restores the tab projection, every descriptor is
+ * `unloaded` and the active one must be loaded from disk immediately. The
+ * target is resolved *when this thunk runs* — redux-persist rehydrates
+ * asynchronously, so `activeSessionId` is normally still empty at first render
+ * and must never be captured there.
+ *
+ * No descriptors at all (fresh install, or a snapshot without tabs) falls back
+ * to `bootstrapLastSession`, which restores the catalog pointer or creates the
+ * first empty session.
+ */
+export const ensureActiveSessionLoaded = createAsyncThunk<
+  void,
+  void,
+  ThunkApiType
+>("sessions/ensureActiveLoaded", async (_, { dispatch, getState }) => {
+  const state = getState();
+  const activeSessionId = state.sessions.activeSessionId;
+  const target =
+    activeSessionId && selectTabDescriptor(state, activeSessionId)
+      ? activeSessionId
+      : state.sessions.tabOrder[state.sessions.tabOrder.length - 1];
+
+  if (!target) {
+    await dispatch(bootstrapLastSession());
+    return;
+  }
+
+  await dispatch(openSessionTab({ sessionId: target }));
+});
+
+/**
  * Delete a session (方案.md §五.19): stop its own stream, close its approvals
  * without continuing the loop, release the runtime, delete on disk and
  * activate a neighbour. Other sessions are never touched.

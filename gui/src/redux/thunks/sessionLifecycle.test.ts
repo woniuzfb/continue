@@ -6,6 +6,7 @@ import { initialSessionRuntime } from "../slices/sessionsSlice";
 import { resetSessionSaveQueues } from "./sessionPersistence";
 import {
   bootstrapLastSession,
+  ensureActiveSessionLoaded,
   releaseClosingSessionIfClean,
   deleteSessionRuntime,
   ensureSessionRuntime,
@@ -53,6 +54,8 @@ type StoreOptions = {
   runtimes?: Record<string, ReturnType<typeof initialSessionRuntime>>;
   activeSessionId?: string;
   tabOrder?: string[];
+  /** Rehydrated descriptors: present in tabOrder but with no runtime. */
+  unloadedDescriptors?: string[];
 };
 
 function makeStore(options: StoreOptions = {}) {
@@ -62,14 +65,19 @@ function makeStore(options: StoreOptions = {}) {
     runtimes = {},
     activeSessionId,
     tabOrder = [],
+    unloadedDescriptors = [],
   } = options;
 
-  const tabDescriptors = Object.fromEntries(
-    Object.keys(runtimes).map((id) => [
+  const tabDescriptors = Object.fromEntries([
+    ...Object.keys(runtimes).map((id) => [
       id,
       { sessionId: id, title: id, loadState: "loaded" as const },
     ]),
-  );
+    ...unloadedDescriptors.map((id) => [
+      id,
+      { sessionId: id, title: id, loadState: "unloaded" as const },
+    ]),
+  ]);
 
   return createMockStore({
     sessions: {
@@ -161,6 +169,40 @@ describe("sessionLifecycle", () => {
     store.mockIdeMessenger.responses["history/load"] = diskSession("s1");
 
     await run(store, bootstrapLastSession());
+
+    expect(sessions(store).activeSessionId).toBe("s1");
+    expect(sessions(store).sessionsById["s1"].history).toHaveLength(2);
+  });
+
+  it("loads a rehydrated active descriptor from disk", async () => {
+    // 方案.md §五.16: after rehydration the descriptor exists but is unloaded
+    // and no runtime may exist yet.
+    const store = makeStore({
+      activeSessionId: "s1",
+      tabOrder: ["s1", "s2"],
+      unloadedDescriptors: ["s1", "s2"],
+    });
+    // Without `ui.lazyLoadHistory` the activation pipeline uses the full
+    // `history/load` path; both paths must produce exactly one runtime.
+    store.mockIdeMessenger.responses["history/load"] = diskSession("s1");
+
+    await run(store, ensureActiveSessionLoaded());
+
+    expect(sessions(store).activeSessionId).toBe("s1");
+    expect(sessions(store).tabDescriptors["s1"].loadState).toBe("loaded");
+    expect(sessions(store).sessionsById["s1"].history).toHaveLength(2);
+    // The other restored tab stays untouched until it is activated.
+    expect(sessions(store).sessionsById["s2"]).toBeUndefined();
+  });
+
+  it("falls back to bootstrap when no descriptor was rehydrated", async () => {
+    const store = makeStore({
+      catalog: [{ sessionId: "s1" }],
+      lastSessionId: "s1",
+    });
+    store.mockIdeMessenger.responses["history/load"] = diskSession("s1");
+
+    await run(store, ensureActiveSessionLoaded());
 
     expect(sessions(store).activeSessionId).toBe("s1");
     expect(sessions(store).sessionsById["s1"].history).toHaveLength(2);
