@@ -105,6 +105,11 @@ export const loadFullHistory = createAsyncThunk<
       return;
     }
 
+    // Capture the window identity before awaiting: the merge must describe the
+    // same window the request was issued for (方案.md §五.12).
+    const generation = session.pagination.requestGeneration;
+    const headCount = session.pagination.loadedOffset ?? 0;
+
     const result = await extra.ideMessenger.request("history/load", {
       id: sessionId,
     });
@@ -114,8 +119,22 @@ export const loadFullHistory = createAsyncThunk<
       throw new Error(`loadFullHistory failed: ${result.error}`);
     }
 
+    // Re-read after the await: the session may have received a stream chunk,
+    // tool result, edit or a concurrent full load while the disk was reading.
+    // Merging the pre-await snapshot would silently drop those updates.
+    const current = selectSessionById(getState(), sessionId);
+    if (!current) {
+      return;
+    }
+    if (current.pagination.requestGeneration !== generation) {
+      return;
+    }
+    if ((current.pagination.loadedOffset ?? 0) !== headCount) {
+      // The window moved (or another full load already finished).
+      return;
+    }
+
     const diskHistory = result.content.history;
-    const headCount = session.pagination.loadedOffset ?? 0;
 
     // Same guard as the legacy thunk: a truncated session claims headCount
     // frozen head items. If disk is shorter, merging would drop the head and a
@@ -131,7 +150,7 @@ export const loadFullHistory = createAsyncThunk<
     const safeHeadCount = Math.min(headCount, diskHistory.length);
     const mergedHistory = [
       ...diskHistory.slice(0, safeHeadCount),
-      ...session.history,
+      ...current.history,
     ];
 
     dispatch(

@@ -194,6 +194,74 @@ describe("sessionPaging.loadFullHistory", () => {
     expect(session.pagination.hasMore).toBe(false);
   });
 
+  it("merges against the live tail, not the pre-request snapshot", async () => {
+    const store = storeWith();
+    // While the disk read is in flight the session tail grows (stream chunk /
+    // tool result / edit). The merge must keep the live tail.
+    store.mockIdeMessenger.responseHandlers["history/load"] = async () => {
+      const current = selectSessionById(store.getState() as any, "s1")!;
+      store.dispatch({
+        type: "sessions/setSessionHistory",
+        payload: {
+          sessionId: "s1",
+          history: [...current.history, item("u4", "user", "late turn")],
+        },
+      });
+      return {
+        sessionId: "s1",
+        title: "Chat 1",
+        workspaceDirectory: "ws",
+        history: [
+          item("u1", "user", "1"),
+          item("a1", "assistant", "2"),
+          item("u2", "user", "3"),
+          item("a2", "assistant", "4"),
+        ],
+      } as any;
+    };
+
+    await run(store, loadFullHistory({ sessionId: "s1" }));
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.history.map((i) => i.message.id)).toEqual([
+      "u1",
+      "a1",
+      "u2",
+      "a2",
+      "u3",
+      "a3",
+      "u4",
+    ]);
+  });
+
+  it("drops the merge when the window moved while the disk was read", async () => {
+    const store = storeWith();
+    store.mockIdeMessenger.responseHandlers["history/load"] = async () => {
+      // Another load already advanced the window.
+      store.dispatch({
+        type: "sessions/setSessionPagination",
+        payload: { sessionId: "s1", pagination: { loadedOffset: 2 } },
+      });
+      return {
+        sessionId: "s1",
+        title: "Chat 1",
+        workspaceDirectory: "ws",
+        history: [
+          item("u1", "user", "1"),
+          item("a1", "assistant", "2"),
+          item("u2", "user", "3"),
+          item("a2", "assistant", "4"),
+        ],
+      } as any;
+    };
+
+    await run(store, loadFullHistory({ sessionId: "s1" }));
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.history.map((i) => i.message.id)).toEqual(["u3", "a3"]);
+    expect(session.pagination.truncated).toBe(true);
+  });
+
   it("refuses to merge when disk is shorter than the frozen head", async () => {
     const store = storeWith();
     store.mockIdeMessenger.responses["history/load"] = {
