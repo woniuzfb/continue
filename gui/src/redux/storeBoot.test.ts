@@ -202,6 +202,31 @@ describe("store boot with a persisted v1 snapshot", () => {
     expect(state.sessions.sessionsById["s-other"]).toBeUndefined();
   });
 
+  it("writes back the v2 projection and never persists runtime history", async () => {
+    seedV1Snapshot();
+    const { store, persistor } = await boot();
+    store.dispatch(
+      updateConfig({
+        ...EMPTY_CONFIG,
+        ui: { lazyLoadHistory: true, lazyLoadHistoryInitialCount: 4 } as any,
+      }),
+    );
+    await (store.dispatch(ensureActiveSessionLoaded()) as any).unwrap();
+    await persistor.flush();
+
+    const raw = JSON.parse(localStorage.getItem(PERSIST_KEY)!);
+    expect(JSON.parse(raw._persist).version).toBe(2);
+
+    const persistedSessions = JSON.parse(raw.sessions);
+    expect(persistedSessions.activeSessionId).toBe("s-active");
+    expect(persistedSessions.tabOrder).toEqual(["s-other", "s-active"]);
+    // Runtime state must never reach disk (方案.md §五.23).
+    expect(persistedSessions.sessionsById).toBeUndefined();
+    expect(raw.sessions).not.toContain("hello");
+
+    expect(JSON.parse(raw.sessionCatalog).lastSessionId).toBe("s-active");
+  });
+
   it("runs the v0 migration chain in the real store", async () => {
     // No `_persist` at all: redux-persist treats it as version -1, so both the
     // "0" (v0 -> v1) and the "2" (v1 -> v2) migrations must run in order.
