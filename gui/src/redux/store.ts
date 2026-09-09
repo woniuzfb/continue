@@ -147,6 +147,8 @@ export type ThunkExtrasType = { ideMessenger: IIdeMessenger };
 export type ThunkApiType = {
   state: RootState;
   extra: ThunkExtrasType;
+  /** Explicit so nested thunk dispatches keep their payload types. */
+  dispatch: AppThunkDispatch;
 };
 
 export type AppThunkDispatch = ThunkDispatch<
