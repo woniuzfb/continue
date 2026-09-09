@@ -33,7 +33,11 @@ const CHAT_MODEL = {
 
 function makeStore(
   sessions: any,
-  options: { lazy?: boolean; modelTitle?: string } = {},
+  options: {
+    lazy?: boolean;
+    modelTitle?: string;
+    models?: any[];
+  } = {},
 ) {
   return createMockStore({
     sessions,
@@ -44,7 +48,7 @@ function makeStore(
         ...EMPTY_CONFIG,
         modelsByRole: {
           ...EMPTY_CONFIG.modelsByRole,
-          chat: [CHAT_MODEL],
+          chat: options.models ?? [CHAT_MODEL],
         },
         selectedModelByRole: {
           ...EMPTY_CONFIG.selectedModelByRole,
@@ -234,6 +238,56 @@ describe("activateSessionTab", () => {
         expect.anything(),
       );
     });
+  });
+
+  it("does not project a slow activation that finished after a tab switch", async () => {
+    const modelA = { ...CHAT_MODEL, title: "model-a" };
+    const modelB = { ...CHAT_MODEL, title: "model-b" };
+    const store = makeStore(
+      {
+        activeSessionId: "s1",
+        tabOrder: ["s1", "s2"],
+        tabDescriptors: {
+          // A is unloaded (slow disk read), B is already loaded.
+          s1: { sessionId: "s1", title: "A", loadState: "unloaded" },
+          s2: { sessionId: "s2", title: "B", loadState: "loaded" },
+        },
+        sessionsById: {
+          s2: initialSessionRuntime("s2", "B", {
+            chatModelTitle: "model-b",
+          }),
+        },
+      },
+      { models: [modelA, modelB] },
+    );
+
+    let releaseA: (() => void) | undefined;
+    store.mockIdeMessenger.responseHandlers["history/load"] = () =>
+      new Promise((resolve) => {
+        releaseA = () =>
+          resolve({
+            sessionId: "s1",
+            title: "A",
+            workspaceDirectory: "ws",
+            history: [item("u1", "user", "hi")],
+            chatModelTitle: "model-a",
+          } as any);
+      });
+
+    // Click A (slow), then click B before A's disk read finishes.
+    const activateA = run(store, activateSessionTab({ sessionId: "s1" }));
+    await run(store, activateSessionTab({ sessionId: "s2" }));
+    expect(
+      (store.getState() as any).config.activeSessionModelProjection?.title,
+    ).toBe("model-b");
+
+    // A finishes last: the visible tab is still B, so the projection stays B.
+    releaseA!();
+    await activateA;
+
+    const state = store.getState() as any;
+    expect(state.sessions.activeSessionId).toBe("s2");
+    expect(state.config.activeSessionModelProjection?.title).toBe("model-b");
   });
 
   it("loads an unloaded tab before projecting", async () => {

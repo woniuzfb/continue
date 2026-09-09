@@ -48,7 +48,14 @@ export const projectSessionModelToActiveUi = createAsyncThunk<
   ThunkApiType
 >(
   "sessions/projectModelToActiveUi",
-  async ({ chatModelTitle }, { dispatch, getState }) => {
+  async ({ sessionId, chatModelTitle }, { dispatch, getState }) => {
+    // 方案.md §五.17/§五.20: the projection describes the *visible* tab. A slow
+    // activation that finishes after the user switched away must not overwrite
+    // the newer tab's projection — guarded here as well as at the call site so
+    // every future entry point is covered.
+    if (getState().sessions.activeSessionId !== sessionId) {
+      return;
+    }
     const models = getState().config.config?.modelsByRole?.chat ?? [];
     const model = chatModelTitle
       ? (models.find((m) => m.title === chatModelTitle) ?? null)
@@ -175,14 +182,20 @@ export const completeSessionActivation = createAsyncThunk<
     if (!runtime) {
       await dispatch(loadSessionRuntime({ sessionId }));
     }
-    const active = selectSessionById(getState(), sessionId);
-    if (!active) {
+    const loaded = selectSessionById(getState(), sessionId);
+    if (!loaded) {
+      return;
+    }
+    // A slow disk load can finish after the user activated another tab. That
+    // activation no longer owns the visible UI, so it must not project a model
+    // or trigger a background compile (方案.md §五.16/§五.17).
+    if (getState().sessions.activeSessionId !== sessionId) {
       return;
     }
     void dispatch(
       projectSessionModelToActiveUi({
         sessionId,
-        chatModelTitle: active.chatModelTitle,
+        chatModelTitle: loaded.chatModelTitle,
       }),
     );
     // 方案.md §五.16: a missing or stale metrics snapshot is recomputed on
