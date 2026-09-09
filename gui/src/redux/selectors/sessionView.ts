@@ -284,6 +284,61 @@ export function useSessionEditState() {
   );
 }
 
+/**
+ * 方案.md §十一: the synthetic summary separator.
+ *
+ * The runtime summary is authoritative, but its carrier item may have been
+ * trimmed out of the loaded window (lazy history). In that case the boundary is
+ * rendered at the head of the window instead of at the carrier's real position.
+ *
+ * Returns the summary only when the carrier is NOT in the loaded window, so a
+ * real carrier and a synthetic separator can never both render.
+ */
+export function useSessionSyntheticSummary():
+  | {
+      sourceMessageId: string;
+      sourceAbsoluteIndex?: number;
+      content: string;
+    }
+  | undefined {
+  const sessionId = useSessionId();
+  return useAppSelector((state) => {
+    const session = activeRuntimeOf(state, sessionId);
+    const summary = session?.latestConversationSummary;
+    if (!session || !summary) {
+      return undefined;
+    }
+    const loadedOffset = session.pagination.loadedOffset ?? 0;
+    const absoluteIndex = summary.sourceAbsoluteIndex;
+    if (absoluteIndex !== undefined) {
+      // O(1) check at the carrier's expected position; the id comparison
+      // guards against a stale index after an edit or a merge.
+      const relativeIndex = absoluteIndex - loadedOffset;
+      const carrier =
+        relativeIndex >= 0 && relativeIndex < session.history.length
+          ? session.history[relativeIndex]
+          : undefined;
+      if (carrier?.message.id === summary.sourceMessageId) {
+        return undefined;
+      }
+      // The index may have drifted (bubble merge). Only treat the carrier as
+      // trimmed when it really is absent, so a real carrier can never render
+      // next to the synthetic separator.
+      return session.history.some(
+        (item) => item.message.id === summary.sourceMessageId,
+      )
+        ? undefined
+        : summary;
+    }
+    // Legacy snapshot without an index: fall back to an id scan.
+    return session.history.some(
+      (item) => item.message.id === summary.sourceMessageId,
+    )
+      ? undefined
+      : summary;
+  });
+}
+
 export function useSessionPagination() {
   const sessionId = useSessionId();
   return useAppSelector((state) => {

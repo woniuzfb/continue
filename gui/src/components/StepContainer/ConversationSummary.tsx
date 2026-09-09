@@ -1,14 +1,9 @@
-import { TrashIcon } from "@heroicons/react/24/outline";
-import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/24/solid";
 import { ChatHistoryItem } from "core";
-import { useState } from "react";
-import { useAppSelector } from "../../redux/hooks";
 
 import { useDeleteCompaction } from "../../util/compactConversation";
 import { AnimatedEllipsis } from "../AnimatedEllipsis";
-import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
-import StyledMarkdownPreview from "../StyledMarkdownPreview";
 import { useSessionCompactionLoading } from "../../redux/selectors/sessionView";
+import { SummaryCard } from "./SummaryCard";
 
 interface ConversationSummaryProps {
   item: ChatHistoryItem;
@@ -16,7 +11,6 @@ interface ConversationSummaryProps {
 }
 
 export default function ConversationSummary(props: ConversationSummaryProps) {
-  const [open, setOpen] = useState(true);
   const messageId = (props.item.message as { id?: string }).id;
   const isLoading = useSessionCompactionLoading(messageId);
   const deleteCompaction = useDeleteCompaction();
@@ -39,44 +33,11 @@ export default function ConversationSummary(props: ConversationSummaryProps) {
     );
   }
 
-  // Normal state with content
   return (
-    <div className="mx-1.5 mb-4 mt-2">
-      <div className="bg-vsc-input-background rounded-md shadow-sm">
-        <div
-          className="text-description flex cursor-pointer items-center gap-2 px-3 py-2 text-xs transition-colors duration-200 hover:brightness-105"
-          onClick={() => setOpen(!open)}
-        >
-          {open ? (
-            <ChevronUpIcon className="h-3 w-3" />
-          ) : (
-            <ChevronDownIcon className="h-3 w-3" />
-          )}
-          <span className="flex-1">Conversation Summary</span>
-          <HeaderButtonWithToolTip
-            text="Delete summary"
-            onClick={(e) => {
-              e.stopPropagation();
-              deleteCompaction(props.index);
-            }}
-          >
-            <TrashIcon className="text-description-muted h-3 w-3" />
-          </HeaderButtonWithToolTip>
-        </div>
-        {open && (
-          <>
-            <div className="border-border border-0 border-t border-solid"></div>
-            <div className="max-h-[400px] w-full max-w-full overflow-x-auto px-3 pb-3 pt-2">
-              <StyledMarkdownPreview
-                isRenderingInStepContainer
-                source={props.item.conversationSummary}
-                itemIndex={props.index}
-                useParentBackgroundColor
-              />
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+    <SummaryCard
+      content={props.item.conversationSummary ?? ""}
+      itemIndex={props.index}
+      onDelete={() => deleteCompaction(props.index)}
+    />
   );
 }

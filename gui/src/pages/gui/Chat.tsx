@@ -29,6 +29,7 @@ import ContinueInputBox from "../../components/mainInput/ContinueInputBox";
 import { AttachmentMeta, AttachedFile } from "../../components/mainInput/types";
 import { useOnboardingCard } from "../../components/OnboardingCard";
 import StepContainer from "../../components/StepContainer";
+import { SyntheticConversationSummary } from "../../components/StepContainer/SyntheticConversationSummary";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useWebviewListener } from "../../hooks/useWebviewListener";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
@@ -704,6 +705,9 @@ export function Chat() {
             </div>
           </div>
         )}
+        {/* 方案.md §十一: the compact carrier may be trimmed out of the loaded
+            window; the boundary is then rendered synthetically at the head. */}
+        <SyntheticConversationSummary />
         {history
           .filter((item) => item.message.role !== "system")
           .map((item, index: number) => (

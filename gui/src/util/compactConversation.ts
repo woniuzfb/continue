@@ -126,13 +126,17 @@ export const useDeleteCompaction = () => {
   const historyTruncated = useSessionHistoryTruncated();
   const historyLoadedOffset = useSessionHistoryLoadedOffset() ?? 0;
 
-  return async (index: number) => {
+  /**
+   * `index` is relative to the loaded window by default (that is what the
+   * rendered items use). The synthetic separator knows the absolute index of a
+   * carrier that is *outside* the window, so it passes `{ absolute: true }`.
+   */
+  return async (index: number, options?: { absolute?: boolean }) => {
     // 懒加载兼容：前端 index 是基于部分 history 的相对位置，
     // deleteCompaction reducer 直接按 index 操作 state.history，
     // 需偏移为完整 history 中的绝对 index。先加载完整 history。
-    let absoluteIndex = index;
+    let absoluteIndex = options?.absolute ? index : index + historyLoadedOffset;
     if (historyTruncated) {
-      absoluteIndex = index + historyLoadedOffset;
       try {
         await dispatch(loadFullHistory({ sessionId })).unwrap();
       } catch (e) {
