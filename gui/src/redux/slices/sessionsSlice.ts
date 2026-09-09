@@ -142,6 +142,11 @@ export type SessionRuntimeState = {
   persistence?: SessionPersistenceState;
 
   pendingApprovalCount: number;
+  /**
+   * The loaded history contains a turn that cannot be resumed (a restart lost
+   * its request/aborter/tool context). 方案.md §八 interrupted semantics.
+   */
+  interrupted?: boolean;
   dirty: boolean;
   lifecycle: { closing: boolean };
 };
@@ -928,6 +933,15 @@ export const sessionsSlice = createSlice({
         lastItem.isGatheringContext = action.payload.gathering;
       }
     },
+    setSessionInterrupted: (
+      state,
+      action: PayloadAction<{ sessionId: string; interrupted: boolean }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.interrupted = action.payload.interrupted;
+      }
+    },
     setSessionLastNonEditSessionWasEmpty: (
       state,
       action: PayloadAction<{ sessionId: string; isEmpty: boolean }>,
@@ -1228,6 +1242,7 @@ export const {
   setSessionMainEditorDraft,
   setSessionMainEditorContentTrigger,
   setSessionMainEditorAttachmentsRestore,
+  setSessionInterrupted,
   setSessionLastNonEditSessionWasEmpty,
   setSessionMergeSettings,
   setSessionGatheringContext,

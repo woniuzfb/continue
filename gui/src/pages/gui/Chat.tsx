@@ -61,6 +61,7 @@ import { FatalErrorIndicator } from "../../components/config/FatalErrorNotice";
 import { DeprecationBanner } from "../../components/DeprecationBanner";
 import InlineErrorMessage from "../../components/mainInput/InlineErrorMessage";
 import SessionSaveErrorBanner from "../../components/mainInput/SessionSaveErrorBanner";
+import InterruptedSessionBanner from "../../components/mainInput/InterruptedSessionBanner";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
 import { stopActiveSessionStream } from "../../redux/thunks/sessionStreams";
@@ -708,6 +709,7 @@ export function Chat() {
           ))}
       </StepsDiv>
       <div className={"relative shrink-0"}>
+        <InterruptedSessionBanner />
         <SessionSaveErrorBanner />
         <ContinueInputBox
           isMainInput

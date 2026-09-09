@@ -10,6 +10,7 @@ import {
   removeSessionRuntime,
   setActiveSessionId,
   setSessionClosing,
+  setSessionInterrupted,
   setTabLoadState,
 } from "../slices/sessionsSlice";
 import type { RootState, ThunkApiType } from "../store";
@@ -21,6 +22,7 @@ import {
 } from "./sessionMetrics";
 import { getSession, getSessionPage } from "./session";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { hasUnresumableTurn } from "./sessionInterruption";
 
 /**
  * Phase 1 tab activation pipeline (方案.md §五.16/§五.17/§五.19).
@@ -124,6 +126,12 @@ export const loadSessionRuntime = createAsyncThunk<
       });
 
       dispatch(createSessionRuntime({ session: runtime }));
+      // 方案.md §八: a restart cannot resume a turn whose tool calls are still
+      // generating/calling; the session is marked interrupted for the
+      // Retry/Dismiss entry point.
+      if (hasUnresumableTurn(history)) {
+        dispatch(setSessionInterrupted({ sessionId, interrupted: true }));
+      }
       dispatch(setTabLoadState({ sessionId, loadState: "loaded" }));
     } catch (e) {
       // Keep the descriptor (retry UI) and never create a pseudo-empty
