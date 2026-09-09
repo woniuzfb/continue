@@ -157,7 +157,9 @@ describe("HistoryManager truncated-history save (regression)", () => {
       historyTruncated: true,
       historyLoadedOffset: 10,
     };
-    await historyManager.save(bad);
+    const err: any = await historyManager.save(bad).catch((e) => e);
+    expect(err.message).toContain("Failed to merge truncated history");
+    expect(err.code).toBe("TRUNCATED_OFFSET_INVALID");
 
     // Disk must be UNCHANGED — the frozen head was not dropped.
     const after = readDisk(sessionId);
@@ -166,6 +168,42 @@ describe("HistoryManager truncated-history save (regression)", () => {
     expect(after.history.some((h) => h.message.content === "tail-only")).toBe(
       false,
     );
+  });
+
+  it("rejects a truncated save when its claimed disk baseline is missing", async () => {
+    const sessionId = uuidv4();
+    const err: any = await historyManager
+      .save({
+        sessionId,
+        title: "missing baseline",
+        workspaceDirectory: "ws",
+        history: [msg("user", "tail-only")],
+        historyTruncated: true,
+        historyLoadedOffset: 1,
+      })
+      .catch((e) => e);
+    expect(err.message).toContain("Failed to merge truncated history");
+    expect(err.code).toBe("TRUNCATED_BASELINE_MISSING");
+    expect(fs.existsSync(getSessionFilePath(sessionId))).toBe(false);
+  });
+
+  it("rejects a truncated save when the disk baseline cannot be parsed", async () => {
+    const sessionId = uuidv4();
+    const sessionFile = getSessionFilePath(sessionId);
+    fs.writeFileSync(sessionFile, "{not-json", "utf8");
+    const err: any = await historyManager
+      .save({
+        sessionId,
+        title: "invalid baseline",
+        workspaceDirectory: "ws",
+        history: [msg("user", "tail-only")],
+        historyTruncated: true,
+        historyLoadedOffset: 1,
+      })
+      .catch((e) => e);
+    expect(err.message).toContain("Failed to merge truncated history");
+    expect(err.code).toBe("SESSION_FILE_INVALID");
+    expect(fs.readFileSync(sessionFile, "utf8")).toBe("{not-json");
   });
 
   it("leaves no .tmp scratch files behind after an atomic save", async () => {

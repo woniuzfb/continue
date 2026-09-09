@@ -17,6 +17,7 @@ import {
   decodePromptLogDeltas,
   encodePromptLogDeltas,
 } from "./promptLogDelta.js";
+import { SessionPersistenceError } from "./sessionPersistenceError.js";
 function safeParseArray<T>(
   value: string,
   errorMessage: string = "Error parsing array",
@@ -440,49 +441,50 @@ export class HistoryManager {
     if (session.historyTruncated) {
       // historyLoadedOffset = 头部未加载条数
       const headCount = session.historyLoadedOffset ?? 0;
-      try {
-        const sessionFile = getSessionFilePath(session.sessionId);
-        if (fs.existsSync(sessionFile)) {
-          const existing: Session = JSON.parse(
-            fs.readFileSync(sessionFile, "utf8"),
+      const sessionFile = getSessionFilePath(session.sessionId);
+      let existing: Session | undefined;
+      if (fs.existsSync(sessionFile)) {
+        try {
+          existing = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+        } catch (e) {
+          // 读取/解析磁盘历史失败：无法确认能安全合并，放弃写入而不是破坏性覆盖。
+          throw new SessionPersistenceError(
+            "SESSION_FILE_INVALID",
+            `[history] Failed to merge truncated history for ` +
+              `${session.sessionId}; leaving session file unchanged to avoid ` +
+              `data loss: ${e}`,
+            { cause: e },
           );
-          const existingHistory = existing.history || [];
-          if (headCount <= existingHistory.length) {
-            finalHistory = [
-              ...existingHistory.slice(0, headCount),
-              ...session.history,
-            ];
-          } else {
-            // 磁盘上的历史比预期的头部还短 —— 数据模型已不一致。
-            // 若继续，orderedSession.history 只会是内存尾部，覆盖后头部永久丢失。
-            // 放弃写入，保留磁盘完整文件。
-            console.error(
-              `[history] Refusing truncated-history save for ` +
-                `${session.sessionId}: historyLoadedOffset=${headCount} exceeds ` +
-                `on-disk history length ${existingHistory.length}. Leaving ` +
-                `session file unchanged to avoid dropping the frozen head.`,
-            );
-            return;
-          }
-        } else if (headCount > 0) {
-          // 声称头部被冻结却找不到源文件 —— 直接写会只落尾部并丢头。放弃写入。
-          console.error(
-            `[history] Refusing truncated-history save for ` +
-              `${session.sessionId}: historyLoadedOffset=${headCount} but no ` +
-              `session file on disk. Leaving state unchanged to avoid data loss.`,
-          );
-          return;
         }
-        // headCount === 0 且无文件：全新会话，session.history 即完整历史，正常写入。
-      } catch (e) {
-        // 读取/解析磁盘历史失败：无法确认能安全合并，放弃写入而不是破坏性覆盖。
-        console.error(
+      } else if (headCount > 0) {
+        // 声称头部被冻结却找不到源文件 —— 直接写会只落尾部并丢头。放弃写入。
+        throw new SessionPersistenceError(
+          "TRUNCATED_BASELINE_MISSING",
           `[history] Failed to merge truncated history for ` +
-            `${session.sessionId}; leaving session file unchanged to avoid ` +
-            `data loss: ${e}`,
+            `${session.sessionId}: historyLoadedOffset=${headCount} but no ` +
+            `session file on disk. Leaving state unchanged to avoid data loss.`,
         );
-        return;
       }
+      if (existing) {
+        const existingHistory = existing.history || [];
+        if (headCount > existingHistory.length) {
+          // 磁盘上的历史比预期的头部还短 —— 数据模型已不一致。
+          // 若继续，orderedSession.history 只会是内存尾部，覆盖后头部永久丢失。
+          // 放弃写入，保留磁盘完整文件。
+          throw new SessionPersistenceError(
+            "TRUNCATED_OFFSET_INVALID",
+            `[history] Failed to merge truncated history for ` +
+              `${session.sessionId}: historyLoadedOffset=${headCount} exceeds ` +
+              `on-disk history length ${existingHistory.length}. Leaving ` +
+              `session file unchanged to avoid dropping the frozen head.`,
+          );
+        }
+        finalHistory = [
+          ...existingHistory.slice(0, headCount),
+          ...session.history,
+        ];
+      }
+      // headCount === 0 且无文件：全新会话，session.history 即完整历史，正常写入。
     }
 
     // 写盘瘦身（见 stripAttachedFileContent 注释）：覆盖合并后的完整 history
@@ -535,7 +537,11 @@ export class HistoryManager {
       } catch {
         // 忽略清理错误
       }
-      throw e;
+      throw new SessionPersistenceError(
+        "SESSION_SAVE_FAILED",
+        `[history] Failed to save session ${session.sessionId}: ${e}`,
+        { cause: e },
+      );
     }
 
     // Read and update the sessions list（全局锁串行化，防止两个进程并发保存

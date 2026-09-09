@@ -195,12 +195,14 @@ export const streamNormalInput = createAsyncThunk<
 
     // TODO parallel tool calls will cause issues with this
     // because there will be multiple tool messages, so which one should have applied rules?
-    dispatch(
-      setAppliedRulesAtIndex({
-        index: appliedRuleIndex,
-        appliedRules: appliedRules,
-      }),
-    );
+    if (appliedRuleIndex >= 0) {
+      dispatch(
+        setAppliedRulesAtIndex({
+          index: appliedRuleIndex,
+          appliedRules: appliedRules,
+        }),
+      );
+    }
 
     dispatch(setActive());
     dispatch(setInlineErrorMessage(undefined));

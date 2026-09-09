@@ -89,7 +89,15 @@ export class VsCodeWebviewProtocol
             respond({ done: true, status: "error" });
           }
           let message = e.message;
-          respond({ done: true, error: message, status: "error" });
+          // Phase 0.1: forward the structured persistence error code so the GUI
+          // can branch on `code` instead of matching error text.
+          const errorCode = typeof e?.code === "string" ? e.code : undefined;
+          respond({
+            done: true,
+            error: message,
+            status: "error",
+            ...(errorCode ? { errorCode } : {}),
+          });
 
           const stringified = JSON.stringify({ msg }, null, 2);
           console.error(

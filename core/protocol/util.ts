@@ -1,9 +1,16 @@
 import { FromWebviewProtocol } from ".";
+import type { SessionPersistenceErrorCode } from "../util/sessionPersistenceError";
 
 export interface ErrorWebviewMessage {
   status: "error";
   error: string;
   done: true;
+  /**
+   * Structured persistence error code (Phase 0.1). Optional so older hosts
+   * and unrelated errors stay wire-compatible. GUI branches on this, never on
+   * `error` text.
+   */
+  errorCode?: SessionPersistenceErrorCode;
 }
 
 export interface SuccessWebviewSingleMessage<T> {
