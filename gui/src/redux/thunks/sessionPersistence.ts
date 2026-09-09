@@ -9,6 +9,7 @@ import {
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { createAndActivateSession } from "./sessionActivation";
+import { releaseClosingSessionIfClean } from "./sessionLifecycle";
 
 /**
  * Phase 1/2 save path (方案.md §五.10/§七.5).
@@ -112,6 +113,8 @@ async function performSave(
       hasPersistedBaseline: true,
     }),
   );
+  // A hidden owner that is now clean can be released (方案.md §八).
+  void dispatch(releaseClosingSessionIfClean({ sessionId }));
 }
 
 function startSaveLoop(sessionId: string, thunkApi: any): Promise<void> {

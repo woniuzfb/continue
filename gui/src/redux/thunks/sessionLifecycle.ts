@@ -212,6 +212,41 @@ export const deleteSessionRuntime = createAsyncThunk<
   },
 );
 
+/**
+ * Hidden-owner release (方案.md §八): a closed session keeps its runtime while
+ * it streams, saves, fails or awaits approval. Once it is clean, idle and has
+ * no pending approval, the owner is released.
+ */
+export const releaseClosingSessionIfClean = createAsyncThunk<
+  boolean,
+  { sessionId: string },
+  ThunkApiType
+>(
+  "sessions/releaseClosingIfClean",
+  async ({ sessionId }, { dispatch, getState }) => {
+    const state = getState();
+    const session = selectSessionById(state, sessionId);
+    if (!session || !session.lifecycle.closing) {
+      return false;
+    }
+    // Still visible: the tab was reopened.
+    if (selectTabDescriptor(state, sessionId)) {
+      return false;
+    }
+    if (session.stream.status === "streaming") {
+      return false;
+    }
+    if (session.pendingApprovalCount > 0) {
+      return false;
+    }
+    if (session.dirty || session.persistence?.state === "failed") {
+      return false;
+    }
+    dispatch(removeSessionRuntime({ sessionId }));
+    return true;
+  },
+);
+
 /** Ensure a runtime exists for a session without activating it. */
 export const ensureSessionRuntime = createAsyncThunk<
   void,

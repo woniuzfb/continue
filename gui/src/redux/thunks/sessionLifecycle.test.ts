@@ -6,6 +6,7 @@ import { initialSessionRuntime } from "../slices/sessionsSlice";
 import { resetSessionSaveQueues } from "./sessionPersistence";
 import {
   bootstrapLastSession,
+  releaseClosingSessionIfClean,
   deleteSessionRuntime,
   ensureSessionRuntime,
   openSessionTab,
@@ -247,5 +248,77 @@ describe("sessionLifecycle", () => {
     await run(store, ensureSessionRuntime({ sessionId: "s1" }));
 
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("releaseClosingSessionIfClean", () => {
+  it("releases a closed, clean and idle hidden owner", async () => {
+    const runtime = initialSessionRuntime("s1", "One", {
+      lifecycle: { closing: true },
+    });
+    // A closed tab has no descriptor and no tabOrder entry.
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: undefined,
+        tabOrder: [],
+        tabDescriptors: {},
+        sessionsById: { s1: runtime },
+      },
+    });
+
+    expect(
+      await run(store, releaseClosingSessionIfClean({ sessionId: "s1" })),
+    ).toBe(true);
+    expect(sessions(store).sessionsById["s1"]).toBeUndefined();
+  });
+
+  it("keeps the owner while it streams, awaits approval, is dirty or still visible", async () => {
+    const streaming = initialSessionRuntime("s1", "One", {
+      lifecycle: { closing: true },
+      stream: { status: "streaming", requestId: "req-1" },
+    });
+    const streamStore = createMockStore({
+      sessions: {
+        activeSessionId: undefined,
+        tabOrder: [],
+        tabDescriptors: {},
+        sessionsById: { s1: streaming },
+      },
+    });
+    expect(
+      await run(streamStore, releaseClosingSessionIfClean({ sessionId: "s1" })),
+    ).toBe(false);
+    expect(sessions(streamStore).sessionsById["s1"]).toBeDefined();
+
+    const dirty = initialSessionRuntime("s1", "One", {
+      lifecycle: { closing: true },
+      dirty: true,
+    });
+    const dirtyStore = createMockStore({
+      sessions: {
+        activeSessionId: undefined,
+        tabOrder: [],
+        tabDescriptors: {},
+        sessionsById: { s1: dirty },
+      },
+    });
+    expect(
+      await run(dirtyStore, releaseClosingSessionIfClean({ sessionId: "s1" })),
+    ).toBe(false);
+
+    const visible = initialSessionRuntime("s1", "One", {
+      lifecycle: { closing: true },
+    });
+    const visibleStore = makeStore({
+      runtimes: { s1: visible },
+      tabOrder: ["s1"],
+      activeSessionId: "s1",
+    });
+    expect(
+      await run(
+        visibleStore,
+        releaseClosingSessionIfClean({ sessionId: "s1" }),
+      ),
+    ).toBe(false);
   });
 });
