@@ -20,10 +20,17 @@ import editModeStateReducer from "./slices/editState";
 import indexingReducer from "./slices/indexingSlice";
 import { profilesReducer } from "./slices/profilesSlice";
 import sessionReducer from "./slices/sessionSlice";
+import sessionCatalogReducer from "./slices/sessionCatalogSlice";
+import sessionsReducer from "./slices/sessionsSlice";
 import tabsReducer from "./slices/tabsSlice";
 import uiReducer from "./slices/uiSlice";
 
 const rootReducer = combineReducers({
+  // Phase 1: sessions/sessionCatalog are the target state shape. The legacy
+  // session/tabs/editModeState slices are still registered while consumers
+  // migrate; they are removed together with the v1->v2 persist bump.
+  sessions: sessionsReducer,
+  sessionCatalog: sessionCatalogReducer,
   session: sessionReducer,
   ui: uiReducer,
   editModeState: editModeStateReducer,
@@ -61,6 +68,10 @@ const saveSubsetFilters = [
   createFilter("indexing", []),
   createFilter("tabs", ["tabs"]),
   createFilter("profiles", ["preferencesByProfileId", "selectedProfileId"]),
+  // Phase 1 target shape: only the tab projection and the catalog pointer.
+  // sessionsById / history / streams / aborters are never persisted.
+  createFilter("sessions", ["activeSessionId", "tabOrder", "tabDescriptors"]),
+  createFilter("sessionCatalog", ["lastSessionId"]),
 ];
 
 const migrations: MigrationManifest = {

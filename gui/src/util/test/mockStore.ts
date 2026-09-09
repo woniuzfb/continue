@@ -18,6 +18,12 @@ import {
 import sessionReducer, {
   INITIAL_SESSION_STATE,
 } from "../../redux/slices/sessionSlice";
+import sessionCatalogReducer, {
+  initialSessionCatalogState as INITIAL_SESSION_CATALOG_STATE,
+} from "../../redux/slices/sessionCatalogSlice";
+import sessionsReducer, {
+  initialSessionsState as INITIAL_SESSIONS_STATE,
+} from "../../redux/slices/sessionsSlice";
 import tabsReducer, { INITIAL_TABS_STATE } from "../../redux/slices/tabsSlice";
 import uiReducer, { DEFAULT_UI_SLICE } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
@@ -25,6 +31,8 @@ import { RootState } from "../../redux/store";
 // TODO remove non-serializable streamAborter, causes headaches
 export const getEmptyRootState: () => RootState = () => {
   const withoutSession: Omit<RootState, "session"> = {
+    sessions: INITIAL_SESSIONS_STATE,
+    sessionCatalog: INITIAL_SESSION_CATALOG_STATE,
     config: INITIAL_CONFIG_SLICE,
     ui: DEFAULT_UI_SLICE,
     editModeState: INITIAL_EDIT_STATE,
@@ -62,6 +70,8 @@ export const createMockStore = (
 
   const store = configureStore({
     reducer: {
+      sessions: sessionsReducer,
+      sessionCatalog: sessionCatalogReducer,
       session: sessionReducer,
       ui: uiReducer,
       editModeState: editModeStateReducer,
