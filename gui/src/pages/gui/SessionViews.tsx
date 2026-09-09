@@ -7,6 +7,7 @@ import {
 import { MainEditorProvider } from "../../components/mainInput/TipTapEditor";
 import { SessionScope } from "../../components/mainInput/TipTapEditor/SessionScope";
 import { Chat } from "./Chat";
+import { SessionBootstrapView } from "./SessionBootstrapView";
 
 /**
  * 方案.md §九.1/§九.2: every open tab stays mounted with its own editor and its
@@ -39,8 +40,9 @@ export function SessionViews() {
   const activeSessionId = useAppSelector(selectActiveSessionId);
 
   if (tabOrder.length === 0) {
-    // Before the first session is bootstrapped there is nothing to scope.
-    return <MemoizedChat />;
+    // Never render a bare `Chat`: it calls `useSessionId()`, which throws
+    // outside a SessionScope. The placeholder runs the startup pipeline.
+    return <SessionBootstrapView />;
   }
 
   return (

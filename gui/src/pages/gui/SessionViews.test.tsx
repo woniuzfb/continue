@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { waitFor } from "@testing-library/react";
 import type { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionHistory";
 import { initialSessionRuntime } from "../../redux/slices/sessionsSlice";
+import { createMockStore } from "../../util/test/mockStore";
+import { resetEnsureActiveSessionLoad } from "../../redux/thunks/sessionLifecycle";
 import { renderWithProviders } from "../../util/test/render";
 import { SessionViews } from "./SessionViews";
 
@@ -16,6 +19,65 @@ function item(id: string, content: string): ChatHistoryItemWithMessageId {
 }
 
 describe("SessionViews", () => {
+  beforeEach(() => resetEnsureActiveSessionLoad());
+
+  it("renders a scoped placeholder instead of a bare Chat while there is no tab", async () => {
+    // Chat calls useSessionId(), which throws outside a SessionScope. A store
+    // whose runtime exists but whose tab projection is empty (first boot before
+    // bootstrap, or the last tab was just closed) must not render it.
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: undefined,
+        tabOrder: [],
+        tabDescriptors: {},
+        sessionsById: {
+          orphan: initialSessionRuntime("orphan", "Orphan"),
+        },
+      },
+    });
+    // Keep the startup pipeline pending so the placeholder state is observable.
+    store.mockIdeMessenger.responseHandlers["history/list"] = () =>
+      new Promise(() => {});
+
+    const { container } = await renderWithProviders(<SessionViews />, {
+      store: store as any,
+    });
+
+    expect(
+      container.querySelector("[data-testid='session-bootstrap']"),
+    ).not.toBeNull();
+    // No Chat tree (and therefore no editor) without a scope.
+    expect(container.querySelector("[data-testid^='editor-input']")).toBeNull();
+    expect((store.getState() as any).sessions.tabOrder).toEqual([]);
+  });
+
+  it("mounts the scoped tab tree once the startup pipeline created a session", async () => {
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: undefined,
+        tabOrder: [],
+        tabDescriptors: {},
+        sessionsById: {
+          orphan: initialSessionRuntime("orphan", "Orphan"),
+        },
+      },
+    });
+
+    const { container } = await renderWithProviders(<SessionViews />, {
+      store: store as any,
+    });
+
+    await waitFor(() => {
+      expect((store.getState() as any).sessions.tabOrder).toHaveLength(1);
+    });
+    await waitFor(() => {
+      // SessionScope + MainEditorProvider + Chat, each with its own editor.
+      expect(
+        container.querySelector("[data-testid^='editor-input']"),
+      ).not.toBeNull();
+    });
+  });
+
   it("keeps one mounted tree per tab and hides the inactive one", async () => {
     const { store, container } = await renderWithProviders(<SessionViews />);
     const state = store.getState() as any;

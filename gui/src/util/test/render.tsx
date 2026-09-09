@@ -73,17 +73,29 @@ export async function renderWithProviders(
 
   const user = userEvent.setup();
 
+  // A caller may deliberately render a store without any session (for example
+  // to exercise the empty `SessionViews` bootstrap placeholder). In that case
+  // there is no session to scope, and wrapping in `SessionScope("")` would make
+  // every `useSessionId()` throw — the component under test must provide its
+  // own scope instead.
+  const scoped = (children: React.ReactNode) =>
+    seedSessionId ? (
+      <SessionScope sessionId={seedSessionId}>
+        <MainEditorProvider sessionId={seedSessionId}>
+          {children}
+        </MainEditorProvider>
+      </SessionScope>
+    ) : (
+      <>{children}</>
+    );
+
   const Wrapper = ({ children }: PropsWithChildren) => (
     <MemoryRouter {...routerProps}>
       <IdeMessengerProvider messenger={ideMessenger}>
         <Provider store={store}>
           <AuthProvider>
-            <SessionScope sessionId={seedSessionId}>
-              <MainEditorProvider sessionId={seedSessionId}>
-                {children}
-                <ParallelListeners />
-              </MainEditorProvider>
-            </SessionScope>
+            {scoped(children)}
+            <ParallelListeners />
           </AuthProvider>
         </Provider>
       </IdeMessengerProvider>
