@@ -284,9 +284,24 @@ function invalidateContextMetrics(session: SessionRuntimeState): void {
  * applied rules, summary, mode) marks the session dirty and advances
  * `historyRevision`, which is what the metrics recompute gate compares.
  */
+/**
+ * Every request-relevant content mutation bumps `historyRevision` (metrics
+ * staleness) *and* `persistence.revision` (save staleness, 方案.md §七.3/§七.6).
+ *
+ * The persistence counter used to move only on submit/title, so a save that
+ * completed after a compact/delete/edit still compared as "current": it marked
+ * the session clean although newer content was queued, and its response could
+ * overwrite the newer derived metadata.
+ */
 function markHistoryChanged(session: SessionRuntimeState): void {
   session.dirty = true;
   session.historyRevision += 1;
+  const persistence = session.persistence ?? initialPersistenceState();
+  session.persistence = {
+    ...persistence,
+    state: persistence.state === "saving" ? "saving" : "pending",
+    revision: persistence.revision + 1,
+  };
 }
 
 export const sessionsSlice = createSlice({

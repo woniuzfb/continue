@@ -3,6 +3,7 @@ import { createMockStore } from "../../util/test/mockStore";
 import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
+  deleteCompactionByMessageId,
   initialSessionRuntime,
   markSessionDirty,
 } from "../slices/sessionsSlice";
@@ -212,6 +213,69 @@ describe("sessionPersistence.saveSession", () => {
       persistedRevision: 2,
     });
     expect(session.dirty).toBe(true);
+  });
+
+  it("does not restore derived metadata from a stale save response", async () => {
+    const store = makeStore({
+      history: [
+        item("u1", "user", "hi"),
+        {
+          ...item("a1", "assistant", "yo"),
+          conversationSummary: "stale summary",
+        },
+      ],
+      firstTurnItems: [item("u1", "user", "hi")],
+      latestConversationSummary: {
+        sourceMessageId: "a1",
+        sourceAbsoluteIndex: 1,
+        content: "stale summary",
+      },
+    });
+
+    let resolveSave: ((value: any) => void) | undefined;
+    store.mockIdeMessenger.request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    ) as any;
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await vi.waitFor(() => {
+      expect(resolveSave).toBeDefined();
+    });
+
+    // The user deletes the compaction while the save is in flight: the runtime
+    // summary and the carrier are cleared and a new save is queued.
+    store.dispatch(
+      deleteCompactionByMessageId({ sessionId: "s1", messageId: "a1" }),
+    );
+    // The content change must move the persistence counter, otherwise the
+    // response below would still compare as "current".
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.persistence?.revision,
+    ).toBe(3);
+
+    resolveSave!({
+      status: "success",
+      content: {
+        firstTurnItems: [],
+        totalHistoryCount: 2,
+        latestConversationSummary: {
+          sourceMessageId: "a1",
+          sourceAbsoluteIndex: 1,
+          content: "stale summary",
+        },
+      },
+      done: true,
+    });
+    await save;
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    // The response describes the pre-delete content; applying it would feed a
+    // deleted summary to the Local Provider until the next save lands.
+    expect(session.latestConversationSummary).toBeUndefined();
+    expect(session.persistence?.state).toBe("pending");
   });
 
   it("is a no-op for a session that has no runtime", async () => {

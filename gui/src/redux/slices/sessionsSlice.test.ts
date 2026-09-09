@@ -137,6 +137,26 @@ describe("sessionsSlice — ownership", () => {
     expect(state.activeSessionId).toBe("s1");
   });
 
+  it("bumps the persistence revision on every content mutation", () => {
+    // 方案.md §七.3/§七.6: the save queue and the stale-response guard compare
+    // this counter, so a compact/delete/edit must move it, not only submit.
+    let state = stateWith({ history: [item("u1", "user", "hi")] });
+    const before = state.sessionsById.s1.persistence?.revision ?? 0;
+
+    state = sessionsSlice.reducer(
+      state,
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "u1",
+        updates: { conversationSummary: "compacted" },
+      }),
+    );
+
+    expect(state.sessionsById.s1.persistence?.revision).toBe(before + 1);
+    expect(state.sessionsById.s1.persistence?.state).toBe("pending");
+    expect(state.sessionsById.s1.dirty).toBe(true);
+  });
+
   it("keeps the runtime summary in sync with compact / delete", () => {
     let state = stateWith({ history: [item("u1", "user", "hi")] });
     state = sessionsSlice.reducer(

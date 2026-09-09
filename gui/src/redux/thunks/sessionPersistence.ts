@@ -94,10 +94,16 @@ async function performSave(
     throw new Error(result.error);
   }
 
-  // 方案.md §七.8.1: the response carries the authoritative post-merge data.
-  // Only the disk accounting is applied now; firstTurnItems are loaded and
-  // maintained in Phase 4 (方案.md §五.5).
-  if (result.content?.totalHistoryCount !== undefined) {
+  // 方案.md §七.8.1: the response carries the authoritative post-merge data for
+  // the snapshot that was sent. If the session changed while the save was in
+  // flight (`persistence.revision` moved on), the response describes older
+  // content: its disk-derived metadata must not overwrite the newer runtime
+  // state. The save itself still counts as persisted at its own revision.
+  const current = selectSessionById(getState(), sessionId);
+  const responseIsCurrent =
+    current !== undefined && current.persistence?.revision === request.revision;
+
+  if (responseIsCurrent && result.content?.totalHistoryCount !== undefined) {
     dispatch(
       setSessionPagination({
         sessionId,
@@ -108,7 +114,7 @@ async function performSave(
   // The response is authoritative: an empty first turn must *clear* the old
   // one, otherwise a deleted/emptied session keeps serving a stale first turn
   // (方案.md §五.5).
-  if (result.content?.firstTurnItems !== undefined) {
+  if (responseIsCurrent && result.content?.firstTurnItems !== undefined) {
     dispatch(
       setSessionFirstTurn({
         sessionId,
@@ -120,7 +126,7 @@ async function performSave(
   // response omit it, and a leftover summary would keep feeding
   // `conversationSummaryOverride` to the Local Provider (方案.md §七.8.1).
   const summary = result.content?.latestConversationSummary;
-  if (summary?.sourceMessageId && summary.content) {
+  if (responseIsCurrent && summary?.sourceMessageId && summary.content) {
     dispatch(
       setSessionConversationSummary({
         sessionId,
@@ -131,7 +137,7 @@ async function performSave(
         },
       }),
     );
-  } else {
+  } else if (responseIsCurrent) {
     dispatch(clearSessionConversationSummary({ sessionId }));
   }
 
