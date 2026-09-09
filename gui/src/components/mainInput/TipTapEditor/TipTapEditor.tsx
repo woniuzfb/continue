@@ -18,9 +18,9 @@ import useUpdatingRef from "../../../hooks/useUpdatingRef";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { selectSelectedChatModel } from "../../../redux/slices/configSlice";
 import {
-  setMainEditorAttachmentsRestore,
-  setMainEditorDraft,
-} from "../../../redux/slices/sessionSlice";
+  setSessionMainEditorAttachmentsRestore,
+  setSessionMainEditorDraft,
+} from "../../../redux/slices/sessionsSlice";
 import InputToolbar, { ToolbarOptions } from "../InputToolbar";
 import { ComboBoxItem, AttachedFile } from "../types";
 import {
@@ -44,6 +44,7 @@ import {
   selectActiveIsStreaming,
   selectActiveMainEditorAttachmentsRestore,
   selectActiveMainEditorDraft,
+  selectActiveSessionId,
 } from "../../../redux/selectors/sessionView";
 
 /** Cap for packing a single binary attachment (~112 MB of raw data). Larger
@@ -209,6 +210,7 @@ function TipTapEditorInner(props: TipTapEditorProps) {
     (state) =>
       (state.config.config.ui?.attachmentSplitThresholdMB ?? 1) * 1024 * 1024,
   );
+  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
   const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
   const historyLength = useAppSelector(
     (store) => selectActiveHistory(store).length,
@@ -238,7 +240,12 @@ function TipTapEditorInner(props: TipTapEditorProps) {
       return;
     }
     setAttachedFiles((prev) => (prev.length === 0 ? attachmentsRestore : prev));
-    dispatch(setMainEditorAttachmentsRestore(undefined));
+    dispatch(
+      setSessionMainEditorAttachmentsRestore({
+        sessionId,
+        attachments: undefined,
+      }),
+    );
   }, [attachmentsRestore, props.isMainInput, dispatch]);
 
   // Wrap props.onEnter so that when attached files are present, they are
@@ -327,7 +334,9 @@ function TipTapEditorInner(props: TipTapEditorProps) {
     }
     return () => {
       if (editor && !editor.isDestroyed) {
-        dispatch(setMainEditorDraft(editor.getJSON()));
+        dispatch(
+          setSessionMainEditorDraft({ sessionId, draft: editor.getJSON() }),
+        );
       }
     };
   }, [props.isMainInput, editor, dispatch]);

@@ -8,12 +8,15 @@ import React, {
   useState,
 } from "react";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
-import { setMainEditorContentTrigger } from "../../../redux/slices/sessionSlice";
+import { setSessionMainEditorContentTrigger } from "../../../redux/slices/sessionsSlice";
 import { useMainEditorWebviewListeners } from "./useMainEditorWebviewListeners";
 import {
   selectActiveHistory,
   selectActiveMainEditorContentTrigger,
+  selectActiveSessionId,
 } from "../../../redux/selectors/sessionView";
+import { useStore } from "react-redux";
+import type { RootState } from "../../../redux/store";
 
 /**
  * Context for accessing the main editor instance
@@ -54,6 +57,7 @@ export const MainEditorProvider: React.FC<{ children: React.ReactNode }> = ({
   const [inputId, setInputId] = useState<string | null>(initialState.inputId);
   const onEnterRef = useRef<(modifiers: InputModifiers) => void>(() => {});
   const editorFocusedRef = useRef<boolean>(false);
+  const store = useStore<RootState>();
   const historyLength = useAppSelector(
     (store) => selectActiveHistory(store).length,
   );
@@ -69,7 +73,12 @@ export const MainEditorProvider: React.FC<{ children: React.ReactNode }> = ({
         mainEditor.commands.setContent(mainEditorContentTrigger);
       });
       // Clear the trigger after using it
-      dispatch(setMainEditorContentTrigger(undefined));
+      dispatch(
+        setSessionMainEditorContentTrigger({
+          sessionId: selectActiveSessionId(store.getState()),
+          content: undefined,
+        }),
+      );
     }
   }, [mainEditor, mainEditorContentTrigger, dispatch]);
 

@@ -1063,6 +1063,20 @@ export const sessionsSlice = createSlice({
     },
 
     // ── Runtime presentation ──────────────────────────────────────────────
+    setSessionNewestToolbarPreviewForInput: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        inputId: string;
+        contextItemId: string;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.newestToolbarPreviewForInput[action.payload.inputId] =
+          action.payload.contextItemId;
+      }
+    },
     setSessionSymbols: (
       state,
       action: PayloadAction<{ sessionId: string; symbols: FileSymbolMap }>,
@@ -1169,6 +1183,7 @@ export const {
   setSessionChatModelTitle,
   setSessionReasoningEnabled,
   setSessionReasoningPreferenceSource,
+  setSessionNewestToolbarPreviewForInput,
   setSessionSymbols,
   setSessionInlineError,
   setSessionContextMetrics,

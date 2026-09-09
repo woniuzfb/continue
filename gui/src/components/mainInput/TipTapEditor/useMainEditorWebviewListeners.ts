@@ -5,12 +5,15 @@ import { MutableRefObject } from "react";
 import { useWebviewListener } from "../../../hooks/useWebviewListener";
 import { useAppSelector } from "../../../redux/hooks";
 import { clearCodeToEdit } from "../../../redux/slices/editState";
-import { setNewestToolbarPreviewForInput } from "../../../redux/slices/sessionSlice";
+import { setSessionNewestToolbarPreviewForInput } from "../../../redux/slices/sessionsSlice";
 import { AppDispatch } from "../../../redux/store";
 import { loadSession, saveCurrentSession } from "../../../redux/thunks/session";
 import { CodeBlock, PromptBlock } from "./extensions";
 import { insertCurrentFileContextMention } from "./utils/insertCurrentFileContextMention";
-import { selectActiveIsInEdit } from "../../../redux/selectors/sessionView";
+import {
+  selectActiveIsInEdit,
+  selectActiveSessionId,
+} from "../../../redux/selectors/sessionView";
 
 /**
  * Hook for setting up main editor specific webview listeners
@@ -37,6 +40,7 @@ export function useMainEditorWebviewListeners({
     (state) => state.config.config.experimental?.useCurrentFileAsContext,
   );
   const isInEdit = useAppSelector((state) => selectActiveIsInEdit(state));
+  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
 
   useWebviewListener(
     "isContinueInputFocused",
@@ -142,7 +146,8 @@ export function useMainEditorWebviewListeners({
         .run();
 
       dispatch(
-        setNewestToolbarPreviewForInput({
+        setSessionNewestToolbarPreviewForInput({
+          sessionId,
           inputId,
           contextItemId: contextItem.id.itemId,
         }),
