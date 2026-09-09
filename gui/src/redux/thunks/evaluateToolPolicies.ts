@@ -2,11 +2,15 @@ import { ToolPolicy } from "@continuedev/terminal-security";
 import { Tool, ToolCallState } from "core";
 import { IIdeMessenger } from "../../context/IdeMessenger";
 import { isEditTool } from "../../util/toolCallState";
+import {
+  applySessionToolCallUpdate,
+  findSessionToolCallTarget,
+} from "../util/sessionToolCallWrites";
 import { errorToolCall, updateToolCallOutput } from "../slices/sessionSlice";
 import { DEFAULT_TOOL_SETTING, ToolPolicies } from "../slices/uiSlice";
-import { AppThunkDispatch } from "../store";
+import { AppThunkDispatch, RootState } from "../store";
 
-interface EvaluatedPolicy {
+export interface EvaluatedPolicy {
   policy: ToolPolicy;
   displayValue?: string;
   toolCallState: ToolCallState;
@@ -66,6 +70,85 @@ async function evaluateToolPolicy(
   return { policy: dynamicPolicy, displayValue, toolCallState };
 }
 
+function policyViolationContextItem(
+  toolCallState: ToolCallState,
+  displayValue: string | undefined,
+) {
+  const command = displayValue || toolCallState.toolCall.function.name;
+  return {
+    icon: "problems",
+    name: "Security Policy Violation",
+    description: "Command Disabled",
+    content: `This command has been disabled by security policy:\n\n${command}\n\nThis command cannot be executed as it may pose a security risk.`,
+    hidden: false,
+  };
+}
+
+/**
+ * Phase 1 session-scoped policy evaluation (方案.md §五.20).
+ *
+ * Tool call states come from `sessionsById[sessionId]`; disabled calls are
+ * marked errored through the shared tool-state write path. The returned
+ * policies are what the stream runner splits into auto-approved and
+ * needs-approval calls.
+ */
+export async function evaluateSessionToolPolicies(
+  api: {
+    dispatch: AppThunkDispatch;
+    getState: () => RootState;
+    ideMessenger: IIdeMessenger;
+  },
+  input: {
+    sessionId: string;
+    toolCallIds: string[];
+    activeTools: Tool[];
+    toolPolicies: ToolPolicies;
+  },
+): Promise<EvaluatedPolicy[]> {
+  const { ideMessenger } = api;
+  const { sessionId, toolCallIds, activeTools, toolPolicies } = input;
+
+  const resolved = toolCallIds
+    .map((toolCallId) => {
+      const session = api.getState().sessions.sessionsById[sessionId];
+      const target = session
+        ? findSessionToolCallTarget(session.history, toolCallId)
+        : undefined;
+      return target ? { target, toolCallId } : undefined;
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => !!entry);
+
+  const policyResults = await Promise.all(
+    resolved.map(async ({ target, toolCallId }) => {
+      const result = await evaluateToolPolicy(
+        ideMessenger,
+        activeTools,
+        target.toolCallState,
+        toolPolicies,
+      );
+      if (result.policy === "disabled") {
+        applySessionToolCallUpdate(api, {
+          sessionId,
+          messageId: target.assistantItem.message.id,
+          toolCallId,
+          patch: {
+            status: "errored",
+            output: [
+              policyViolationContextItem(
+                target.toolCallState,
+                result.displayValue,
+              ),
+            ],
+          },
+        });
+      }
+      return result;
+    }),
+  );
+
+  return policyResults;
+}
+
 /*
     1. Get arg-dependent tool policies from core
     2. Mark any disabled ones as errored
@@ -98,21 +181,10 @@ export async function evaluateToolPolicies(
     dispatch(errorToolCall({ toolCallId: toolCallState.toolCallId }));
 
     // Use the displayValue from the policy evaluation, or fallback to function name
-    const command = displayValue || toolCallState.toolCall.function.name;
-
-    // Add error message explaining why it's disabled
     dispatch(
       updateToolCallOutput({
         toolCallId: toolCallState.toolCallId,
-        contextItems: [
-          {
-            icon: "problems",
-            name: "Security Policy Violation",
-            description: "Command Disabled",
-            content: `This command has been disabled by security policy:\n\n${command}\n\nThis command cannot be executed as it may pose a security risk.`,
-            hidden: false,
-          },
-        ],
+        contextItems: [policyViolationContextItem(toolCallState, displayValue)],
       }),
     );
   }

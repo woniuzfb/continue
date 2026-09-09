@@ -1,4 +1,5 @@
 import { createSelector } from "@reduxjs/toolkit";
+import type { ModelDescription } from "core";
 import type { RootState } from "../store";
 import type {
   SessionRuntimeState,
@@ -58,6 +59,29 @@ export const selectSessionPendingApprovalCount = (
   state: RootState,
   sessionId: string,
 ): number => state.sessions.sessionsById[sessionId]?.pendingApprovalCount ?? 0;
+
+/**
+ * Model used by a session's own request (方案.md §五.17/§五.20).
+ *
+ * `selectSelectedChatModel` returns the *active tab's* projection, which must
+ * never leak into a background session's stream. This selector resolves the
+ * session's own `chatModelTitle` and falls back to the persisted user choice —
+ * never to `activeSessionModelProjection`.
+ */
+export const selectSessionChatModel = (
+  state: RootState,
+  sessionId: string,
+): ModelDescription | undefined => {
+  const chatModelTitle = state.sessions.sessionsById[sessionId]?.chatModelTitle;
+  if (chatModelTitle) {
+    const models = state.config.config?.modelsByRole?.chat ?? [];
+    const model = models.find((m) => m.title === chatModelTitle);
+    if (model) {
+      return model;
+    }
+  }
+  return state.config.config.selectedModelByRole.chat ?? undefined;
+};
 
 export const selectHasPendingApproval = (
   state: RootState,

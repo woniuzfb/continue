@@ -3,17 +3,20 @@ import { ChatMessage, ContextItem, McpUiState, ToolCallState } from "core";
 import { CLIENT_TOOLS_IMPLS } from "core/tools/builtIn";
 import { ContinueError, ContinueErrorReason } from "core/util/errors";
 import { renderContextItems } from "core/util/messageContent";
-import { toolCallCtxItemToCtxItemWithId } from "../../pages/gui/ToolCallDiv/utils";
 import { callClientTool } from "../../util/clientTools/callClientTool";
 import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
 import {
   applySessionStreamUpdate,
   type SessionRuntimeState,
-  updateHistoryItemByMessageId,
 } from "../slices/sessionsSlice";
 import { AppThunkDispatch, ThunkApiType, ThunkExtrasType } from "../store";
 import { findChatHistoryItemByToolCallId, logToolUsage } from "../util";
+import {
+  applySessionToolCallUpdate,
+  findSessionToolCallTarget,
+  type SessionToolCallTarget,
+} from "../util/sessionToolCallWrites";
 import { enqueueSessionSave } from "./sessionPersistence";
 
 /**
@@ -93,11 +96,8 @@ export function resetSessionStreamRunner(): void {
 
 // ── Target resolution ───────────────────────────────────────────────────
 
-type ToolCallTarget = {
+type ToolCallTarget = SessionToolCallTarget & {
   session: SessionRuntimeState;
-  /** The assistant item that owns `toolCallStates`. */
-  assistantItem: ChatHistoryItemWithMessageId;
-  toolCallState: ToolCallState;
 };
 
 type TargetGuard =
@@ -108,16 +108,8 @@ function locateToolCall(
   session: SessionRuntimeState,
   toolCallId: string,
 ): ToolCallTarget | undefined {
-  for (let i = session.history.length - 1; i >= 0; i--) {
-    const assistantItem = session.history[i];
-    const toolCallState = assistantItem.toolCallStates?.find(
-      (state) => state.toolCallId === toolCallId,
-    );
-    if (toolCallState) {
-      return { session, assistantItem, toolCallState };
-    }
-  }
-  return undefined;
+  const target = findSessionToolCallTarget(session.history, toolCallId);
+  return target ? { session, ...target } : undefined;
 }
 
 /**
@@ -144,16 +136,6 @@ function guardAwaitingToolCall(
     return { ok: false, reason: "not-awaiting-approval" };
   }
   return { ok: true, target };
-}
-
-function patchToolCall(
-  item: ChatHistoryItemWithMessageId,
-  toolCallId: string,
-  patch: Partial<ToolCallState>,
-): ToolCallState[] {
-  return (item.toolCallStates ?? []).map((state) =>
-    state.toolCallId === toolCallId ? { ...state, ...patch } : state,
-  );
 }
 
 function skipped(
@@ -265,21 +247,6 @@ function writeToolResult(
   return { ok: true, item };
 }
 
-function dispatchToolCallPatch(
-  dispatch: AppThunkDispatch,
-  sessionId: string,
-  messageId: string,
-  toolCallStates: ToolCallState[],
-): void {
-  dispatch(
-    updateHistoryItemByMessageId({
-      sessionId,
-      messageId,
-      updates: { toolCallStates },
-    }),
-  );
-}
-
 // ── Approve ─────────────────────────────────────────────────────────────
 
 type ApproveInput = {
@@ -324,13 +291,14 @@ async function runApproveToolCall(
   }
   const { target } = guard;
   const messageId = target.assistantItem.message.id;
+  const api = { dispatch, getState };
 
-  dispatchToolCallPatch(
-    dispatch,
+  applySessionToolCallUpdate(api, {
     sessionId,
     messageId,
-    patchToolCall(target.assistantItem, toolCallId, { status: "calling" }),
-  );
+    toolCallId,
+    patch: { status: "calling" },
+  });
 
   const execution = await executeToolCall(target.toolCallState, {
     dispatch,
@@ -347,39 +315,16 @@ async function runApproveToolCall(
     return skipped(toolCallId, write.reason);
   }
 
-  dispatchToolCallPatch(
-    dispatch,
+  applySessionToolCallUpdate(api, {
     sessionId,
     messageId,
-    patchToolCall(write.item, toolCallId, {
+    toolCallId,
+    patch: {
       status: execution.error ? "errored" : "done",
       output,
       mcpUiState: execution.mcpUiState,
-    }),
-  );
-
-  // Keep an already-appended tool result message in sync (retry / re-approve).
-  const session = selectSessionById(getState(), sessionId);
-  const toolItem = session
-    ? findChatHistoryItemByToolCallId(session.history, toolCallId)
-    : undefined;
-  if (toolItem && output) {
-    dispatch(
-      updateHistoryItemByMessageId({
-        sessionId,
-        messageId: toolItem.message.id,
-        updates: {
-          message: {
-            ...toolItem.message,
-            content: renderContextItems(output),
-          } as ChatHistoryItemWithMessageId["message"],
-          contextItems: output.map((item) =>
-            toolCallCtxItemToCtxItemWithId(item, toolCallId),
-          ),
-        },
-      }),
-    );
-  }
+    },
+  });
 
   logToolUsage(
     target.toolCallState,
@@ -493,16 +438,19 @@ async function runRejectToolCall(
   const continueAfterToolRejection =
     getState().config.config.ui?.continueAfterToolRejection;
 
-  dispatchToolCallPatch(
-    dispatch,
-    sessionId,
-    target.assistantItem.message.id,
-    patchToolCall(target.assistantItem, toolCallId, {
-      status: "canceled",
-      ...(continueAfterToolRejection
-        ? { output: [rejectionContextItem()] }
-        : {}),
-    }),
+  applySessionToolCallUpdate(
+    { dispatch, getState },
+    {
+      sessionId,
+      messageId: target.assistantItem.message.id,
+      toolCallId,
+      patch: {
+        status: "canceled",
+        ...(continueAfterToolRejection
+          ? { output: [rejectionContextItem()] }
+          : {}),
+      },
+    },
   );
 
   // A rejection never executes the tool; it only closes the call.
