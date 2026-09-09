@@ -11,7 +11,8 @@ import {
 } from "core";
 import { stripImages } from "core/util/messageContent";
 import { IIdeMessenger } from "../../../../context/IdeMessenger";
-import { setIsGatheringContext } from "../../../../redux/slices/sessionSlice";
+import { setSessionGatheringContext } from "../../../../redux/slices/sessionsSlice";
+import { selectActiveSessionId } from "../../../../redux/selectors/sessionView";
 import { RootState } from "../../../../redux/store";
 import { processEditorContent } from "./processEditorContent";
 import { renderSlashCommandPrompt } from "./renderSlashCommand";
@@ -80,7 +81,10 @@ export async function resolveEditorContent({
     contextRequests.length > 0;
 
   if (shouldGatherContext) {
-    dispatch(setIsGatheringContext(true));
+    const sessionId = selectActiveSessionId(getState());
+    if (sessionId) {
+      dispatch(setSessionGatheringContext({ sessionId, gathering: true }));
+    }
   }
 
   const selectedContextItems = await gatherContextItems({
@@ -94,7 +98,10 @@ export async function resolveEditorContent({
   });
 
   if (shouldGatherContext) {
-    dispatch(setIsGatheringContext(false));
+    const sessionId = selectActiveSessionId(getState());
+    if (sessionId) {
+      dispatch(setSessionGatheringContext({ sessionId, gathering: false }));
+    }
   }
 
   return {

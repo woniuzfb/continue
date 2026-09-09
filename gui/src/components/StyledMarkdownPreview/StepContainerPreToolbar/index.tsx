@@ -5,11 +5,11 @@ import { IdeMessengerContext } from "../../../context/IdeMessenger";
 import { useWebviewListener } from "../../../hooks/useWebviewListener";
 import { getStatusIcon } from "../../../pages/gui/ToolCallDiv/utils";
 import { useAppSelector } from "../../../redux/hooks";
-import { selectToolCallById } from "../../../redux/selectors/selectToolCalls";
 import {
   selectApplyStateByStreamId,
   selectApplyStateByToolCallId,
-} from "../../../redux/slices/sessionSlice";
+  selectToolCallById,
+} from "../../../redux/selectors/selectToolCalls";
 import { getFontSize } from "../../../util";
 import {
   fileExistsCached,
@@ -88,7 +88,9 @@ export function StepContainerPreToolbar({
     selectApplyStateByStreamId(state, codeBlockStreamId),
   );
   const toolCallApplyState = useAppSelector((state) =>
-    selectApplyStateByToolCallId(state, forceToolCallId),
+    forceToolCallId
+      ? selectApplyStateByToolCallId(state, forceToolCallId)
+      : undefined,
   );
 
   const toolCallState = useAppSelector((state) =>

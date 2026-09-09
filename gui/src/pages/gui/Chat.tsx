@@ -37,10 +37,7 @@ import {
   selectDoneApplyStates,
   selectPendingToolCalls,
 } from "../../redux/selectors/selectToolCalls";
-import {
-  ChatHistoryItemWithMessageId,
-  updateToolCallOutput,
-} from "../../redux/slices/sessionSlice";
+import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionSlice";
 import { streamEditThunk } from "../../redux/thunks/edit";
 import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
 import { bootstrapLastSession } from "../../redux/thunks/sessionLifecycle";
@@ -52,6 +49,10 @@ import {
 import { submitSessionInput } from "../../redux/thunks/sessionSubmit";
 import { isJetBrains, isMetaEquivalentKeyPressed } from "../../util";
 import { ToolCallDiv } from "./ToolCallDiv";
+import {
+  applySessionToolCallUpdate,
+  findSessionToolCallTarget,
+} from "../../redux/util/sessionToolCallWrites";
 
 import { useStore } from "react-redux";
 import FeedbackDialog from "../../components/dialogs/FeedbackDialog";
@@ -291,12 +292,25 @@ export function Chat() {
     "toolCallPartialOutput",
     async (data) => {
       // Update tool call output in Redux store
-      dispatch(
-        updateToolCallOutput({
-          toolCallId: data.toolCallId,
-          contextItems: data.contextItems,
-        }),
-      );
+      const state = reduxStore.getState();
+      const targetSessionId = selectActiveSessionId(state);
+      const target = targetSessionId
+        ? findSessionToolCallTarget(
+            state.sessions.sessionsById[targetSessionId]?.history ?? [],
+            data.toolCallId,
+          )
+        : undefined;
+      if (targetSessionId && target) {
+        applySessionToolCallUpdate(
+          { dispatch, getState: reduxStore.getState },
+          {
+            sessionId: targetSessionId,
+            messageId: target.assistantItem.message.id,
+            toolCallId: data.toolCallId,
+            patch: { output: data.contextItems },
+          },
+        );
+      }
     },
     [dispatch],
   );

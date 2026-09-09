@@ -14,10 +14,6 @@ import { XMarkIcon } from "@heroicons/react/24/solid";
 import { useNavigate } from "react-router-dom";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
-import {
-  newSession,
-  setAllSessionMetadata,
-} from "../../redux/slices/sessionSlice";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { refreshSessionMetadata } from "../../redux/thunks/session";
 import { getFontSize, getPlatform } from "../../util";
@@ -31,6 +27,7 @@ import {
   selectIsSessionMetadataLoading,
 } from "../../redux/selectors/sessionView";
 import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
+import { refreshSessionMetadata as refreshSessionMetadataAction } from "../../redux/slices/sessionCatalogSlice";
 
 export function History() {
   const dispatch = useAppDispatch();
@@ -175,7 +172,9 @@ export function History() {
           text={`Are you sure you want to permanently delete all chat sessions, including the current chat session?`}
           onConfirm={async () => {
             // optimistic update
-            dispatch(setAllSessionMetadata([]));
+            dispatch(
+              refreshSessionMetadataAction({ metadata: [], isLoading: false }),
+            );
 
             // actual update + refresh
             await ideMessenger.request("history/clear", undefined);

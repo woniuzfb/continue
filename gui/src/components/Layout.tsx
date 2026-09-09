@@ -8,11 +8,11 @@ import { IdeMessengerContext } from "../context/IdeMessenger";
 import { LocalStorageProvider } from "../context/LocalStorage";
 import { useWebviewListener } from "../hooks/useWebviewListener";
 import { useAppDispatch, useAppSelector } from "../redux/hooks";
+import { useStore } from "react-redux";
+import { selectActiveSessionId } from "../redux/selectors/sessionView";
+import { setSessionMergeSettings } from "../redux/slices/sessionsSlice";
+import type { RootState } from "../redux/store";
 import { setCodeToEdit } from "../redux/slices/editState";
-import {
-  setDontMergeHistoricalReplyBubbles,
-  setDontMergeReplyBubbles,
-} from "../redux/slices/sessionSlice";
 import { setShowDialog } from "../redux/slices/uiSlice";
 import { enterEdit, exitEdit } from "../redux/thunks/edit";
 import { saveCurrentSession } from "../redux/thunks/session";
@@ -43,6 +43,7 @@ const Layout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const onboardingCard = useOnboardingCard();
   const ideMessenger = useContext(IdeMessengerContext);
 
@@ -57,13 +58,17 @@ const Layout = () => {
     (state) => state.config.config?.ui?.dontMergeHistoricalReplyBubbles ?? true,
   );
   useEffect(() => {
-    dispatch(setDontMergeReplyBubbles(dontMergeReplyBubbles));
-  }, [dontMergeReplyBubbles, dispatch]);
-  useEffect(() => {
-    dispatch(
-      setDontMergeHistoricalReplyBubbles(dontMergeHistoricalReplyBubbles),
-    );
-  }, [dontMergeHistoricalReplyBubbles, dispatch]);
+    const sessionId = selectActiveSessionId(store.getState());
+    if (sessionId) {
+      dispatch(
+        setSessionMergeSettings({
+          sessionId,
+          dontMergeReplyBubbles,
+          dontMergeHistoricalReplyBubbles,
+        }),
+      );
+    }
+  }, [dontMergeReplyBubbles, dontMergeHistoricalReplyBubbles, dispatch, store]);
 
   const showDialog = useAppSelector((state) => state.ui.showDialog);
   const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));

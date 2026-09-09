@@ -8,7 +8,7 @@ import {
   IIdeMessenger,
 } from "../../../context/IdeMessenger";
 import { useAppSelector } from "../../../redux/hooks";
-import { selectIsGatheringContext } from "../../../redux/slices/sessionSlice";
+import { selectActiveHistory } from "../../../redux/selectors/sessionView";
 import { AnimatedEllipsis } from "../../AnimatedEllipsis";
 import FileIcon from "../../FileIcon";
 import SafeImg from "../../SafeImg";
@@ -168,7 +168,9 @@ export function ContextItemsPeek({
     return contextItems?.filter((ctxItem) => !ctxItem.hidden) ?? [];
   }, [contextItems]);
 
-  const isGatheringContext = useAppSelector(selectIsGatheringContext);
+  const isGatheringContext = useAppSelector(
+    (state) => selectActiveHistory(state).at(-1)?.isGatheringContext ?? false,
+  );
 
   const indicateIsGathering = isCurrentContextPeek && isGatheringContext;
 

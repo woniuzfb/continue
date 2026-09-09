@@ -5,7 +5,10 @@ import { useMemo } from "react";
 import { useMainEditor } from "../../../components/mainInput/TipTapEditor";
 import { ToolbarButtonWithTooltip } from "../../../components/StyledMarkdownPreview/StepContainerPreToolbar/ToolbarButtonWithTooltip";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
-import { truncateHistoryToMessage } from "../../../redux/slices/sessionSlice";
+import { useStore } from "react-redux";
+import type { RootState } from "../../../redux/store";
+import { truncateHistoryAfterMessageId } from "../../../redux/slices/sessionsSlice";
+import { selectActiveSessionId } from "../../../redux/selectors/sessionView";
 import {
   selectActiveHistory,
   selectActiveIsStreaming,
@@ -22,6 +25,7 @@ export function ToolTruncateHistoryIcon({
     return findLastIndex(history, (item) => !chatMessageIsEmpty(item.message));
   }, [history]);
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const { mainEditor } = useMainEditor();
 
   if (historyIndex === lastMessageIndex) {
@@ -36,11 +40,15 @@ export function ToolTruncateHistoryIcon({
         if (isStreaming) {
           return;
         }
-        dispatch(
-          truncateHistoryToMessage({
-            index: historyIndex,
-          }),
-        );
+        const messageId = history[historyIndex]?.message.id;
+        if (messageId) {
+          dispatch(
+            truncateHistoryAfterMessageId({
+              sessionId: selectActiveSessionId(store.getState()),
+              messageId,
+            }),
+          );
+        }
         mainEditor?.commands.focus();
       }}
     >

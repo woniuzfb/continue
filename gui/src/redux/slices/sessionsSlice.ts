@@ -889,6 +889,45 @@ export const sessionsSlice = createSlice({
         session.mainEditorAttachmentsRestore = action.payload.attachments;
       }
     },
+    /**
+     * Config-derived UI merge settings for one session (方案.md §五.28):
+     * written by the config listener, never mirrored from a render effect.
+     */
+    setSessionMergeSettings: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        dontMergeReplyBubbles?: boolean;
+        dontMergeHistoricalReplyBubbles?: boolean;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      if (action.payload.dontMergeReplyBubbles !== undefined) {
+        session.dontMergeReplyBubbles = action.payload.dontMergeReplyBubbles;
+      }
+      if (action.payload.dontMergeHistoricalReplyBubbles !== undefined) {
+        session.dontMergeHistoricalReplyBubbles =
+          action.payload.dontMergeHistoricalReplyBubbles;
+      }
+    },
+    /**
+     * Marks the last history item as gathering context (方案.md §五.20).
+     * `isGatheringContext` lives on the history item, so this is a targeted
+     * item write rather than a session flag.
+     */
+    setSessionGatheringContext: (
+      state,
+      action: PayloadAction<{ sessionId: string; gathering: boolean }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      const lastItem = session?.history.at(-1);
+      if (lastItem) {
+        lastItem.isGatheringContext = action.payload.gathering;
+      }
+    },
     setSessionIsInEdit: (
       state,
       action: PayloadAction<{ sessionId: string; isInEdit: boolean }>,
@@ -1180,6 +1219,8 @@ export const {
   setSessionMainEditorDraft,
   setSessionMainEditorContentTrigger,
   setSessionMainEditorAttachmentsRestore,
+  setSessionMergeSettings,
+  setSessionGatheringContext,
   setSessionIsInEdit,
   setSessionCodeToEdit,
   updateSessionEditApplyState,
