@@ -19,7 +19,17 @@ export type RequestHistoryPlan =
 
 export function buildRequestHistoryForSession(
   session: SessionRuntimeState,
+  options: { localConversation?: boolean } = {},
 ): RequestHistoryPlan {
+  // 方案.md §十三.1: the reduced request is a Local Provider contract only.
+  // Every other provider keeps the full history.
+  if (!options.localConversation) {
+    if (!session.pagination.truncated) {
+      return { kind: "ready", requestHistory: session.history };
+    }
+    return { kind: "needs-full-history" };
+  }
+
   const currentTurnItems = getCurrentTurnItems(session.history);
   const firstTurnItems = session.firstTurnItems;
 

@@ -14,6 +14,7 @@ import { setSessionContextMetrics } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { constructMessages } from "../util/constructMessages";
 import { buildRequestHistoryForSession } from "../util/requestHistory";
+import { isLocalConversationModel } from "core/llm/localConversation";
 import { getBaseSystemMessage } from "../util/getBaseSystemMessage";
 
 /**
@@ -90,7 +91,9 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
     // 方案.md §十三.8: the metrics path shares the request-history builder with
     // the send path, so token counts describe the same request.
     let historyForCompile: ChatHistoryItemWithMessageId[] = session.history;
-    const plan = buildRequestHistoryForSession(session);
+    const plan = buildRequestHistoryForSession(session, {
+      localConversation: isLocalConversationModel(selectedChatModel),
+    });
     if (plan.kind === "ready") {
       historyForCompile = plan.requestHistory;
     } else if (session.pagination.truncated) {

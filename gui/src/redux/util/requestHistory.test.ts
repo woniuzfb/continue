@@ -35,7 +35,9 @@ describe("buildRequestHistoryForSession", () => {
       },
     });
 
-    const plan = buildRequestHistoryForSession(session);
+    const plan = buildRequestHistoryForSession(session, {
+      localConversation: true,
+    });
 
     expect(plan.kind).toBe("ready");
     if (plan.kind === "ready") {
@@ -45,6 +47,27 @@ describe("buildRequestHistoryForSession", () => {
         "t1",
         "t2",
       ]);
+    }
+  });
+
+  it("keeps the full history for non-local providers", () => {
+    const session = initialSessionRuntime("s1", "S", {
+      history: [...FIRST_TURN, ...TAIL],
+      firstTurnItems: FIRST_TURN,
+      persistence: {
+        state: "clean",
+        revision: 2,
+        persistedRevision: 2,
+        hasPersistedBaseline: true,
+      },
+    });
+
+    const plan = buildRequestHistoryForSession(session);
+
+    expect(plan.kind).toBe("ready");
+    if (plan.kind === "ready") {
+      expect(plan.requestHistory).toHaveLength(4);
+      expect(plan.requestHistory).toBe(session.history);
     }
   });
 
@@ -60,7 +83,9 @@ describe("buildRequestHistoryForSession", () => {
       },
     });
 
-    const plan = buildRequestHistoryForSession(session);
+    const plan = buildRequestHistoryForSession(session, {
+      localConversation: true,
+    });
 
     expect(plan.kind).toBe("ready");
     if (plan.kind === "ready") {
@@ -83,7 +108,9 @@ describe("buildRequestHistoryForSession", () => {
       },
     });
 
-    const plan = buildRequestHistoryForSession(session);
+    const plan = buildRequestHistoryForSession(session, {
+      localConversation: true,
+    });
 
     expect(plan.kind).toBe("ready");
     if (plan.kind === "ready") {
@@ -105,9 +132,9 @@ describe("buildRequestHistoryForSession", () => {
       },
     });
 
-    expect(buildRequestHistoryForSession(session).kind).toBe(
-      "needs-full-history",
-    );
+    expect(
+      buildRequestHistoryForSession(session, { localConversation: true }).kind,
+    ).toBe("needs-full-history");
   });
 
   it("never falls back to a failed save's snapshot", () => {
@@ -131,9 +158,9 @@ describe("buildRequestHistoryForSession", () => {
       },
     });
 
-    expect(buildRequestHistoryForSession(session).kind).toBe(
-      "needs-full-history",
-    );
+    expect(
+      buildRequestHistoryForSession(session, { localConversation: true }).kind,
+    ).toBe("needs-full-history");
   });
 });
 

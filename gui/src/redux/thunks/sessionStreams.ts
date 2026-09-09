@@ -51,6 +51,7 @@ import {
 } from "../util/requestHistory";
 import { generateSessionTitle } from "./sessionTitle";
 import { loadFullHistory } from "./sessionPaging";
+import { isLocalConversationModel } from "core/llm/localConversation";
 import { CONTEXT_METRICS_SCHEMA_VERSION } from "./sessionMetrics";
 import {
   approveToolCalls,
@@ -551,7 +552,9 @@ async function streamModelTurn(
   // turn; anything else falls back to the full history (loading it first when
   // the window is truncated).
   let historyForRequest = session.history;
-  const plan = buildRequestHistoryForSession(session);
+  const plan = buildRequestHistoryForSession(session, {
+    localConversation: isLocalConversationModel(selectedChatModel),
+  });
   if (plan.kind === "ready") {
     historyForRequest = plan.requestHistory;
   } else {
