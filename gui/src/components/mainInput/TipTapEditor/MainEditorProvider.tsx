@@ -10,11 +10,7 @@ import React, {
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { setSessionMainEditorContentTrigger } from "../../../redux/slices/sessionsSlice";
 import { useMainEditorWebviewListeners } from "./useMainEditorWebviewListeners";
-import {
-  selectActiveHistory,
-  selectActiveMainEditorContentTrigger,
-  selectActiveSessionId,
-} from "../../../redux/selectors/sessionView";
+
 import { useStore } from "react-redux";
 import type { RootState } from "../../../redux/store";
 
@@ -22,6 +18,8 @@ import type { RootState } from "../../../redux/store";
  * Context for accessing the main editor instance
  */
 interface MainEditorContextType {
+  /** The session this editor instance belongs to (方案.md §九). */
+  sessionId: string;
   /** The current main editor instance */
   mainEditor: Editor | null;
   /** Set the current main editor instance */
@@ -35,6 +33,7 @@ interface MainEditorContextType {
 }
 
 const initialState: MainEditorContextType = {
+  sessionId: "",
   mainEditor: null,
   setMainEditor: () => {},
   inputId: null,
@@ -47,9 +46,11 @@ const MainEditorContext = createContext<MainEditorContextType>(initialState);
 /**
  * Provider component that maintains a reference to the main editor
  */
-export const MainEditorProvider: React.FC<{ children: React.ReactNode }> = ({
-  children,
-}) => {
+export const MainEditorProvider: React.FC<{
+  /** 方案.md §九: the provider owns exactly one session's editor instance. */
+  sessionId: string;
+  children: React.ReactNode;
+}> = ({ sessionId, children }) => {
   const dispatch = useAppDispatch();
   const [mainEditor, setMainEditorInternal] = useState<Editor | null>(
     initialState.mainEditor,
@@ -59,12 +60,12 @@ export const MainEditorProvider: React.FC<{ children: React.ReactNode }> = ({
   const editorFocusedRef = useRef<boolean>(false);
   const store = useStore<RootState>();
   const historyLength = useAppSelector(
-    (store) => selectActiveHistory(store).length,
+    (state) => state.sessions.sessionsById[sessionId]?.history.length ?? 0,
   );
 
-  // Listen for changes to mainEditorContentTrigger in Redux
-  const mainEditorContentTrigger = useAppSelector((store) =>
-    selectActiveMainEditorContentTrigger(store),
+  // Listen for changes to this session's mainEditorContentTrigger.
+  const mainEditorContentTrigger = useAppSelector(
+    (state) => state.sessions.sessionsById[sessionId]?.mainEditorContentTrigger,
   );
 
   useEffect(() => {
@@ -74,13 +75,10 @@ export const MainEditorProvider: React.FC<{ children: React.ReactNode }> = ({
       });
       // Clear the trigger after using it
       dispatch(
-        setSessionMainEditorContentTrigger({
-          sessionId: selectActiveSessionId(store.getState()),
-          content: undefined,
-        }),
+        setSessionMainEditorContentTrigger({ sessionId, content: undefined }),
       );
     }
-  }, [mainEditor, mainEditorContentTrigger, dispatch]);
+  }, [mainEditor, mainEditorContentTrigger, dispatch, sessionId]);
 
   // Update focused ref when editor focus state changes
   useEffect(() => {
@@ -101,6 +99,7 @@ export const MainEditorProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Set up main editor webview listeners when we have a valid editor and input ID
   useMainEditorWebviewListeners({
+    sessionId,
     editor: mainEditor,
     onEnterRef,
     dispatch,
@@ -114,6 +113,7 @@ export const MainEditorProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const value: MainEditorContextType = {
+    sessionId,
     mainEditor,
     setMainEditor,
     inputId,

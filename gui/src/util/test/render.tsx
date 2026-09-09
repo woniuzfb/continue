@@ -56,8 +56,10 @@ export async function renderWithProviders(
   // through sessionsById, so seed a runtime for a fresh session unless the
   // caller provided one.
   const bootState = store.getState() as any;
+  let seedSessionId = bootState.sessions.activeSessionId ?? "";
   if (Object.keys(bootState.sessions.sessionsById).length === 0) {
     const sessionId = uuidv4();
+    seedSessionId = sessionId;
     await store.dispatch(
       createSessionRuntime({
         session: initialSessionRuntime(sessionId, NEW_SESSION_TITLE, {
@@ -75,7 +77,7 @@ export async function renderWithProviders(
       <IdeMessengerProvider messenger={ideMessenger}>
         <Provider store={store}>
           <AuthProvider>
-            <MainEditorProvider>
+            <MainEditorProvider sessionId={seedSessionId}>
               {children}
               <ParallelListeners />
             </MainEditorProvider>

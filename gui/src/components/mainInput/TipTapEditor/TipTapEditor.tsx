@@ -44,7 +44,6 @@ import {
   selectActiveIsStreaming,
   selectActiveMainEditorAttachmentsRestore,
   selectActiveMainEditorDraft,
-  selectActiveSessionId,
 } from "../../../redux/selectors/sessionView";
 
 /** Cap for packing a single binary attachment (~112 MB of raw data). Larger
@@ -210,7 +209,9 @@ function TipTapEditorInner(props: TipTapEditorProps) {
     (state) =>
       (state.config.config.ui?.attachmentSplitThresholdMB ?? 1) * 1024 * 1024,
   );
-  const sessionId = useAppSelector((state) => selectActiveSessionId(state));
+  // 方案.md §九: the editor belongs to its provider's session, never to the
+  // "active" session resolved at callback time.
+  const sessionId = mainEditorContext.sessionId;
   const isStreaming = useAppSelector((state) => selectActiveIsStreaming(state));
   const historyLength = useAppSelector(
     (store) => selectActiveHistory(store).length,
