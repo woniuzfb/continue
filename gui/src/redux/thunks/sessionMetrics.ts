@@ -13,6 +13,7 @@ import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { setSessionContextMetrics } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { constructMessages } from "../util/constructMessages";
+import { buildRequestHistoryForSession } from "../util/requestHistory";
 import { getBaseSystemMessage } from "../util/getBaseSystemMessage";
 
 /**
@@ -86,8 +87,13 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
       return;
     }
 
+    // 方案.md §十三.8: the metrics path shares the request-history builder with
+    // the send path, so token counts describe the same request.
     let historyForCompile: ChatHistoryItemWithMessageId[] = session.history;
-    if (session.pagination.truncated) {
+    const plan = buildRequestHistoryForSession(session);
+    if (plan.kind === "ready") {
+      historyForCompile = plan.requestHistory;
+    } else if (session.pagination.truncated) {
       try {
         const result = await extra.ideMessenger.request("history/load", {
           id: sessionId,
