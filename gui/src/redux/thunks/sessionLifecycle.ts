@@ -138,26 +138,52 @@ export const bootstrapLastSession = createAsyncThunk<void, void, ThunkApiType>(
  * No descriptors at all (fresh install, or a snapshot without tabs) falls back
  * to `bootstrapLastSession`, which restores the catalog pointer or creates the
  * first empty session.
+ *
+ * Idempotent: the shell (config load) and the empty `SessionViews` placeholder
+ * both call it, and React StrictMode runs the config effect twice. Concurrent
+ * calls share one run, otherwise an empty store would be bootstrapped twice and
+ * create two sessions.
  */
+let ensureActiveSessionLoadInFlight: Promise<void> | undefined;
+
 export const ensureActiveSessionLoaded = createAsyncThunk<
   void,
   void,
   ThunkApiType
 >("sessions/ensureActiveLoaded", async (_, { dispatch, getState }) => {
-  const state = getState();
-  const activeSessionId = state.sessions.activeSessionId;
-  const target =
-    activeSessionId && selectTabDescriptor(state, activeSessionId)
-      ? activeSessionId
-      : state.sessions.tabOrder[state.sessions.tabOrder.length - 1];
-
-  if (!target) {
-    await dispatch(bootstrapLastSession());
-    return;
+  if (ensureActiveSessionLoadInFlight) {
+    return ensureActiveSessionLoadInFlight;
   }
 
-  await dispatch(openSessionTab({ sessionId: target }));
+  const run = (async () => {
+    const state = getState();
+    const activeSessionId = state.sessions.activeSessionId;
+    const target =
+      activeSessionId && selectTabDescriptor(state, activeSessionId)
+        ? activeSessionId
+        : state.sessions.tabOrder[state.sessions.tabOrder.length - 1];
+
+    if (!target) {
+      await dispatch(bootstrapLastSession());
+      return;
+    }
+
+    await dispatch(openSessionTab({ sessionId: target }));
+  })().finally(() => {
+    ensureActiveSessionLoadInFlight = undefined;
+  });
+
+  ensureActiveSessionLoadInFlight = run;
+  return run;
 });
+
+/**
+ * Test hook: drop the in-flight guard. Production never needs this, but a test
+ * that leaves the startup IPC pending would otherwise block every later boot.
+ */
+export function resetEnsureActiveSessionLoad(): void {
+  ensureActiveSessionLoadInFlight = undefined;
+}
 
 /**
  * Delete a session (方案.md §五.19): stop its own stream, close its approvals
@@ -206,13 +232,17 @@ export const deleteSessionRuntime = createAsyncThunk<
       }
     }
 
-    // 4. Remove the visible tab and release the owner.
+    // 4. Remove the tab and release the owner. Deleting a background tab must
+    // not move the visible tab (方案.md §五.19).
     const order = getState().sessions.tabOrder;
     const index = order.indexOf(sessionId);
+    const wasActive = getState().sessions.activeSessionId === sessionId;
     const replacementSessionId =
-      index >= 0 ? (order[index + 1] ?? order[index - 1]) : undefined;
+      index >= 0 && wasActive
+        ? (order[index + 1] ?? order[index - 1])
+        : undefined;
     const newEmptySession =
-      index >= 0 && replacementSessionId === undefined
+      index >= 0 && wasActive && replacementSessionId === undefined
         ? initialSessionRuntime(uuidv4(), NEW_SESSION_TITLE)
         : undefined;
 
@@ -221,6 +251,7 @@ export const deleteSessionRuntime = createAsyncThunk<
       dispatch(
         closeSessionTabTransaction({
           sessionId,
+          wasActive,
           replacementSessionId,
           newEmptySession,
         }),

@@ -101,6 +101,8 @@ export type SessionRuntimeState = {
   firstTurnItems: ChatHistoryItemWithMessageId[];
   latestConversationSummary?: {
     sourceMessageId: string;
+    /** Absolute index in the full history (方案.md §十一 synthetic separator). */
+    sourceAbsoluteIndex?: number;
     content: string;
   };
 
@@ -356,11 +358,17 @@ export const sessionsSlice = createSlice({
       state,
       action: PayloadAction<{
         sessionId: string;
+        /**
+         * 方案.md §五.19: closing an *inactive* tab must not move the visible
+         * tab. Only the close of the active tab computes and activates a
+         * replacement (right neighbour → left neighbour → new empty tab).
+         */
+        wasActive: boolean;
         replacementSessionId?: string;
         newEmptySession?: SessionRuntimeState;
       }>,
     ) => {
-      const { sessionId, replacementSessionId, newEmptySession } =
+      const { sessionId, wasActive, replacementSessionId, newEmptySession } =
         action.payload;
       state.tabOrder = state.tabOrder.filter((id) => id !== sessionId);
       delete state.tabDescriptors[sessionId];
@@ -374,6 +382,10 @@ export const sessionsSlice = createSlice({
           mode: newEmptySession.mode,
         };
         state.tabOrder.push(newEmptySession.id);
+      }
+
+      if (!wasActive) {
+        return;
       }
 
       const replacement =
@@ -468,6 +480,17 @@ export const sessionsSlice = createSlice({
       }
       markHistoryChanged(session);
       Object.assign(item, action.payload.updates);
+      // 方案.md §十一: the runtime summary is what the Local Provider sends, so a
+      // compact result must be visible immediately instead of only after the
+      // save response returns.
+      if (action.payload.updates.conversationSummary !== undefined) {
+        const index = session.history.indexOf(item);
+        session.latestConversationSummary = {
+          sourceMessageId: action.payload.messageId,
+          sourceAbsoluteIndex: index,
+          content: action.payload.updates.conversationSummary,
+        };
+      }
       // Editing/retrying invalidates the previous context snapshot, and a tool
       // state change changes the pending-approval projection.
       invalidateContextMetrics(session);
@@ -577,7 +600,11 @@ export const sessionsSlice = createSlice({
       state,
       action: PayloadAction<{
         sessionId: string;
-        summary: { sourceMessageId: string; content: string };
+        summary: {
+          sourceMessageId: string;
+          sourceAbsoluteIndex?: number;
+          content: string;
+        };
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
@@ -1084,6 +1111,14 @@ export const sessionsSlice = createSlice({
       if (session && item?.conversationSummary) {
         markHistoryChanged(session);
         item.conversationSummary = undefined;
+        // Deleting the carrier must stop the summary from being sent before
+        // the authoritative save response arrives (方案.md §十一).
+        if (
+          session.latestConversationSummary?.sourceMessageId ===
+          action.payload.messageId
+        ) {
+          session.latestConversationSummary = undefined;
+        }
       }
     },
 
@@ -1113,11 +1148,30 @@ export const sessionsSlice = createSlice({
     },
     setSessionReasoningEnabled: (
       state,
-      action: PayloadAction<{ sessionId: string; enabled?: boolean }>,
+      action: PayloadAction<{
+        sessionId: string;
+        enabled?: boolean;
+        /**
+         * 方案.md §七.8: where this value came from. A "derived" update (config
+         * load / model switch) must not silently overwrite an explicit user
+         * choice, which is the value that gets persisted.
+         */
+        source?: "derived" | "explicit";
+      }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.hasReasoningEnabled = action.payload.enabled;
+        const { source } = action.payload;
+        if (
+          source &&
+          !(
+            source === "derived" &&
+            session.reasoningPreferenceSource === "explicit"
+          )
+        ) {
+          session.reasoningPreferenceSource = source;
+        }
       }
     },
     setSessionReasoningPreferenceSource: (

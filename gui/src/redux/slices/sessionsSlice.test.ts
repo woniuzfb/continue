@@ -5,6 +5,7 @@ import {
   beginSessionStream,
   closeSessionTabTransaction,
   createSessionRuntime,
+  deleteCompactionByMessageId,
   deleteTurnByMessageId,
   initialSessionRuntime,
   initialSessionsState,
@@ -15,6 +16,7 @@ import {
   setSessionConversationSummary,
   setSessionTitle,
   trimSessionHistoryWindow,
+  updateHistoryItemByMessageId,
   sessionsSlice,
 } from "./sessionsSlice";
 import {
@@ -76,6 +78,7 @@ describe("sessionsSlice — ownership", () => {
       state,
       closeSessionTabTransaction({
         sessionId: "s2",
+        wasActive: true,
         replacementSessionId: "s3",
       }),
     );
@@ -93,6 +96,7 @@ describe("sessionsSlice — ownership", () => {
       state,
       closeSessionTabTransaction({
         sessionId: "s1",
+        wasActive: true,
         newEmptySession: initialSessionRuntime("s-new", "Chat 1"),
       }),
     );
@@ -101,6 +105,59 @@ describe("sessionsSlice — ownership", () => {
     expect(state.activeSessionId).toBe("s-new");
     expect(state.sessionsById["s-new"]).toBeDefined();
     expect(state.sessionsById.s1).toBeDefined();
+  });
+
+  it("closing an inactive tab never moves the visible tab", () => {
+    let state = stateWith();
+    state = sessionsSlice.reducer(
+      state,
+      createSessionRuntime({ session: initialSessionRuntime("s2", "Chat 2") }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      createSessionRuntime({ session: initialSessionRuntime("s3", "Chat 3") }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      setActiveSessionId({ sessionId: "s1" }),
+    );
+
+    state = sessionsSlice.reducer(
+      state,
+      closeSessionTabTransaction({
+        sessionId: "s2",
+        wasActive: false,
+        replacementSessionId: undefined,
+        newEmptySession: undefined,
+      }),
+    );
+
+    expect(state.tabOrder).toEqual(["s1", "s3"]);
+    expect(state.tabDescriptors.s2).toBeUndefined();
+    expect(state.activeSessionId).toBe("s1");
+  });
+
+  it("keeps the runtime summary in sync with compact / delete", () => {
+    let state = stateWith({ history: [item("u1", "user", "hi")] });
+    state = sessionsSlice.reducer(
+      state,
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "u1",
+        updates: { conversationSummary: "compacted" },
+      }),
+    );
+    expect(state.sessionsById.s1.latestConversationSummary).toEqual({
+      sourceMessageId: "u1",
+      sourceAbsoluteIndex: 0,
+      content: "compacted",
+    });
+
+    state = sessionsSlice.reducer(
+      state,
+      deleteCompactionByMessageId({ sessionId: "s1", messageId: "u1" }),
+    );
+    expect(state.sessionsById.s1.latestConversationSummary).toBeUndefined();
   });
 
   it("keeps runtime title authoritative and syncs the descriptor", () => {

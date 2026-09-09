@@ -109,6 +109,48 @@ describe("loadSessionRuntime", () => {
     );
   });
 
+  it("restores reasoning preference and the authoritative summary", async () => {
+    const store = makeStore(
+      {
+        ...emptySessions(),
+        tabOrder: ["s1"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Chat 1", loadState: "unloaded" },
+        },
+      },
+      { lazy: true },
+    );
+    store.mockIdeMessenger.responses["history/loadPage"] = {
+      items: [item("u2", "user", "hi"), item("a2", "assistant", "yo")],
+      firstTurnItems: [item("u1", "user", "first")],
+      latestConversationSummary: {
+        sourceMessageId: "a1",
+        sourceAbsoluteIndex: 1,
+        content: "compacted",
+      },
+      hasMore: true,
+      total: 6,
+      session: {
+        title: "Chat 1",
+        mode: "chat",
+        workspaceDirectory: "ws",
+        hasReasoningEnabled: true,
+        reasoningPreferenceSource: "explicit",
+      },
+    } as any;
+
+    await run(store, loadSessionRuntime({ sessionId: "s1" }));
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.hasReasoningEnabled).toBe(true);
+    expect(session.reasoningPreferenceSource).toBe("explicit");
+    expect(session.latestConversationSummary).toEqual({
+      sourceMessageId: "a1",
+      sourceAbsoluteIndex: 1,
+      content: "compacted",
+    });
+  });
+
   it("keeps the descriptor and creates no runtime when loading fails", async () => {
     const store = makeStore({
       ...emptySessions(),
@@ -163,6 +205,35 @@ describe("activateSessionTab", () => {
     expect(
       (store.getState() as any).config.config.selectedModelByRole.chat,
     ).toBeNull();
+  });
+
+  it("recomputes stale context metrics on activation", async () => {
+    const store = makeStore(
+      {
+        activeSessionId: "s1",
+        tabOrder: ["s1"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "One", loadState: "loaded" },
+        },
+        sessionsById: {
+          // No contextMetrics snapshot: the gate must recompile on activation.
+          s1: initialSessionRuntime("s1", "One", {
+            history: [item("u1", "user", "hi")],
+          }),
+        },
+      },
+      { modelTitle: "model-a" },
+    );
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, activateSessionTab({ sessionId: "s1" }));
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "llm/compileChat",
+        expect.anything(),
+      );
+    });
   });
 
   it("loads an unloaded tab before projecting", async () => {
@@ -256,6 +327,90 @@ describe("closeSessionTab", () => {
     expect(
       selectSessionById(store.getState() as any, "s1")!.lifecycle.closing,
     ).toBe(true);
+  });
+
+  function threeTabStore() {
+    return makeStore({
+      activeSessionId: "s1",
+      tabOrder: ["s1", "s2", "s3"],
+      tabDescriptors: {
+        s1: { sessionId: "s1", title: "One", loadState: "loaded" },
+        s2: { sessionId: "s2", title: "Two", loadState: "loaded" },
+        s3: { sessionId: "s3", title: "Three", loadState: "loaded" },
+      },
+      sessionsById: {
+        s1: initialSessionRuntime("s1", "One"),
+        s2: initialSessionRuntime("s2", "Two"),
+        s3: initialSessionRuntime("s3", "Three"),
+      },
+    });
+  }
+
+  it("closing an inactive middle tab keeps the visible tab", async () => {
+    const store = threeTabStore();
+
+    await run(store, closeSessionTab({ sessionId: "s2" }));
+
+    const state = store.getState() as any;
+    expect(state.sessions.tabOrder).toEqual(["s1", "s3"]);
+    expect(state.sessions.activeSessionId).toBe("s1");
+    expect(state.sessions.tabDescriptors.s2).toBeUndefined();
+  });
+
+  it("closing the inactive rightmost tab keeps the visible tab", async () => {
+    const store = threeTabStore();
+
+    await run(store, closeSessionTab({ sessionId: "s3" }));
+
+    const state = store.getState() as any;
+    expect(state.sessions.tabOrder).toEqual(["s1", "s2"]);
+    expect(state.sessions.activeSessionId).toBe("s1");
+  });
+
+  it("closing an inactive unloaded/failed tab keeps the visible tab", async () => {
+    const store = makeStore({
+      activeSessionId: "s1",
+      tabOrder: ["s1", "s2", "s3"],
+      tabDescriptors: {
+        s1: { sessionId: "s1", title: "One", loadState: "loaded" },
+        s2: { sessionId: "s2", title: "Two", loadState: "unloaded" },
+        s3: { sessionId: "s3", title: "Three", loadState: "failed" },
+      },
+      sessionsById: { s1: initialSessionRuntime("s1", "One") },
+    });
+
+    await run(store, closeSessionTab({ sessionId: "s2" }));
+    await run(store, closeSessionTab({ sessionId: "s3" }));
+
+    const state = store.getState() as any;
+    expect(state.sessions.tabOrder).toEqual(["s1"]);
+    expect(state.sessions.activeSessionId).toBe("s1");
+  });
+
+  it("clears the model projection when the last tab is closed", async () => {
+    const store = makeStore({
+      activeSessionId: "s1",
+      tabOrder: ["s1"],
+      tabDescriptors: {
+        s1: { sessionId: "s1", title: "One", loadState: "loaded" },
+      },
+      sessionsById: {
+        s1: initialSessionRuntime("s1", "One", {
+          chatModelTitle: "model-a",
+        }),
+      },
+    });
+    // The closed session's model is currently projected onto the UI.
+    await run(store, activateSessionTab({ sessionId: "s1" }));
+    expect(
+      (store.getState() as any).config.activeSessionModelProjection?.title,
+    ).toBe("model-a");
+
+    await run(store, closeSessionTab({ sessionId: "s1" }));
+
+    const state = store.getState() as any;
+    // The new empty tab must not inherit the closed session's projection.
+    expect(state.config.activeSessionModelProjection ?? null).toBeNull();
   });
 
   it("creates a new empty tab when the last one closes", async () => {

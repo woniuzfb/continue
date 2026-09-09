@@ -15,7 +15,7 @@ import {
 } from "../slices/sessionsSlice";
 import type { RootState, ThunkApiType } from "../store";
 import { ensureMessageIds } from "../util/messageIds";
-import { firstTurnItemsOf } from "../slices/sessionHistory";
+import { firstTurnItemsOf, latestSummaryOf } from "../slices/sessionHistory";
 import type { ChatHistoryItem } from "core";
 import {
   compileSessionChatForContextMetrics,
@@ -90,11 +90,19 @@ export const loadSessionRuntime = createAsyncThunk<
       let totalCount = 0;
       let loadedOffset = 0;
       let pageFirstTurnItems: ChatHistoryItem[] | undefined;
+      let pageLatestSummary:
+        | {
+            sourceMessageId: string;
+            sourceAbsoluteIndex: number;
+            content: string;
+          }
+        | undefined;
 
       if (ui?.lazyLoadHistory) {
         const page = await getSessionPage(extra.ideMessenger, sessionId, limit);
         session = page.session;
         pageFirstTurnItems = page.firstTurnItems;
+        pageLatestSummary = page.latestConversationSummary;
         hasMore = page.hasMore;
         totalCount = page.totalCount;
         loadedOffset = page.loadedOffset;
@@ -113,8 +121,14 @@ export const loadSessionRuntime = createAsyncThunk<
           : firstTurnItemsOf(history),
         mode: session.mode ?? "chat",
         chatModelTitle: session.chatModelTitle ?? undefined,
-        hasReasoningEnabled: (session as { hasReasoningEnabled?: boolean })
-          .hasReasoningEnabled,
+        hasReasoningEnabled: session.hasReasoningEnabled,
+        reasoningPreferenceSource: session.reasoningPreferenceSource,
+        // 方案.md §十一: without the authoritative summary a lazy-loaded
+        // session loses `conversationSummaryOverride` after a restart.
+        // The paged path takes the authoritative summary from the response;
+        // a full load derives it from the complete history (same rule as Core).
+        latestConversationSummary:
+          pageLatestSummary ?? latestSummaryOf(history),
         contextMetrics: session.contextMetrics,
         ...mergeSettings(getState()),
         pagination: {
@@ -158,25 +172,23 @@ export const completeSessionActivation = createAsyncThunk<
       return;
     }
     const runtime = selectSessionById(getState(), sessionId);
-    if (runtime) {
-      dispatch(
-        projectSessionModelToActiveUi({
-          sessionId,
-          chatModelTitle: runtime.chatModelTitle,
-        }),
-      );
+    if (!runtime) {
+      await dispatch(loadSessionRuntime({ sessionId }));
+    }
+    const active = selectSessionById(getState(), sessionId);
+    if (!active) {
       return;
     }
-    await dispatch(loadSessionRuntime({ sessionId }));
-    const loaded = selectSessionById(getState(), sessionId);
-    if (loaded) {
-      dispatch(
-        projectSessionModelToActiveUi({
-          sessionId,
-          chatModelTitle: loaded.chatModelTitle,
-        }),
-      );
-    }
+    void dispatch(
+      projectSessionModelToActiveUi({
+        sessionId,
+        chatModelTitle: active.chatModelTitle,
+      }),
+    );
+    // 方案.md §五.16: a missing or stale metrics snapshot is recomputed on
+    // activation. The thunk owns the gate (model identity + history revision +
+    // schema version), so an already valid loaded tab never recompiles.
+    void dispatch(ensureSessionContextMetrics({ sessionId }));
   },
 );
 
@@ -252,10 +264,14 @@ export const closeSessionTab = createAsyncThunk<
     return;
   }
   const runtime = selectSessionById(state, sessionId);
+  // 方案.md §五.19: only closing the *visible* tab may move the visible tab.
+  const wasActive = state.sessions.activeSessionId === sessionId;
 
   // Compute the neighbour up front: right, then left, else a new empty tab.
-  const replacementSessionId = order[index + 1] ?? order[index - 1];
-  const needsNewEmptySession = replacementSessionId === undefined;
+  const replacementSessionId = wasActive
+    ? (order[index + 1] ?? order[index - 1])
+    : undefined;
+  const needsNewEmptySession = wasActive && replacementSessionId === undefined;
   const newEmptySession = needsNewEmptySession
     ? initialSessionRuntime(uuidv4(), NEW_SESSION_TITLE, {
         ...mergeSettings(state),
@@ -276,6 +292,7 @@ export const closeSessionTab = createAsyncThunk<
   dispatch(
     closeSessionTabTransaction({
       sessionId,
+      wasActive,
       replacementSessionId,
       newEmptySession,
     }),
@@ -285,9 +302,18 @@ export const closeSessionTab = createAsyncThunk<
     dispatch(removeSessionRuntime({ sessionId }));
   }
 
-  if (replacementSessionId) {
+  if (!wasActive) {
+    // Closing a background tab never re-activates anything.
+    return;
+  }
+
+  // The new empty tab must run the same projection path as any other
+  // activation, otherwise it keeps the closed session's model projection
+  // (方案.md §五.17/§五.19).
+  const nextActiveSessionId = replacementSessionId ?? newEmptySession?.id;
+  if (nextActiveSessionId) {
     void dispatch(
-      completeSessionActivation({ sessionId: replacementSessionId }),
+      completeSessionActivation({ sessionId: nextActiveSessionId }),
     );
   }
 });
