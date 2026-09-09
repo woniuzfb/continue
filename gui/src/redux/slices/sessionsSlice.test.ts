@@ -3,11 +3,13 @@ import type { ChatHistoryItemWithMessageId } from "./sessionSlice";
 import {
   applySessionStreamUpdate,
   beginSessionStream,
+  closeSessionTabTransaction,
   createSessionRuntime,
   deleteTurnByMessageId,
   initialSessionRuntime,
   initialSessionsState,
   markSessionPersisted,
+  setActiveSessionId,
   setAppliedRulesByMessageId,
   setCompactionLoadingByMessageId,
   setSessionConversationSummary,
@@ -53,6 +55,52 @@ describe("sessionsSlice — ownership", () => {
       loadState: "loaded",
       mode: "chat",
     });
+  });
+
+  it("closes a tab atomically and activates the right-hand neighbour", () => {
+    let state = stateWith();
+    state = sessionsSlice.reducer(
+      state,
+      createSessionRuntime({ session: initialSessionRuntime("s2", "Chat 2") }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      createSessionRuntime({ session: initialSessionRuntime("s3", "Chat 3") }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      setActiveSessionId({ sessionId: "s2" }),
+    );
+
+    state = sessionsSlice.reducer(
+      state,
+      closeSessionTabTransaction({
+        sessionId: "s2",
+        replacementSessionId: "s3",
+      }),
+    );
+
+    expect(state.tabOrder).toEqual(["s1", "s3"]);
+    expect(state.tabDescriptors.s2).toBeUndefined();
+    expect(state.activeSessionId).toBe("s3");
+    // Runtime owner survives until the caller releases it (streaming/failed).
+    expect(state.sessionsById.s2).toBeDefined();
+  });
+
+  it("creates and activates an empty session inside the close transaction", () => {
+    let state = stateWith();
+    state = sessionsSlice.reducer(
+      state,
+      closeSessionTabTransaction({
+        sessionId: "s1",
+        newEmptySession: initialSessionRuntime("s-new", "Chat 1"),
+      }),
+    );
+
+    expect(state.tabOrder).toEqual(["s-new"]);
+    expect(state.activeSessionId).toBe("s-new");
+    expect(state.sessionsById["s-new"]).toBeDefined();
+    expect(state.sessionsById.s1).toBeDefined();
   });
 
   it("keeps runtime title authoritative and syncs the descriptor", () => {

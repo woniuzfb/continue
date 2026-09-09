@@ -311,6 +311,48 @@ export const sessionsSlice = createSlice({
         descriptor.loadState = action.payload.loadState;
       }
     },
+    /**
+     * Atomic close transaction (方案.md §五.19): the thunk/action creator
+     * computes the closing id, the neighbour replacement id and any new empty
+     * session id up front, then this single reducer action removes the visible
+     * tab, updates descriptors, activates the replacement and optionally
+     * creates the new empty runtime. No IO, no UUID generation here.
+     *
+     * The runtime owner is intentionally NOT removed: streaming / pending /
+     * failed / awaiting-approval sessions keep their owner until clean
+     * (方案.md §八). Callers release it with removeSessionRuntime.
+     */
+    closeSessionTabTransaction: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        replacementSessionId?: string;
+        newEmptySession?: SessionRuntimeState;
+      }>,
+    ) => {
+      const { sessionId, replacementSessionId, newEmptySession } =
+        action.payload;
+      state.tabOrder = state.tabOrder.filter((id) => id !== sessionId);
+      delete state.tabDescriptors[sessionId];
+
+      if (newEmptySession) {
+        state.sessionsById[newEmptySession.id] = newEmptySession;
+        state.tabDescriptors[newEmptySession.id] = {
+          sessionId: newEmptySession.id,
+          title: newEmptySession.title,
+          loadState: "loaded",
+          mode: newEmptySession.mode,
+        };
+        state.tabOrder.push(newEmptySession.id);
+      }
+
+      const replacement =
+        replacementSessionId &&
+        state.tabDescriptors[replacementSessionId] !== undefined
+          ? replacementSessionId
+          : state.tabOrder[state.tabOrder.length - 1];
+      state.activeSessionId = replacement;
+    },
     setSessionTitle: (
       state,
       action: PayloadAction<{ sessionId: string; title: string }>,
@@ -965,6 +1007,7 @@ export const {
   setActiveSessionId,
   setTabDescriptor,
   setTabLoadState,
+  closeSessionTabTransaction,
   setSessionTitle,
   setSessionHistory,
   setContextItemsByMessageId,
