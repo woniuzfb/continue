@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage, ModelDescription, Tool } from "core";
+import { NEW_SESSION_TITLE } from "core/util/constants";
 import { createMockStore } from "../../util/test/mockStore";
 import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
@@ -47,6 +48,7 @@ type StoreOptions = {
   stream?: { status: "idle" | "streaming"; requestId?: string };
   chatModelTitle?: string;
   models?: ModelDescription[];
+  title?: string;
 };
 
 function makeStore(options: StoreOptions = {}) {
@@ -56,9 +58,10 @@ function makeStore(options: StoreOptions = {}) {
     stream = { status: "idle" },
     chatModelTitle = "gpt-4o",
     models = [CHAT_MODEL],
+    title = "Chat 1",
   } = options;
 
-  const s1 = initialSessionRuntime("s1", "Chat 1", {
+  const s1 = initialSessionRuntime("s1", title, {
     history: [user("u1")],
     mode,
     chatModelTitle,
@@ -316,6 +319,21 @@ describe("sessionStreams", () => {
         expect.objectContaining({ sessionId: "s1" }),
       );
     });
+  });
+
+  it("generates a title after the turn completes", async () => {
+    const store = makeStore({ title: NEW_SESSION_TITLE });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+    await vi.waitFor(() => {
+      expect(session(store).title).toBe("Session summary");
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "chatDescriber/describe",
+      expect.anything(),
+    );
   });
 
   it("ignores a checkpoint for a stale request", async () => {

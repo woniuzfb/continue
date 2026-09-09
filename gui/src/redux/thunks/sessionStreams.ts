@@ -43,6 +43,7 @@ import {
 import { evaluateSessionToolPolicies } from "./evaluateToolPolicies";
 import { preprocessSessionToolCalls } from "./preprocessToolCallArgs";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { generateSessionTitle } from "./sessionTitle";
 import { CONTEXT_METRICS_SCHEMA_VERSION } from "./sessionMetrics";
 import {
   approveToolCalls,
@@ -759,6 +760,9 @@ async function runSessionStreamImpl(
         reason: "STREAM_COMPLETED",
       }),
     );
+    // Title generation is a post-terminal side effect (方案.md §七.9): the reply
+    // is already saved, and a failure never blocks it.
+    void dispatch(generateSessionTitle({ sessionId }));
   }
 }
 

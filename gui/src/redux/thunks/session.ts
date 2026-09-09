@@ -522,7 +522,7 @@ export const loadLastSession = createAsyncThunk<
  * content 为 parts 数组时用 renderChatMessage 取纯文本（toString 会得到
  * "[object Object]"）。
  */
-function getAssistantResponseText(
+export function getAssistantResponseText(
   history: { message: ChatMessage }[] | undefined,
 ): string | undefined {
   const parts: string[] = [];
@@ -542,7 +542,7 @@ function getAssistantResponseText(
   return parts.length ? parts.join("") : undefined;
 }
 
-function getChatTitleFromMessage(message: ChatMessage) {
+export function getChatTitleFromMessage(message: ChatMessage) {
   // Replace <file_content>...</file_content> attachment blocks with a
   // [file: path] marker BEFORE picking the last line. Without this, a session
   // whose first message attaches files would get a title of "</file_content>"
