@@ -89,7 +89,7 @@ export const updateSessionFileSymbolsFromFiles = createAsyncThunk<
 */
 // in-flight 去重：启动时 ParallelListeners 的 interval 与
 // [sessionId] effect 会对同一会话并发触发本 thunk，各自读到的
-// state.session.symbols 都还是空 → 发两份完全相同的 IPC，host 端
+// sessionsById[id].symbols 都还是空 → 发两份完全相同的 IPC，host 端
 // treesitter 批算压力翻倍（且第二份结果晚到还会再触发一轮渲染）。
 // 按 sessionId 记录 in-flight promise，同会话并发调用共享同一次计算。
 const symbolsInFlight = new Map<string, Promise<void>>();

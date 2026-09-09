@@ -19,7 +19,7 @@ import { enqueueSessionSave, flushSessionSave } from "./sessionPersistence";
 const MAX_TITLE_LENGTH = 100;
 
 // Async session functions live in thunks (because of IDE messaging mostly)
-// see sessionSlice for sync redux session functions
+// see sessionsSlice for the session runtime reducers
 
 export async function getSession(
   ideMessenger: IIdeMessenger,

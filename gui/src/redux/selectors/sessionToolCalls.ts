@@ -77,7 +77,7 @@ export function selectSessionToolCallById(
 /**
  * Tools available to a session's own request (方案.md §五.20).
  *
- * The legacy `selectActiveTools` reads `state.session.mode`, i.e. the active
+ * The legacy `selectActiveTools` read the active tab's mode from the legacy
  * tab's mode. A background session must use its own mode and the shared global
  * tool/policy configuration.
  */
