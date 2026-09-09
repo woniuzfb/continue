@@ -3,7 +3,7 @@ import type { ModelDescription } from "core";
 import { createMockStore } from "../../util/test/mockStore";
 import { ensureSessionContextMetrics } from "./sessionActivation";
 import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
   initialSessionRuntime,
   type SessionRuntimeState,

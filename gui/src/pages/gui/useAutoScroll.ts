@@ -3,7 +3,7 @@ import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { useStore } from "react-redux";
 import type { RootState } from "../../redux/store";
 import { loadMoreHistory as loadMoreHistoryThunk } from "../../redux/thunks/sessionPaging";
-import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionSlice";
+import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionHistory";
 import {
   selectActiveHasMoreHistory,
   selectActiveIsHistoryLoading,

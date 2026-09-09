@@ -1,6 +1,6 @@
 import { Tool, ToolStatus } from "core";
 import { filterActiveTools } from "./selectActiveTools";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import type { RootState } from "../store";
 import {
   findAllCurToolCalls,

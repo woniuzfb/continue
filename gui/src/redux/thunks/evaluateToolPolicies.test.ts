@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Tool, ToolCallState } from "core";
 import { createMockStore } from "../../util/test/mockStore";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
 import { evaluateSessionToolPolicies } from "./evaluateToolPolicies";
 

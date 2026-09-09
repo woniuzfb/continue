@@ -15,7 +15,7 @@ import { useNavigate } from "react-router-dom";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
-import { refreshSessionMetadata } from "../../redux/thunks/session";
+import { refreshSessionCatalog } from "../../redux/thunks/sessionLifecycle";
 import { getFontSize, getPlatform } from "../../util";
 import { ROUTES } from "../../util/navigation";
 import ConfirmationDialog from "../dialogs/ConfirmationDialog";
@@ -178,7 +178,7 @@ export function History() {
 
             // actual update + refresh
             await ideMessenger.request("history/clear", undefined);
-            void dispatch(refreshSessionMetadata({}));
+            void dispatch(refreshSessionCatalog({}));
 
             // start a new session
             void dispatch(createAndActivateSession({ origin: "new" }));

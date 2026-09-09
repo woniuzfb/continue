@@ -3,7 +3,7 @@ import { createMockStore } from "../../util/test/mockStore";
 import { selectSelectedChatModel } from "../slices/configSlice";
 import { EMPTY_CONFIG } from "../slices/configSlice";
 import { selectSessionById } from "../selectors/sessions";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
 import {
   activateSessionTab,

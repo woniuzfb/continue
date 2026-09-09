@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { useRef } from "react";
 import { Provider } from "react-redux";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionSlice";
+import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionHistory";
 import { useAppSelector } from "../../redux/hooks";
 import { createMockStore, getEmptyRootState } from "../../util/test/mockStore";
 import { initialSessionRuntime } from "../../redux/slices/sessionsSlice";

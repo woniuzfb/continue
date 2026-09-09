@@ -1,7 +1,7 @@
 import { ContextItem, ToolCallState } from "core";
 import { renderContextItems } from "core/util/messageContent";
 import { toolCallCtxItemToCtxItemWithId } from "../../pages/gui/ToolCallDiv/utils";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { updateHistoryItemByMessageId } from "../slices/sessionsSlice";
 import type { AppThunkDispatch, RootState } from "../store";
 import { findChatHistoryItemByToolCallId } from "./index";

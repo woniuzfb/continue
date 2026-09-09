@@ -19,7 +19,6 @@ import configReducer from "./slices/configSlice";
 import editModeStateReducer from "./slices/editState";
 import indexingReducer from "./slices/indexingSlice";
 import { profilesReducer } from "./slices/profilesSlice";
-import sessionReducer from "./slices/sessionSlice";
 import sessionCatalogReducer from "./slices/sessionCatalogSlice";
 import sessionsReducer from "./slices/sessionsSlice";
 import tabsReducer from "./slices/tabsSlice";
@@ -31,7 +30,6 @@ const rootReducer = combineReducers({
   // migrate; they are removed together with the v1->v2 persist bump.
   sessions: sessionsReducer,
   sessionCatalog: sessionCatalogReducer,
-  session: sessionReducer,
   ui: uiReducer,
   editModeState: editModeStateReducer,
   config: configReducer,
@@ -41,18 +39,6 @@ const rootReducer = combineReducers({
 });
 
 const saveSubsetFilters = [
-  createFilter("session", [
-    "id",
-    "lastSessionId",
-    "title",
-
-    // Persist edit mode in case closes in middle
-    "mode",
-
-    // higher risk to persist
-    // codeBlockApplyStates
-    // symbols
-  ]),
   createFilter("editModeState", [
     "returnToMode",
     "lastNonEditSessionWasEmpty",

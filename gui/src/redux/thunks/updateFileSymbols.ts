@@ -1,7 +1,6 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { ChatHistoryItem, ContextItemWithId } from "core";
 import { CodeBlock } from "../../components/mainInput/TipTapEditor/extensions";
-import { updateFileSymbols } from "../slices/sessionSlice";
 import { setSessionSymbols } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 
@@ -40,34 +39,6 @@ export function getContextItemsFromHistory(
     Get file symbols for given context items
     Overwrite symbols for existing file matches
 */
-export const updateFileSymbolsFromFiles = createAsyncThunk<
-  void,
-  string[],
-  ThunkApiType
->(
-  "symbols/updateFromContextItems",
-  async (filepaths, { dispatch, extra, getState }) => {
-    try {
-      // Get unique file uris from context items
-      const uniqueUris = Array.from(new Set(filepaths));
-
-      // Update symbols for those files
-      if (uniqueUris.length > 0) {
-        const result = await extra.ideMessenger.request(
-          "context/getSymbolsForFiles",
-          { uris: uniqueUris },
-        );
-        if (result.status === "error") {
-          throw new Error(result.error);
-        }
-        dispatch(updateFileSymbols(result.content));
-      }
-    } catch (e) {
-      console.error("Error updating file symbols from filepaths", e, filepaths);
-    }
-  },
-);
-
 /**
  * Phase 1 session-scoped variant of {@link updateFileSymbolsFromFiles}
  * (方案.md §五.20): merges the fetched symbols into the target session instead
@@ -123,73 +94,10 @@ export const updateSessionFileSymbolsFromFiles = createAsyncThunk<
 // 按 sessionId 记录 in-flight promise，同会话并发调用共享同一次计算。
 const symbolsInFlight = new Map<string, Promise<void>>();
 
-export const updateFileSymbolsFromHistory = createAsyncThunk<
-  void,
-  undefined,
-  ThunkApiType
->("symbols/updateFromHistory", async (_, { dispatch, extra, getState }) => {
-  try {
-    const state = getState();
-    const sessionId = state.session.id;
-    const existing = sessionId ? symbolsInFlight.get(sessionId) : undefined;
-    if (existing) {
-      await existing;
-      // Re-read state so URIs added after the first run's snapshot are picked up.
-      await dispatch(updateFileSymbolsFromHistory()).unwrap();
-      return;
-    }
-
-    const run = (async () => {
-      const s = getState();
-      // Get unique context item file uris from all history
-      const contextItems = getContextItemsFromHistory(s.session.history);
-
-      const uniqueUris = new Set(
-        contextItems
-          .filter((item) => item?.uri?.type === "file" && item?.uri?.value)
-          .map((item) => item.uri!.value),
-      );
-
-      // Remove if already in symbols
-      Object.keys(s.session.symbols).forEach((key) => {
-        uniqueUris.delete(key);
-      });
-
-      const uriArray = Array.from(uniqueUris);
-
-      // And then update symbols for those files
-      if (uriArray.length > 0) {
-        const result = await extra.ideMessenger.request(
-          "context/getSymbolsForFiles",
-          { uris: uriArray },
-        );
-        if (result.status === "error") {
-          throw new Error(result.error);
-        }
-        dispatch(updateFileSymbols(result.content));
-      }
-    })();
-
-    if (sessionId) {
-      symbolsInFlight.set(sessionId, run);
-      try {
-        await run;
-      } finally {
-        symbolsInFlight.delete(sessionId);
-      }
-    } else {
-      await run;
-    }
-  } catch (e) {
-    // Catch all - don't want file symbols to break the chat experience for now
-    console.error("Error updating file symbols from context items", e);
-  }
-});
-
 /**
- * Session-scoped symbols refresh (方案.md §五.20): reads the target session's
- * history and merges only its missing file URIs, writing through
- * `setSessionSymbols`. In-flight calls for the same session are shared.
+ * Session-scoped symbols refresh (方案.md §五.20): walks the target session's
+ * history, fetches symbols for the file context items it does not have yet and
+ * merges them into that session. In-flight calls per session are shared.
  */
 export const updateSessionFileSymbolsFromHistory = createAsyncThunk<
   void,

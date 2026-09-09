@@ -12,7 +12,10 @@ import {
 import { stripImages } from "core/util/messageContent";
 import { IIdeMessenger } from "../../../../context/IdeMessenger";
 import { setSessionGatheringContext } from "../../../../redux/slices/sessionsSlice";
-import { selectActiveSessionId } from "../../../../redux/selectors/sessionView";
+import {
+  selectActiveMode,
+  selectActiveSessionId,
+} from "../../../../redux/selectors/sessionView";
 import { RootState } from "../../../../redux/store";
 import { processEditorContent } from "./processEditorContent";
 import { renderSlashCommandPrompt } from "./renderSlashCommand";
@@ -152,7 +155,7 @@ async function gatherContextItems({
   );
   const contextItems: ContextItemWithId[] = [];
 
-  const isInAgentMode = getState().session.mode === "agent";
+  const isInAgentMode = selectActiveMode(getState()) === "agent";
 
   // Build all context requests in parallel to minimize first-token latency
   // (previously each provider was fetched sequentially, 3+ IPC round-trips).

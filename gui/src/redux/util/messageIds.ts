@@ -1,6 +1,6 @@
 import { ChatHistoryItem } from "core";
 import { v4 as uuidv4 } from "uuid";
-import { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 
 /**
  * Disk history may predate persisted message ids (legacy sessions). Assign a

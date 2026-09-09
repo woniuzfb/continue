@@ -1,6 +1,5 @@
 import { useMemo, useRef } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
-import { saveCurrentSession } from "../../redux/thunks/session";
 import { useCompactConversation } from "../../util/compactConversation";
 import { ToolTip } from "../gui/Tooltip";
 import {
@@ -10,6 +9,7 @@ import {
   selectActiveHistory,
   selectActiveIsPruned,
 } from "../../redux/selectors/sessionView";
+import { saveActiveSession } from "../../redux/thunks/sessionPersistence";
 
 // 将 token 数格式化为紧凑形式：1234 -> 1.2K, 128000 -> 128K
 function formatTokens(tokens: number): string {
@@ -115,9 +115,7 @@ const ContextStatus = () => {
                     className="hover:text-link inline-block cursor-pointer underline"
                     onClick={() => {
                       void dispatch(
-                        saveCurrentSession({
-                          openNewSession: true,
-                        }),
+                        saveActiveSession({ openNewSession: true }),
                       );
                     }}
                   >

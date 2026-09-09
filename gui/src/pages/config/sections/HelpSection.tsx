@@ -12,11 +12,16 @@ import { Card } from "../../../components/ui";
 import { IdeMessengerContext } from "../../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
 import { setOnboardingCard } from "../../../redux/slices/uiSlice";
-import { saveCurrentSession } from "../../../redux/thunks/session";
 import { isJetBrains } from "../../../util";
 import { ROUTES } from "../../../util/navigation";
 import { ConfigHeader } from "../components/ConfigHeader";
 import { ConfigRow } from "../components/ConfigRow";
+import {
+  selectActiveHistory,
+  selectActiveIsStreaming,
+  selectActiveSessionId,
+} from "../../../redux/selectors/sessionView";
+import { saveActiveSession } from "../../../redux/thunks/sessionPersistence";
 
 interface KeyboardShortcutProps {
   shortcut: string;
@@ -151,7 +156,15 @@ export function HelpSection() {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
 
-  const currentSession = useAppSelector((state) => state.session);
+  const currentSessionId = useAppSelector((state) =>
+    selectActiveSessionId(state),
+  );
+  const currentSessionHistory = useAppSelector((state) =>
+    selectActiveHistory(state),
+  );
+  const currentSessionStreaming = useAppSelector((state) =>
+    selectActiveIsStreaming(state),
+  );
 
   const shortcuts = useMemo(() => {
     return isJetBrains() ? jetbrainsShortcuts : vscodeShortcuts;
@@ -159,7 +172,7 @@ export function HelpSection() {
 
   const handleViewSessionData = async () => {
     const sessionData = await ideMessenger.request("history/load", {
-      id: currentSession.id,
+      id: currentSessionId,
     });
 
     if (sessionData.status === "success") {
@@ -203,15 +216,14 @@ export function HelpSection() {
                 onClick={() => navigate(ROUTES.STATS)}
               />
 
-              {currentSession.history.length > 0 &&
-                !currentSession.isStreaming && (
-                  <ConfigRow
-                    title="View current session history"
-                    description="Open the current chat session file for troubleshooting"
-                    icon={NumberedListIcon}
-                    onClick={handleViewSessionData}
-                  />
-                )}
+              {currentSessionHistory.length > 0 && !currentSessionStreaming && (
+                <ConfigRow
+                  title="View current session history"
+                  description="Open the current chat session file for troubleshooting"
+                  icon={NumberedListIcon}
+                  onClick={handleViewSessionData}
+                />
+              )}
 
               <ConfigRow
                 title="Quickstart"
@@ -220,11 +232,7 @@ export function HelpSection() {
                 onClick={async () => {
                   navigate("/");
                   // Used to clear the chat panel before showing onboarding card
-                  await dispatch(
-                    saveCurrentSession({
-                      openNewSession: true,
-                    }),
-                  );
+                  await dispatch(saveActiveSession({ openNewSession: true }));
                   dispatch(
                     setOnboardingCard({
                       show: true,

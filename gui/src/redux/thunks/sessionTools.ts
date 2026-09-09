@@ -5,7 +5,7 @@ import { ContinueError, ContinueErrorReason } from "core/util/errors";
 import { renderContextItems } from "core/util/messageContent";
 import { callClientTool } from "../../util/clientTools/callClientTool";
 import { selectSessionById } from "../selectors/sessions";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
   applySessionStreamUpdate,
   pauseSessionStream,

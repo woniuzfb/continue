@@ -3,7 +3,7 @@ import type { ToolCallState } from "core";
 import { createMockStore } from "../../util/test/mockStore";
 import { selectSessionById } from "../selectors/sessions";
 import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
   type SessionRuntimeState,
   initialSessionRuntime,

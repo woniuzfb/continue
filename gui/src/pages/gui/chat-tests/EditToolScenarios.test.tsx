@@ -6,7 +6,6 @@ import { Chat } from "../Chat";
 import { waitFor } from "@testing-library/dom";
 import { act } from "@testing-library/react";
 import { ChatMessage } from "core";
-import { setInactive } from "../../../redux/slices/sessionSlice";
 import {
   getElementByTestId,
   getElementByText,
@@ -68,9 +67,6 @@ test(
 
     // Reset mocks to ensure clean state
     ideMessenger.resetMocks();
-
-    // Reset streaming state to prevent test interference
-    store.dispatch(setInactive());
 
     ideMessenger.responses["getWorkspaceDirs"] = [EDIT_WORKSPACE_DIR];
     // Provide empty open files to avoid MockIdeMessenger throwing on getOpenFiles

@@ -6,7 +6,6 @@ import {
   applySessionToolCallUpdate,
   findSessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
-import { errorToolCall, updateToolCallOutput } from "../slices/sessionSlice";
 import { DEFAULT_TOOL_SETTING, ToolPolicies } from "../slices/uiSlice";
 import { AppThunkDispatch, RootState } from "../store";
 
@@ -145,49 +144,6 @@ export async function evaluateSessionToolPolicies(
       return result;
     }),
   );
-
-  return policyResults;
-}
-
-/*
-    1. Get arg-dependent tool policies from core
-    2. Mark any disabled ones as errored
-    3. Mark others as generated
-*/
-export async function evaluateToolPolicies(
-  dispatch: AppThunkDispatch,
-  ideMessenger: IIdeMessenger,
-  activeTools: Tool[],
-  generatedToolCalls: ToolCallState[],
-  toolPolicies: ToolPolicies,
-): Promise<EvaluatedPolicy[]> {
-  // Check if ALL tool calls are auto-approved using dynamic evaluation
-  const policyResults = await Promise.all(
-    generatedToolCalls.map((toolCallState) =>
-      evaluateToolPolicy(
-        ideMessenger,
-        activeTools,
-        toolCallState,
-        toolPolicies,
-      ),
-    ),
-  );
-
-  const disabledResults = policyResults.filter(
-    ({ policy }) => policy === "disabled",
-  );
-
-  for (const { displayValue, toolCallState } of disabledResults) {
-    dispatch(errorToolCall({ toolCallId: toolCallState.toolCallId }));
-
-    // Use the displayValue from the policy evaluation, or fallback to function name
-    dispatch(
-      updateToolCallOutput({
-        toolCallId: toolCallState.toolCallId,
-        contextItems: [policyViolationContextItem(toolCallState, displayValue)],
-      }),
-    );
-  }
 
   return policyResults;
 }

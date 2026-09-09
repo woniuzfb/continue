@@ -37,7 +37,7 @@ import {
   selectDoneApplyStates,
   selectPendingToolCalls,
 } from "../../redux/selectors/selectToolCalls";
-import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionSlice";
+import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionHistory";
 import { streamEditThunk } from "../../redux/thunks/edit";
 import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
 import { bootstrapLastSession } from "../../redux/thunks/sessionLifecycle";
@@ -332,7 +332,7 @@ export function Chat() {
    */
   const jumpToNextUserMessage = useCallback(
     (currentMessageId: string) => {
-      const h = reduxStore.getState().session.history;
+      const h = selectActiveHistory(reduxStore.getState());
       const idx = h.findIndex((item) => item.message.id === currentMessageId);
       if (idx < 0) {
         // Stale message id (history was replaced): nothing to jump to.
@@ -380,18 +380,16 @@ export function Chat() {
         // Stale message id (history was replaced): never load pages just to
         // jump; abort instead.
         if (
-          !reduxStore
-            .getState()
-            .session.history.some(
-              (item) => item.message.id === currentMessageId,
-            )
+          !selectActiveHistory(reduxStore.getState()).some(
+            (item) => item.message.id === currentMessageId,
+          )
         ) {
           return;
         }
         // Always read the freshest history: prepends shift indices, so the
         // current message's position must be recomputed on every call.
         const findTarget = (): string | undefined => {
-          const h = reduxStore.getState().session.history;
+          const h = selectActiveHistory(reduxStore.getState());
           const idx = h.findIndex(
             (item) => item.message.id === currentMessageId,
           );
@@ -404,7 +402,7 @@ export function Chat() {
         };
 
         let target = findTarget();
-        let prevLength = reduxStore.getState().session.history.length;
+        let prevLength = selectActiveHistory(reduxStore.getState()).length;
         // Load pages of earlier history until the target shows up. Guarded by
         // hasMoreHistory / isHistoryLoading; stops if a load makes no progress
         // (failure or empty page) so it can never spin forever.

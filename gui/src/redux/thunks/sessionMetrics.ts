@@ -9,7 +9,7 @@ import {
   selectSessionById,
   selectSessionChatModel,
 } from "../selectors/sessions";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { setSessionContextMetrics } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { constructMessages } from "../util/constructMessages";

@@ -24,7 +24,7 @@ import {
   setSessionMainEditorAttachmentsRestore,
   updateHistoryItemByMessageId,
 } from "../slices/sessionsSlice";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { ThunkApiType } from "../store";
 import { loadFullHistory } from "./sessionPaging";
 import { enqueueSessionSave } from "./sessionPersistence";

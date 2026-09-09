@@ -11,7 +11,6 @@ import {
   setTabs,
 } from "../../redux/slices/tabsSlice";
 import { AppDispatch, RootState } from "../../redux/store";
-import { loadSession, saveCurrentSession } from "../../redux/thunks/session";
 import { varWithFallback } from "../../styles/theme";
 import {
   selectActiveHistory,
@@ -19,6 +18,8 @@ import {
   selectActiveTitle,
 } from "../../redux/selectors/sessionView";
 import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
+import { saveActiveSession } from "../../redux/thunks/sessionPersistence";
+import { openSessionTab } from "../../redux/thunks/sessionLifecycle";
 
 // Haven't set up theme colors for tabs yet
 // Will keep it simple and choose from existing ones. Comments show vars we could use
@@ -169,11 +170,7 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
     // 同步部分（getState、cache、newSession）微秒级完成，异步部分（IPC、
     // LLM 标题生成）在后台执行不阻塞 UI。
     if (hasHistory) {
-      void dispatch(
-        saveCurrentSession({
-          openNewSession: true,
-        }),
-      );
+      void dispatch(saveActiveSession({ openNewSession: true }));
     } else {
       void dispatch(createAndActivateSession({ origin: "new" }));
     }
@@ -212,12 +209,7 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
     const shouldSave = hasHistory;
     dispatch(setActiveTab(id));
     if (targetTab.sessionId) {
-      void dispatch(
-        loadSession({
-          sessionId: targetTab.sessionId,
-          saveCurrentSession: shouldSave,
-        }),
-      );
+      void dispatch(openSessionTab({ sessionId: targetTab.sessionId }));
     }
   };
 

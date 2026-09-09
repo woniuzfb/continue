@@ -4,7 +4,7 @@ import {
   ToolCallState,
 } from "core";
 import { IIdeMessenger } from "../context/IdeMessenger";
-import { ChatHistoryItemWithMessageId } from "../redux/slices/sessionSlice";
+import { ChatHistoryItemWithMessageId } from "../redux/slices/sessionHistory";
 
 /**
  * Extract model information from tool call state

@@ -3,7 +3,7 @@ import type { JSONContent } from "@tiptap/core";
 import type { InputModifiers } from "core";
 import { createMockStore } from "../../util/test/mockStore";
 import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
 import { resetSessionSaveQueues } from "./sessionPersistence";
 import { resetSessionStreamCheckpoints } from "./sessionStreams";

@@ -4,11 +4,6 @@ import { ContinueErrorReason } from "core/util/errors";
 import { IIdeMessenger } from "../../context/IdeMessenger";
 import { findSessionToolCallTarget } from "../util/sessionToolCallWrites";
 import { applySessionToolCallUpdate } from "../util/sessionToolCallWrites";
-import {
-  errorToolCall,
-  setProcessedToolCallArgs,
-  updateToolCallOutput,
-} from "../slices/sessionSlice";
 import { AppThunkDispatch, RootState } from "../store";
 
 function invalidArgsContextItem(
@@ -87,54 +82,6 @@ export async function preprocessSessionToolCalls(
           toolCallId,
           patch: { processedArgs: preprocessedArgs },
         });
-      }
-    }),
-  );
-}
-
-/** Legacy active-session path; kept until its consumers are migrated. */
-export async function preprocessToolCalls(
-  dispatch: AppThunkDispatch,
-  ideMessenger: IIdeMessenger,
-  generatedToolCalls: ToolCallState[],
-): Promise<void> {
-  // Tool call pre-processing
-  await Promise.all(
-    generatedToolCalls.map(async (tcState) => {
-      let errorReason: ContinueErrorReason | undefined = undefined;
-      let errorMessage: string | undefined = undefined;
-      let preprocessedArgs: Record<string, unknown> | undefined = undefined;
-      const result = await ideMessenger.request("tools/preprocessArgs", {
-        toolName: tcState.toolCall.function.name,
-        args: tcState.parsedArgs,
-      });
-      if (result.status === "success") {
-        preprocessedArgs = result.content.preprocessedArgs;
-        errorMessage = result.content.errorMessage;
-        errorReason = result.content.errorReason;
-      } else {
-        errorMessage = result.error;
-        errorReason = ContinueErrorReason.Unknown;
-      }
-      if (errorReason) {
-        dispatch(
-          errorToolCall({
-            toolCallId: tcState.toolCallId,
-          }),
-        );
-        dispatch(
-          updateToolCallOutput({
-            toolCallId: tcState.toolCallId,
-            contextItems: [invalidArgsContextItem(tcState, errorMessage)],
-          }),
-        );
-      } else if (preprocessedArgs) {
-        dispatch(
-          setProcessedToolCallArgs({
-            toolCallId: tcState.toolCallId,
-            newArgs: preprocessedArgs,
-          }),
-        );
       }
     }),
   );

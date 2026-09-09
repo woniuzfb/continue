@@ -1,4 +1,5 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
+import { NEW_SESSION_TITLE } from "core/util/constants";
 import { Session } from "core";
 import { selectSessionById } from "../selectors/sessions";
 import {
@@ -7,6 +8,7 @@ import {
   SessionPersistenceState,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
+import { createAndActivateSession } from "./sessionActivation";
 
 /**
  * Phase 1/2 save path (方案.md §五.10/§七.5).
@@ -204,6 +206,33 @@ export const retrySessionSave = createAsyncThunk<
     reason: "retry",
   });
   await (runningSaves.get(sessionId) ?? startSaveLoop(sessionId, thunkApi));
+});
+
+/**
+ * Active-UI save entry point (方案.md §五.14): resolves the visible session,
+ * flushes its save and optionally opens a new session. Call sites that used the
+ * legacy `saveCurrentSession` use this instead.
+ */
+export const saveActiveSession = createAsyncThunk<
+  void,
+  { openNewSession: boolean },
+  ThunkApiType
+>("sessions/saveActive", async ({ openNewSession }, { dispatch, getState }) => {
+  const sessionId = getState().sessions.activeSessionId;
+  const runtime = sessionId
+    ? getState().sessions.sessionsById[sessionId]
+    : undefined;
+  if (
+    sessionId &&
+    runtime &&
+    runtime.history.length > 0 &&
+    (runtime.dirty || runtime.title === NEW_SESSION_TITLE)
+  ) {
+    await dispatch(flushSessionSave({ sessionId }));
+  }
+  if (openNewSession) {
+    await dispatch(createAndActivateSession({ origin: "new" }));
+  }
 });
 
 /** Test helper: drop module-level queue state between tests. */

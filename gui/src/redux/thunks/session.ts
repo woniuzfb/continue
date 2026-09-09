@@ -6,22 +6,7 @@ import {
   replaceFileContentBlocks,
 } from "core/util/messageContent";
 import { IIdeMessenger } from "../../context/IdeMessenger";
-import { selectSelectedChatModel } from "../slices/configSlice";
-import { selectSelectedProfile } from "../slices/profilesSlice";
-import {
-  clearContextMetrics,
-  deleteSessionMetadata,
-  markSessionDirty,
-  markSessionPersisted,
-  newSession,
-  setAllSessionMetadata,
-  setHistoryPagination,
-  setIsSessionMetadataLoading,
-  updateSessionMetadata,
-} from "../slices/sessionSlice";
 import { RootState, ThunkApiType } from "../store";
-import { updateSelectedModelByRole } from "../thunks/updateSelectedModelByRole";
-import { compileChatForContextMetrics } from "./compileChatForContextMetrics";
 import { constructMessages } from "../util/constructMessages";
 import { createAndActivateSession } from "./sessionActivation";
 import {
@@ -89,122 +74,6 @@ export async function getSessionPage(
   };
 }
 
-export const refreshSessionMetadata = createAsyncThunk<
-  BaseSessionMetadata[],
-  {
-    offset?: number;
-    limit?: number;
-  },
-  ThunkApiType
->("session/refreshMetadata", async ({ offset, limit }, { dispatch, extra }) => {
-  const result = await extra.ideMessenger.request("history/list", {
-    limit,
-    offset,
-  });
-  if (result.status === "error") {
-    throw new Error(result.error);
-  }
-  dispatch(setIsSessionMetadataLoading(false));
-  dispatch(setAllSessionMetadata(result.content));
-  return result.content;
-});
-
-export const deleteSession = createAsyncThunk<void, string, ThunkApiType>(
-  "session/delete",
-  async (id, { dispatch }) => {
-    // Phase 4 handoff: stop own stream, release runtime, delete on disk and
-    // activate the neighbour (方案.md §五.19).
-    await dispatch(deleteSessionRuntime({ sessionId: id })).unwrap();
-  },
-);
-
-export const updateSession = createAsyncThunk<void, Session, ThunkApiType>(
-  "session/update",
-  async (session, { extra, dispatch }) => {
-    dispatch(
-      updateSessionMetadata({
-        sessionId: session.sessionId,
-        title: session.title,
-      }),
-    ); // optimistic session metadata update
-    const result = await extra.ideMessenger.request("history/save", session);
-    if (result.status === "error") {
-      throw new Error(result.error);
-    }
-    await dispatch(refreshSessionMetadata({}));
-  },
-);
-
-/**
- * 保存“后台续流”的会话：流所属会话已在流期间被切走，此时
- * getState().session 是别的会话，完整内容在 LRU 缓存副本里。
- * 标题逻辑与 saveCurrentSession 保持一致（LLM 生成 + 文本回退）。
- */
-export const loadSession = createAsyncThunk<
-  void,
-  { sessionId: string; saveCurrentSession: boolean },
-  ThunkApiType
->(
-  "session/load",
-  async ({ sessionId, saveCurrentSession }, { dispatch, getState }) => {
-    // Phase 4 handoff: activation + hydration live in sessionActivation /
-    // sessionLifecycle. Saving the outgoing session is the caller's boundary.
-    if (saveCurrentSession) {
-      const activeSessionId = getState().sessions.activeSessionId;
-      if (activeSessionId && activeSessionId !== sessionId) {
-        void dispatch(
-          enqueueSessionSave({
-            sessionId: activeSessionId,
-            reason: "TAB_SWITCH",
-          }),
-        );
-      }
-    }
-    await dispatch(openSessionTab({ sessionId })).unwrap();
-  },
-);
-
-export const selectChatModelForProfile = createAsyncThunk<
-  void,
-  string,
-  ThunkApiType
->(
-  "session/selectModelForCurrentProfile",
-  async (modelTitle, { extra, dispatch, getState }) => {
-    const state = getState();
-    const modelMatch = state.config.config?.modelsByRole?.chat?.find(
-      (m) => m.title === modelTitle,
-    );
-    const selectedProfile = selectSelectedProfile(state);
-    if (selectedProfile && modelMatch) {
-      const previousModelTitle = selectSelectedChatModel(state)?.title;
-      await dispatch(
-        updateSelectedModelByRole({
-          role: "chat",
-          modelTitle: modelTitle,
-          selectedProfile,
-        }),
-      );
-      // chatModelTitle is persisted with the session rather than the profile.
-      // A model switch without a subsequent message must therefore make the
-      // current session eligible for the next tab-switch save.
-      if (previousModelTitle !== modelTitle) {
-        dispatch(markSessionDirty());
-      }
-    }
-  },
-);
-
-export const loadLastSession = createAsyncThunk<
-  void,
-  { skipCachingCurrent?: string } | void,
-  ThunkApiType
->("session/loadLast", async (_arg, { dispatch }) => {
-  // Phase 4 handoff: the session-scoped lifecycle owns startup now. The name is
-  // kept until every call site is renamed (方案.md §九).
-  await dispatch(bootstrapLastSession()).unwrap();
-});
-
 /**
  * 取第一个含非空正文的回复 run 的完整文本作为标题生成输入。
  * 一轮回复可能被 thinking 气泡拆成多个 assistant history item
@@ -259,27 +128,3 @@ export function getChatTitleFromMessage(message: ChatMessage) {
   }
   return text;
 }
-
-export const saveCurrentSession = createAsyncThunk<
-  void,
-  { openNewSession: boolean },
-  ThunkApiType
->("session/saveCurrent", async ({ openNewSession }, { dispatch, getState }) => {
-  // The runtime in sessionsById[sessionId] is the only save snapshot
-  // (方案.md §六 sessionPersistence).
-  const sessionId = getState().sessions.activeSessionId;
-  const runtime = sessionId
-    ? getState().sessions.sessionsById[sessionId]
-    : undefined;
-  if (
-    sessionId &&
-    runtime &&
-    runtime.history.length > 0 &&
-    (runtime.dirty || runtime.title === NEW_SESSION_TITLE)
-  ) {
-    await dispatch(flushSessionSave({ sessionId }));
-  }
-  if (openNewSession) {
-    await dispatch(createAndActivateSession({ origin: "new" }));
-  }
-});

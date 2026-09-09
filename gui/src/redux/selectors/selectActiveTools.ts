@@ -35,14 +35,3 @@ export function filterActiveTools(
   }
   return enabledTools;
 }
-
-export const selectActiveTools = createSelector(
-  [
-    (store: RootState) => store.session.mode,
-    (store: RootState) => store.config.config.tools,
-    (store: RootState) => store.ui.toolSettings,
-    (store: RootState) => store.ui.toolGroupSettings,
-  ],
-  (mode, tools, policies, groupPolicies): Tool[] =>
-    filterActiveTools(mode, tools, policies, groupPolicies),
-);

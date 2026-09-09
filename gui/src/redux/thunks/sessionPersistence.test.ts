@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
 import { selectSessionById } from "../selectors/sessions";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
 import { resetSessionSaveQueues, saveSession } from "./sessionPersistence";
 

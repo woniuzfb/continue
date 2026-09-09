@@ -15,7 +15,6 @@ import type { RootState } from "../redux/store";
 import { setCodeToEdit } from "../redux/slices/editState";
 import { setShowDialog } from "../redux/slices/uiSlice";
 import { enterEdit, exitEdit } from "../redux/thunks/edit";
-import { saveCurrentSession } from "../redux/thunks/session";
 import { fontSize, isMetaEquivalentKeyPressed } from "../util";
 import { ROUTES } from "../util/navigation";
 import { FatalErrorIndicator } from "./config/FatalErrorNotice";
@@ -24,6 +23,7 @@ import { useMainEditor } from "./mainInput/TipTapEditor";
 import { isNewUserOnboarding, useOnboardingCard } from "./OnboardingCard";
 import OSRContextMenu from "./OSRContextMenu";
 import { selectActiveIsInEdit } from "../redux/selectors/sessionView";
+import { saveActiveSession } from "../redux/thunks/sessionPersistence";
 
 const LayoutTopDiv = styled(CustomScrollbarDiv)`
   height: 100%;
@@ -86,11 +86,7 @@ const Layout = () => {
         // fire-and-forget：saveCurrentSession 内部 cacheCurrentSession +
         // dispatch(newSession()) 同步执行让 UI 立即响应，LLM 标题生成和
         // 写盘在后台进行。不 await 避免 listener 回调阻塞。
-        void dispatch(
-          saveCurrentSession({
-            openNewSession: true,
-          }),
-        );
+        void dispatch(saveActiveSession({ openNewSession: true }));
       }
     },
     [isInEdit],
@@ -117,11 +113,7 @@ const Layout = () => {
         );
       } else {
         // fire-and-forget：同 newSession listener
-        void dispatch(
-          saveCurrentSession({
-            openNewSession: true,
-          }),
-        );
+        void dispatch(saveActiveSession({ openNewSession: true }));
       }
     },
     [isHome, isInEdit],

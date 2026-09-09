@@ -10,6 +10,8 @@ import { IdeMessengerProvider } from "../../context/IdeMessenger";
 import { MockIdeMessenger } from "../../context/MockIdeMessenger";
 import ParallelListeners from "../../hooks/ParallelListeners";
 import { setupStore } from "../../redux/store";
+import { NEW_SESSION_TITLE } from "core/util/constants";
+import { v4 as uuidv4 } from "uuid";
 import {
   createSessionRuntime,
   initialSessionRuntime,
@@ -50,22 +52,16 @@ export async function renderWithProviders(
     ...renderOptions
   } = extendedRenderOptions;
 
-  // Phase 4 harness (方案.md §九): the rendered app now reads the active session
-  // through sessionsById. Seed a runtime for the store's active session so the
-  // component tree, the send path and the tool loop all work as in the app.
+  // Phase 4 harness (方案.md §九): the rendered app reads the active session
+  // through sessionsById, so seed a runtime for a fresh session unless the
+  // caller provided one.
   const bootState = store.getState() as any;
-  if (
-    Object.keys(bootState.sessions.sessionsById).length === 0 &&
-    bootState.session?.id
-  ) {
-    const sessionId = bootState.session.id;
+  if (Object.keys(bootState.sessions.sessionsById).length === 0) {
+    const sessionId = uuidv4();
     await store.dispatch(
       createSessionRuntime({
-        session: initialSessionRuntime(sessionId, bootState.session.title, {
-          // Inherit the legacy slice's initial UI state so the seeded runtime
-          // matches what the rendered app expects.
-          mode: bootState.session.mode,
-          isInEdit: bootState.session.isInEdit,
+        session: initialSessionRuntime(sessionId, NEW_SESSION_TITLE, {
+          mode: "agent",
         }),
       }) as any,
     );

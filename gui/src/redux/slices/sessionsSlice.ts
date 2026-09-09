@@ -18,7 +18,7 @@ import {
   ContextMetricsSnapshot,
   applyStreamUpdatesToHistory,
   mergeSplitReplies,
-} from "./sessionSlice";
+} from "./sessionHistory";
 
 /**
  * Phase 1 session ownership.

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NEW_SESSION_TITLE } from "core/util/constants";
 import { createMockStore } from "../../util/test/mockStore";
 import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
-import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
 import { resetSessionSaveQueues } from "./sessionPersistence";
 import { generateSessionTitle } from "./sessionTitle";

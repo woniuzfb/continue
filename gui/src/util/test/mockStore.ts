@@ -15,9 +15,6 @@ import {
   INITIAL_PROFILES_STATE,
   profilesReducer,
 } from "../../redux/slices/profilesSlice";
-import sessionReducer, {
-  INITIAL_SESSION_STATE,
-} from "../../redux/slices/sessionSlice";
 import sessionCatalogReducer, {
   initialSessionCatalogState as INITIAL_SESSION_CATALOG_STATE,
 } from "../../redux/slices/sessionCatalogSlice";
@@ -40,22 +37,8 @@ export const getEmptyRootState: () => RootState = () => {
     profiles: INITIAL_PROFILES_STATE,
     tabs: INITIAL_TABS_STATE,
   };
-  const { streamAborter, ...serializableSession } = INITIAL_SESSION_STATE;
-  const sessionCopy = copyOf(serializableSession) as Omit<
-    RootState["session"],
-    "streamAborter"
-  >;
-  const withoutSessionCopy = copyOf(withoutSession) as Omit<
-    RootState,
-    "session"
-  >;
-  return {
-    ...withoutSessionCopy,
-    session: {
-      ...sessionCopy,
-      streamAborter: new AbortController(),
-    },
-  };
+  const withoutSessionCopy = copyOf(withoutSession) as RootState;
+  return withoutSessionCopy;
 };
 
 export const createMockStore = (
@@ -72,7 +55,6 @@ export const createMockStore = (
     reducer: {
       sessions: sessionsReducer,
       sessionCatalog: sessionCatalogReducer,
-      session: sessionReducer,
       ui: uiReducer,
       editModeState: editModeStateReducer,
       config: configReducer,

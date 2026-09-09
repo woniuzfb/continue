@@ -24,7 +24,7 @@ import {
   handleSessionApplyStateUpdate,
   lookupApplyOrigin,
 } from "../redux/thunks/sessionApplyState";
-import { loadSession } from "../redux/thunks/session";
+
 import { refreshSessionCatalog } from "../redux/thunks/sessionLifecycle";
 import { updateSessionFileSymbolsFromHistory } from "../redux/thunks/updateFileSymbols";
 import {
@@ -41,6 +41,7 @@ import {
   selectActiveSessionId,
   selectLastSessionId,
 } from "../redux/selectors/sessionView";
+import { openSessionTab } from "../redux/thunks/sessionLifecycle";
 
 function ParallelListeners() {
   const dispatch = useAppDispatch();
@@ -134,12 +135,7 @@ function ParallelListeners() {
       }
       dispatch(setConfigLoading(false));
       if (initialSessionId) {
-        await dispatch(
-          loadSession({
-            sessionId: initialSessionId,
-            saveCurrentSession: false,
-          }),
-        );
+        await dispatch(openSessionTab({ sessionId: initialSessionId }));
       }
     }
     void initialLoadConfig();

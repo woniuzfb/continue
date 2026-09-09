@@ -11,16 +11,14 @@ import { Input } from "..";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { exitEdit } from "../../redux/thunks/edit";
-import {
-  deleteSession,
-  getSession,
-  loadSession,
-  updateSession,
-} from "../../redux/thunks/session";
 import { isShareSessionSupported } from "../../util";
 import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
 import { ToolTip } from "../gui/Tooltip";
 import { selectActiveSessionId } from "../../redux/selectors/sessionView";
+import { deleteSessionRuntime } from "../../redux/thunks/sessionLifecycle";
+import { getSession } from "../../redux/thunks/session";
+import { upsertSessionMetadata } from "../../redux/slices/sessionCatalogSlice";
+import { openSessionTab } from "../../redux/thunks/sessionLifecycle";
 
 const shareSessionSupported = isShareSessionSupported();
 
@@ -69,12 +67,19 @@ export function HistoryTableRow({
           ideMessenger,
           sessionMetadata.sessionId,
         );
-        await dispatch(
-          updateSession({
-            ...currentSession,
-            title: sessionTitleEditValue,
+        // Renaming only touches metadata + disk; no runtime required.
+        dispatch(
+          upsertSessionMetadata({
+            metadata: {
+              ...sessionMetadata,
+              title: sessionTitleEditValue,
+            },
           }),
         );
+        await ideMessenger.request("history/save", {
+          ...currentSession,
+          title: sessionTitleEditValue,
+        });
       }
       setEditing(false);
     } else if (e.key === "Escape") {
@@ -93,10 +98,7 @@ export function HistoryTableRow({
         await dispatch(exitEdit({}));
         if (sessionMetadata.sessionId !== currentSessionId) {
           await dispatch(
-            loadSession({
-              sessionId: sessionMetadata.sessionId,
-              saveCurrentSession: true,
-            }),
+            openSessionTab({ sessionId: sessionMetadata.sessionId }),
           );
         }
         navigate("/");
@@ -187,7 +189,11 @@ export function HistoryTableRow({
                 text="Delete"
                 onClick={async (e) => {
                   e.stopPropagation();
-                  await dispatch(deleteSession(sessionMetadata.sessionId));
+                  await dispatch(
+                    deleteSessionRuntime({
+                      sessionId: sessionMetadata.sessionId,
+                    }),
+                  );
                 }}
               >
                 <TrashIcon width="1em" height="1em" />

@@ -7,13 +7,15 @@ import { useAppSelector } from "../../../redux/hooks";
 import { clearCodeToEdit } from "../../../redux/slices/editState";
 import { setSessionNewestToolbarPreviewForInput } from "../../../redux/slices/sessionsSlice";
 import { AppDispatch } from "../../../redux/store";
-import { loadSession, saveCurrentSession } from "../../../redux/thunks/session";
+
 import { CodeBlock, PromptBlock } from "./extensions";
 import { insertCurrentFileContextMention } from "./utils/insertCurrentFileContextMention";
 import {
   selectActiveIsInEdit,
   selectActiveSessionId,
 } from "../../../redux/selectors/sessionView";
+import { saveActiveSession } from "../../../redux/thunks/sessionPersistence";
+import { openSessionTab } from "../../../redux/thunks/sessionLifecycle";
 
 /**
  * Hook for setting up main editor specific webview listeners
@@ -70,11 +72,7 @@ export function useMainEditorWebviewListeners({
       dispatch(clearCodeToEdit());
 
       if (historyLength > 0) {
-        await dispatch(
-          saveCurrentSession({
-            openNewSession: false,
-          }),
-        );
+        await dispatch(saveActiveSession({ openNewSession: false }));
       }
 
       setTimeout(() => {
@@ -98,11 +96,7 @@ export function useMainEditorWebviewListeners({
   useWebviewListener(
     "focusContinueInputWithNewSession",
     async () => {
-      await dispatch(
-        saveCurrentSession({
-          openNewSession: true,
-        }),
-      );
+      await dispatch(saveActiveSession({ openNewSession: true }));
 
       setTimeout(() => {
         editor?.commands.focus("end");
@@ -183,12 +177,7 @@ export function useMainEditorWebviewListeners({
     async (data) => {
       if (!data.sessionId) return;
 
-      await dispatch(
-        loadSession({
-          sessionId: data.sessionId,
-          saveCurrentSession: true,
-        }),
-      );
+      await dispatch(openSessionTab({ sessionId: data.sessionId }));
     },
     [],
   );
