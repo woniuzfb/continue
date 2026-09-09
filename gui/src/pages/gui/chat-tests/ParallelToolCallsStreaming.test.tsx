@@ -5,6 +5,12 @@ import { sendInputWithMockedResponse } from "../../../util/test/utils";
 import { Chat } from "../Chat";
 import { updateConfig } from "../../../redux/slices/configSlice";
 
+function activeHistory(store: any) {
+  const state = store.getState();
+  const sessionId = state.sessions.activeSessionId;
+  return sessionId ? state.sessions.sessionsById[sessionId].history : [];
+}
+
 describe("Parallel Tool Calls - Streaming", () => {
   test("should handle streaming deltas for multiple tool calls", async () => {
     const { ideMessenger, store } = await renderWithProviders(<Chat />);
@@ -106,11 +112,11 @@ describe("Parallel Tool Calls - Streaming", () => {
     });
 
     const state = store.getState();
-    const history = state.session.history;
+    const history = activeHistory(store);
 
     // Should have only one assistant message after streaming
     const assistantMessages = history.filter(
-      (item) => item.message.role === "assistant",
+      (item: any) => item.message.role === "assistant",
     );
     expect(assistantMessages).toHaveLength(1);
 
@@ -126,7 +132,7 @@ describe("Parallel Tool Calls - Streaming", () => {
 
     // Verify tool calls are properly constructed
     const toolCallIds = assistantMessage.toolCallStates!.map(
-      (tc) => tc.toolCallId,
+      (tc: any) => tc.toolCallId,
     );
     expect(toolCallIds).toContain("tool-call-1");
     expect(toolCallIds).toContain("tool-call-2");

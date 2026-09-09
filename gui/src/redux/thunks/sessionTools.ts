@@ -8,6 +8,7 @@ import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
 import {
   applySessionStreamUpdate,
+  pauseSessionStream,
   type SessionRuntimeState,
 } from "../slices/sessionsSlice";
 import { AppThunkDispatch, ThunkApiType, ThunkExtrasType } from "../store";
@@ -316,12 +317,19 @@ async function runApproveToolCall(
     return skipped(toolCallId, write.reason);
   }
 
+  // Client tools that do not respond immediately (edit / find-and-replace)
+  // stay `calling`: the apply-state flow closes them (方案.md §五.20). Only an
+  // error or an immediately-responding tool settles the call here.
   applySessionToolCallUpdate(api, {
     sessionId,
     messageId,
     toolCallId,
     patch: {
-      status: execution.error ? "errored" : "done",
+      ...(execution.error
+        ? { status: "errored" as const }
+        : execution.continueTurn
+          ? { status: "done" as const }
+          : {}),
       output,
       mcpUiState: execution.mcpUiState,
     },
@@ -337,6 +345,12 @@ async function runApproveToolCall(
   void dispatch(
     enqueueSessionSave({ sessionId, reason: "TOOL_CALL_APPROVED" }),
   );
+
+  // A client tool that waits for its apply flow leaves the request live but
+  // stops the stream, so the UI can show the pending apply state.
+  if (!execution.continueTurn && !execution.error) {
+    dispatch(pauseSessionStream({ sessionId, requestId }));
+  }
 
   let continuationRequested = false;
   if (execution.continueTurn && !input.deferContinuation) {
@@ -609,3 +623,50 @@ export const continueToolLoop = createAsyncThunk<
     ideMessenger: extra.ideMessenger,
   }),
 );
+
+// ── Active-UI entry points ──────────────────────────────────────────────
+
+type ActiveToolInput = { toolCallId: string; depth?: number };
+
+function activeToolTarget(
+  state: ThunkApiType["state"],
+): { sessionId: string; requestId: string } | undefined {
+  const sessionId = state.sessions.activeSessionId;
+  const requestId = sessionId
+    ? state.sessions.sessionsById[sessionId]?.stream.requestId
+    : undefined;
+  return sessionId && requestId ? { sessionId, requestId } : undefined;
+}
+
+/**
+ * Approval buttons (方案.md §五.20): the toolbar is global active UI, so it may
+ * resolve the visible session — but the action itself still carries the live
+ * sessionId + requestId, and a stale request is ignored.
+ */
+export const approveActiveToolCall = createAsyncThunk<
+  SessionToolOutcome | undefined,
+  ActiveToolInput,
+  ThunkApiType
+>("sessions/approveActiveToolCall", async (input, { dispatch, getState }) => {
+  const target = activeToolTarget(getState());
+  if (!target) {
+    return undefined;
+  }
+  return (await dispatch(
+    approveToolCall({ ...target, ...input }),
+  ).unwrap()) as SessionToolOutcome;
+});
+
+export const rejectActiveToolCall = createAsyncThunk<
+  SessionToolOutcome | undefined,
+  ActiveToolInput,
+  ThunkApiType
+>("sessions/rejectActiveToolCall", async (input, { dispatch, getState }) => {
+  const target = activeToolTarget(getState());
+  if (!target) {
+    return undefined;
+  }
+  return (await dispatch(
+    rejectToolCall({ ...target, ...input }),
+  ).unwrap()) as SessionToolOutcome;
+});

@@ -5,6 +5,12 @@ import { sendInputWithMockedResponse } from "../../../util/test/utils";
 import { Chat } from "../Chat";
 import { updateConfig } from "../../../redux/slices/configSlice";
 
+function activeHistory(store: any) {
+  const state = store.getState();
+  const sessionId = state.sessions.activeSessionId;
+  return sessionId ? state.sessions.sessionsById[sessionId].history : [];
+}
+
 describe("Parallel Tool Calls - Basic", () => {
   const PARALLEL_TOOL_CALL_RESPONSE: ChatMessage[] = [
     {
@@ -88,14 +94,14 @@ describe("Parallel Tool Calls - Basic", () => {
     });
 
     const state = store.getState();
-    const history = state.session.history;
+    const history = activeHistory(store);
 
     // Should have user message and assistant message
     expect(history).toHaveLength(2);
 
     // Find assistant message with tool calls
     const assistantMessage = history.find(
-      (item) =>
+      (item: any) =>
         item.message.role === "assistant" && item.toolCallStates?.length,
     );
 

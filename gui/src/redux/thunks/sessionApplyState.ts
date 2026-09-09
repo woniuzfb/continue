@@ -201,9 +201,14 @@ export const applySessionForEditTool = createAsyncThunk<
     }),
   );
 
+  // The protocol payload must not carry the GUI-only sessionId.
+  const { sessionId: _guiSessionId, ...applyPayload } = payload;
   let didError = false;
   try {
-    const response = await extra.ideMessenger.request("applyToFile", payload);
+    const response = await extra.ideMessenger.request(
+      "applyToFile",
+      applyPayload,
+    );
     if (response.status === "error") {
       didError = true;
     }
@@ -257,13 +262,20 @@ export const applySessionForEditTool = createAsyncThunk<
  * legacy active-session path until those consumers are migrated.
  */
 export function applyEditToolChanges(
-  api: { sessionId?: string; dispatch: AppThunkDispatch },
+  api: {
+    sessionId?: string;
+    dispatch: AppThunkDispatch;
+    getState?: () => { sessions: { activeSessionId?: string } };
+  },
   payload: ApplyToFilePayload & { toolCallId: string },
 ): void {
-  if (api.sessionId) {
-    void api.dispatch(
-      applySessionForEditTool({ ...payload, sessionId: api.sessionId }),
-    );
+  // The sessionized tool loop passes its own sessionId. The legacy tool loop
+  // does not, so fall back to the visible session whenever it has a runtime —
+  // apply state must live in exactly one place (方案.md §五.20).
+  const sessionId =
+    api.sessionId ?? api.getState?.()?.sessions?.activeSessionId ?? undefined;
+  if (sessionId) {
+    void api.dispatch(applySessionForEditTool({ ...payload, sessionId }));
   } else {
     void api.dispatch(applyForEditTool(payload));
   }

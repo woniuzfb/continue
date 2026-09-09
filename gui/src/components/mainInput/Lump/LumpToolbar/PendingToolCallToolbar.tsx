@@ -1,7 +1,9 @@
 import { useAppDispatch, useAppSelector } from "../../../../redux/hooks";
 import { selectPendingToolCalls } from "../../../../redux/selectors/selectToolCalls";
-import { callToolById } from "../../../../redux/thunks/callToolById";
-import { cancelToolCallThunk } from "../../../../redux/thunks/cancelToolCall";
+import {
+  approveActiveToolCall,
+  rejectActiveToolCall,
+} from "../../../../redux/thunks/sessionTools";
 import { getAltKeyLabel, getMetaKeyLabel, isJetBrains } from "../../../../util";
 import { Button } from "../../../ui";
 import { useMainEditor } from "../../TipTapEditor";
@@ -24,7 +26,7 @@ export function PendingToolCallToolbar() {
   }
 
   const handleAccept = (toolCallId: string) => {
-    void dispatch(callToolById({ toolCallId }));
+    void dispatch(approveActiveToolCall({ toolCallId }));
   };
 
   const handleReject = (toolCallId: string) => {
@@ -32,7 +34,7 @@ export function PendingToolCallToolbar() {
     if (pendingToolCalls.length === 1) {
       editor.mainEditor?.commands.focus();
     }
-    void dispatch(cancelToolCallThunk({ toolCallId }));
+    void dispatch(rejectActiveToolCall({ toolCallId }));
   };
 
   return (

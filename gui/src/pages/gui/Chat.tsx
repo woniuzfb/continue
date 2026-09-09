@@ -38,14 +38,18 @@ import {
   selectPendingToolCalls,
 } from "../../redux/selectors/selectToolCalls";
 import {
-  cancelToolCall,
   ChatHistoryItemWithMessageId,
-  newSession,
   updateToolCallOutput,
 } from "../../redux/slices/sessionSlice";
 import { streamEditThunk } from "../../redux/thunks/edit";
-import { loadLastSession } from "../../redux/thunks/session";
-import { streamResponseThunk } from "../../redux/thunks/streamResponse";
+import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
+import { bootstrapLastSession } from "../../redux/thunks/sessionLifecycle";
+import { loadMoreHistory as loadMoreHistoryThunk } from "../../redux/thunks/sessionPaging";
+import {
+  approveActiveToolCall,
+  rejectActiveToolCall,
+} from "../../redux/thunks/sessionTools";
+import { submitSessionInput } from "../../redux/thunks/sessionSubmit";
 import { isJetBrains, isMetaEquivalentKeyPressed } from "../../util";
 import { ToolCallDiv } from "./ToolCallDiv";
 
@@ -57,16 +61,19 @@ import { DeprecationBanner } from "../../components/DeprecationBanner";
 import InlineErrorMessage from "../../components/mainInput/InlineErrorMessage";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
-import { cancelStream } from "../../redux/thunks/cancelStream";
+import { stopActiveSessionStream } from "../../redux/thunks/sessionStreams";
 import { getLocalStorage, setLocalStorage } from "../../util/localStorage";
 import { EmptyChatBody } from "./EmptyChatBody";
 import { ExploreDialogWatcher } from "./ExploreDialogWatcher";
 import { useAutoScroll } from "./useAutoScroll";
-import { loadMoreHistory } from "../../redux/thunks/loadMoreHistory";
+
 import {
+  selectActiveHasMoreHistory,
   selectActiveHistory,
   selectActiveIsHistoryLoading,
+  selectActiveIsInEdit,
   selectActiveIsStreaming,
+  selectActiveMode,
   selectActiveSessionId,
   selectLastSessionId,
 } from "../../redux/selectors/sessionView";
@@ -168,7 +175,7 @@ export function Chat() {
         (jetbrains ? e.altKey : isMetaEquivalentKeyPressed(e)) &&
         !e.shiftKey
       ) {
-        void dispatch(cancelStream());
+        void dispatch(stopActiveSessionStream());
       }
     };
     window.addEventListener("keydown", listener);
@@ -195,18 +202,16 @@ export function Chat() {
       const stateSnapshot = reduxStore.getState();
       const latestPendingToolCalls = selectPendingToolCalls(stateSnapshot);
       const latestPendingApplyStates = selectDoneApplyStates(stateSnapshot);
-      const isCurrentlyInEdit = stateSnapshot.session.isInEdit;
+      const isCurrentlyInEdit = selectActiveIsInEdit(stateSnapshot);
       const codeToEditSnapshot = stateSnapshot.editModeState.codeToEdit;
       const selectedModelByRole =
         stateSnapshot.config.config.selectedModelByRole;
-      const currentMode = stateSnapshot.session.mode;
+      const currentMode = selectActiveMode(stateSnapshot);
 
       // Cancel all pending tool calls
       latestPendingToolCalls.forEach((toolCallState) => {
-        dispatch(
-          cancelToolCall({
-            toolCallId: toolCallState.toolCallId,
-          }),
+        void dispatch(
+          rejectActiveToolCall({ toolCallId: toolCallState.toolCallId }),
         );
       });
 
@@ -237,7 +242,13 @@ export function Chat() {
         ).unwrap();
       } else {
         const sendPromise = dispatch(
-          streamResponseThunk({ editorState, modifiers, index, attachments }),
+          submitSessionInput({
+            sessionId: selectActiveSessionId(reduxStore.getState()),
+            editorState,
+            modifiers,
+            index,
+            attachments,
+          }),
         );
 
         // Clear the editor immediately (optimistically), same as before the
@@ -384,17 +395,24 @@ export function Chat() {
         // hasMoreHistory / isHistoryLoading; stops if a load makes no progress
         // (failure or empty page) so it can never spin forever.
         while (!target) {
-          const session = reduxStore.getState().session;
-          if (session.isHistoryLoading) {
+          const state = reduxStore.getState();
+          if (selectActiveIsHistoryLoading(state)) {
             await new Promise((r) => setTimeout(r, 100));
             continue;
           }
-          if (!session.hasMoreHistory) {
+          if (!selectActiveHasMoreHistory(state)) {
             break;
           }
-          await dispatch(loadMoreHistory());
+          await dispatch(
+            loadMoreHistoryThunk({
+              sessionId: selectActiveSessionId(state),
+              requestGeneration:
+                state.sessions.sessionsById[selectActiveSessionId(state)]
+                  ?.pagination.requestGeneration ?? 0,
+            }),
+          );
           target = findTarget();
-          const len = reduxStore.getState().session.history.length;
+          const len = selectActiveHistory(reduxStore.getState()).length;
           if (len === prevLength) {
             break;
           }
@@ -666,7 +684,7 @@ export function Chat() {
               <ErrorBoundary
                 FallbackComponent={fallbackRender}
                 onReset={() => {
-                  dispatch(newSession());
+                  void dispatch(createAndActivateSession({ origin: "new" }));
                 }}
               >
                 {renderChatHistoryItem(item, index)}
@@ -695,7 +713,7 @@ export function Chat() {
               {history.length === 0 && lastSessionId && !isInEdit && (
                 <NewSessionButton
                   onClick={async () => {
-                    await dispatch(loadLastSession());
+                    await dispatch(bootstrapLastSession());
                   }}
                   className="flex items-center gap-2"
                 >

@@ -16,7 +16,11 @@ import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectSelectedChatModel } from "../../redux/slices/configSlice";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
-import { streamResponseThunk } from "../../redux/thunks/streamResponse";
+import {
+  selectActiveHistory,
+  selectActiveSessionId,
+} from "../../redux/selectors/sessionView";
+import { submitSessionInput } from "../../redux/thunks/sessionSubmit";
 import { analyzeError } from "../../util/errorAnalysis";
 
 interface StreamErrorProps {
@@ -54,7 +58,8 @@ const StreamErrorDialog = ({ error, hideResubmit }: StreamErrorProps) => {
     void navigator.clipboard.writeText(parsedError);
   };
 
-  const history = useAppSelector((store) => store.session.history);
+  const history = useAppSelector(selectActiveHistory);
+  const sessionId = useAppSelector(selectActiveSessionId);
 
   const checkKeysButton = apiKeyUrl ? (
     <GhostButton
@@ -102,7 +107,8 @@ const StreamErrorDialog = ({ error, hideResubmit }: StreamErrorProps) => {
           index === -1 ? mainEditor.getJSON() : history[index].editorState;
 
         void dispatch(
-          streamResponseThunk({
+          submitSessionInput({
+            sessionId,
             editorState,
             modifiers: {
               noContext: true,

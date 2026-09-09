@@ -10,6 +10,11 @@ import { IdeMessengerProvider } from "../../context/IdeMessenger";
 import { MockIdeMessenger } from "../../context/MockIdeMessenger";
 import ParallelListeners from "../../hooks/ParallelListeners";
 import { setupStore } from "../../redux/store";
+import {
+  createSessionRuntime,
+  initialSessionRuntime,
+  setActiveSessionId,
+} from "../../redux/slices/sessionsSlice";
 // As a basic setup, import your same slice reducers
 
 // This type interface extends the default options for render from RTL, as well
@@ -44,6 +49,23 @@ export async function renderWithProviders(
     routerProps = {},
     ...renderOptions
   } = extendedRenderOptions;
+
+  // Phase 4 harness (方案.md §九): the rendered app now reads the active session
+  // through sessionsById. Seed a runtime for the store's active session so the
+  // component tree, the send path and the tool loop all work as in the app.
+  const bootState = store.getState() as any;
+  if (
+    Object.keys(bootState.sessions.sessionsById).length === 0 &&
+    bootState.session?.id
+  ) {
+    const sessionId = bootState.session.id;
+    await store.dispatch(
+      createSessionRuntime({
+        session: initialSessionRuntime(sessionId, bootState.session.title),
+      }) as any,
+    );
+    await store.dispatch(setActiveSessionId({ sessionId }) as any);
+  }
 
   const user = userEvent.setup();
 

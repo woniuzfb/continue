@@ -30,6 +30,7 @@ import {
   selectAllSessionMetadata,
   selectIsSessionMetadataLoading,
 } from "../../redux/selectors/sessionView";
+import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
 
 export function History() {
   const dispatch = useAppDispatch();
@@ -181,7 +182,7 @@ export function History() {
             void dispatch(refreshSessionMetadata({}));
 
             // start a new session
-            dispatch(newSession());
+            void dispatch(createAndActivateSession({ origin: "new" }));
             navigate(ROUTES.HOME);
           }}
         />,

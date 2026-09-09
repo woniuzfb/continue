@@ -19,6 +19,7 @@ import {
   selectActiveSessionId,
   selectActiveTitle,
 } from "../../redux/selectors/sessionView";
+import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
 
 // Haven't set up theme colors for tabs yet
 // Will keep it simple and choose from existing ones. Comments show vars we could use
@@ -175,7 +176,7 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
         }),
       );
     } else {
-      dispatch(newSession());
+      void dispatch(createAndActivateSession({ origin: "new" }));
     }
 
     dispatch(
@@ -241,7 +242,7 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
         );
       } else {
         dispatch(setTabs([]));
-        dispatch(newSession());
+        void dispatch(createAndActivateSession({ origin: "new" }));
       }
     } else {
       dispatch(removeTab(id));

@@ -4,8 +4,14 @@ import { renderWithProviders } from "../../../util/test/render";
 import { sendInputWithMockedResponse } from "../../../util/test/utils";
 import { Chat } from "../Chat";
 import { findAllCurToolCallsByStatus } from "../../../redux/util";
-import { cancelToolCall } from "../../../redux/slices/sessionSlice";
+import { rejectActiveToolCall } from "../../../redux/thunks/sessionTools";
 import { updateConfig } from "../../../redux/slices/configSlice";
+
+function activeHistory(store: any) {
+  const state = store.getState();
+  const sessionId = state.sessions.activeSessionId;
+  return sessionId ? state.sessions.sessionsById[sessionId].history : [];
+}
 
 describe("Parallel Tool Calls - Actions", () => {
   const PARALLEL_TOOL_CALL_RESPONSE: ChatMessage[] = [
@@ -92,7 +98,7 @@ describe("Parallel Tool Calls - Actions", () => {
     // Verify we have multiple pending tool calls
     let state = store.getState();
     let pendingToolCalls = findAllCurToolCallsByStatus(
-      state.session.history,
+      activeHistory(store),
       "generated",
     );
 
@@ -100,13 +106,15 @@ describe("Parallel Tool Calls - Actions", () => {
 
     // Cancel the first tool call
     await act(async () => {
-      store.dispatch(cancelToolCall({ toolCallId: "tool-call-1" }));
+      store.dispatch(
+        rejectActiveToolCall({ toolCallId: "tool-call-1" }) as any,
+      );
     });
 
     // Check state after canceling first tool call
     state = store.getState();
     pendingToolCalls = findAllCurToolCallsByStatus(
-      state.session.history,
+      activeHistory(store),
       "generated",
     );
 
@@ -116,7 +124,7 @@ describe("Parallel Tool Calls - Actions", () => {
 
     // The first tool call should now be canceled
     const canceledToolCalls = findAllCurToolCallsByStatus(
-      state.session.history,
+      activeHistory(store),
       "canceled",
     );
     expect(canceledToolCalls).toHaveLength(1);

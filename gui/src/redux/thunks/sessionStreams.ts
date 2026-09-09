@@ -23,6 +23,7 @@ import {
   applySessionStreamUpdate,
   beginSessionStream,
   finishSessionStream,
+  pauseSessionStream,
   setSessionContextMetrics,
   setSessionInlineError,
   setSessionStreamError,
@@ -235,6 +236,29 @@ export const stopSessionStream = createAsyncThunk<
   return true;
 });
 
+/**
+ * Stop-button entry point (方案.md §五.11): global active UI may resolve the
+ * active session, but the stop itself is still session+request scoped. A stale
+ * requestId can never stop a newer stream.
+ */
+export const stopActiveSessionStream = createAsyncThunk<
+  boolean,
+  void,
+  ThunkApiType
+>("sessions/stopActiveStream", async (_, { dispatch, getState }) => {
+  const state = getState();
+  const sessionId = state.sessions.activeSessionId;
+  const requestId = sessionId
+    ? state.sessions.sessionsById[sessionId]?.stream.requestId
+    : undefined;
+  if (!sessionId || !requestId) {
+    return false;
+  }
+  return (await dispatch(
+    stopSessionStream({ sessionId, requestId }),
+  ).unwrap()) as boolean;
+});
+
 // ── Model request ───────────────────────────────────────────────────────
 
 type TurnContext = {
@@ -365,6 +389,8 @@ async function runToolSequence(
           force: true,
         }),
       );
+      // Waiting for the user: not streaming, but the request stays live.
+      dispatch(pauseSessionStream({ sessionId, requestId }));
       return { kind: "awaiting-approval" };
     }
 

@@ -21,8 +21,9 @@ import {
   useState,
 } from "react";
 import { IdeMessengerContext } from "../../../context/IdeMessenger";
-import { useAppDispatch } from "../../../redux/hooks";
-import { streamResponseThunk } from "../../../redux/thunks/streamResponse";
+import { useAppDispatch, useAppSelector } from "../../../redux/hooks";
+import { selectActiveSessionId } from "../../../redux/selectors/sessionView";
+import { submitSessionInput } from "../../../redux/thunks/sessionSubmit";
 
 /**
  * Build a CSP meta tag content string from McpUiResourceCsp configuration.
@@ -96,6 +97,7 @@ export function McpAppRenderer({
 }) {
   const ideMessenger = useContext(IdeMessengerContext);
   const dispatch = useAppDispatch();
+  const sessionId = useAppSelector(selectActiveSessionId);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const appBridgeRef = useRef<AppBridge | null>(null);
   const [iframeHeight, setIframeHeight] = useState(300);
@@ -196,7 +198,8 @@ export function McpAppRenderer({
       };
 
       void dispatch(
-        streamResponseThunk({
+        submitSessionInput({
+          sessionId,
           editorState,
           modifiers: { noContext: true, useCodebase: false },
         }),

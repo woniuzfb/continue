@@ -163,7 +163,8 @@ describe("session architecture end to end", () => {
     expect(afterSubmit.history).toHaveLength(4);
     expect(afterSubmit.history[2].message.role).toBe("user");
     expect(afterSubmit.pendingApprovalCount).toBe(1);
-    expect(afterSubmit.stream.status).toBe("streaming");
+    // Not streaming while waiting for approval, but the request is still live.
+    expect(afterSubmit.stream.status).toBe("idle");
     const requestId = afterSubmit.stream.requestId;
     expect(typeof requestId).toBe("string");
     expect(request).not.toHaveBeenCalledWith("tools/call", expect.anything());

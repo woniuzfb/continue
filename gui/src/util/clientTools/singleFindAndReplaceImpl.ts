@@ -34,7 +34,11 @@ export const singleFindAndReplaceImpl: ClientToolImpl = async (
   // Apply the changes to the file
   const streamId = uuid();
   applyEditToolChanges(
-    { sessionId: extras.sessionId, dispatch: extras.dispatch },
+    {
+      sessionId: extras.sessionId,
+      dispatch: extras.dispatch,
+      getState: extras.getState,
+    },
     {
       streamId,
       toolCallId,

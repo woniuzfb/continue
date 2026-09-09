@@ -216,8 +216,9 @@ describe("sessionStreams", () => {
       status: "generated",
     });
     expect(target.pendingApprovalCount).toBe(1);
-    // Awaiting approval is not a terminal state.
-    expect(target.stream.status).toBe("streaming");
+    // Awaiting approval is not a terminal state: the model is no longer
+    // streaming, but the request stays live so the tool loop can continue.
+    expect(target.stream.status).toBe("idle");
     expect(typeof target.stream.requestId).toBe("string");
     expect(request).not.toHaveBeenCalledWith("tools/call", expect.anything());
     await vi.waitFor(() => {

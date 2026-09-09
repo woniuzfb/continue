@@ -626,6 +626,26 @@ export const sessionsSlice = createSlice({
       markHistoryChanged(session);
       applyStreamUpdatesToHistory(session, action.payload.messages);
     },
+    /**
+     * The model is no longer streaming but the request is still live: the
+     * session is waiting for tool approval or for an edit apply to finish
+     * (方案.md §五.20). Keeps `requestId` so the tool loop can continue the
+     * same turn, and keeps the aborter so Stop still works.
+     */
+    pauseSessionStream: (
+      state,
+      action: PayloadAction<{ sessionId: string; requestId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session || session.stream.requestId !== action.payload.requestId) {
+        return;
+      }
+      session.stream = {
+        status: "idle",
+        requestId: action.payload.requestId,
+        aborter: session.stream.aborter,
+      };
+    },
     finishSessionStream: (
       state,
       action: PayloadAction<{
@@ -1125,6 +1145,7 @@ export const {
   beginSessionStream,
   applySessionStreamUpdate,
   finishSessionStream,
+  pauseSessionStream,
   setSessionStreamError,
   setSessionPagination,
   prependSessionHistory,

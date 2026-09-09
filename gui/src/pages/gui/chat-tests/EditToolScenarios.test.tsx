@@ -14,6 +14,12 @@ import {
   verifyNotPresentByTestId,
 } from "../../../util/test/utils";
 
+function activeHistory(store: any) {
+  const state = store.getState();
+  const sessionId = state.sessions.activeSessionId;
+  return sessionId ? state.sessions.sessionsById[sessionId].history : [];
+}
+
 const EDIT_WORKSPACE_DIR = "file:///workspace";
 const EDIT_FILEPATH = "test.txt";
 const EDIT_FILE_URI = `${EDIT_WORKSPACE_DIR}/${EDIT_FILEPATH}`;
@@ -120,13 +126,11 @@ test(
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     });
-
     // Toggle the codeblock and make sure the changes show
     const toggleCodeblockChevron = await getElementByTestId("toggle-codeblock");
 
     await user.click(toggleCodeblockChevron);
     await getElementByText(EDIT_CHANGES);
-
     // Tool call, check that applyToFile was called for edit
     await waitFor(() => {
       expect(messengerRequestSpy).toHaveBeenCalledWith("applyToFile", {

@@ -7,9 +7,12 @@ import {
   selectPendingToolCalls,
   selectToolCallsByStatus,
 } from "../../../../redux/selectors/selectToolCalls";
-import { cancelToolCall } from "../../../../redux/slices/sessionSlice";
-import { callToolById } from "../../../../redux/thunks/callToolById";
-import { cancelStream } from "../../../../redux/thunks/cancelStream";
+
+import {
+  approveActiveToolCall,
+  rejectActiveToolCall,
+} from "../../../../redux/thunks/sessionTools";
+import { stopActiveSessionStream } from "../../../../redux/thunks/sessionStreams";
 import { logToolUsage } from "../../../../redux/util";
 import { isJetBrains } from "../../../../util";
 import { useMainEditor } from "../../TipTapEditor";
@@ -94,10 +97,8 @@ export function LumpToolbar() {
         });
 
         // Cancel the tool call in the UI
-        dispatch(
-          cancelToolCall({
-            toolCallId: terminalCall.toolCallId,
-          }),
+        void dispatch(
+          rejectActiveToolCall({ toolCallId: terminalCall.toolCallId }),
         );
 
         logToolUsage(terminalCall, false, true, ideMessenger);
@@ -122,7 +123,7 @@ export function LumpToolbar() {
 
     // Also stop regular streaming if it's happening
     if (isStreaming) {
-      dispatch(cancelStream());
+      void dispatch(stopActiveSessionStream());
     }
   };
 
@@ -137,7 +138,9 @@ export function LumpToolbar() {
         event.stopPropagation();
 
         void dispatch(
-          callToolById({ toolCallId: firstPendingToolCall.toolCallId }),
+          approveActiveToolCall({
+            toolCallId: firstPendingToolCall.toolCallId,
+          }),
         );
       } else if (isCancelToolCallShortcut(event, jetbrains)) {
         event.preventDefault();
@@ -152,7 +155,7 @@ export function LumpToolbar() {
             editor.mainEditor?.commands.focus();
           }
           void dispatch(
-            cancelToolCall({
+            rejectActiveToolCall({
               toolCallId: firstPendingToolCall.toolCallId,
             }),
           );
@@ -200,7 +203,11 @@ export function LumpToolbar() {
 
   // Regular streaming (non-terminal)
   if (isStreaming) {
-    return <StreamingToolbar onStop={() => dispatch(cancelStream())} />;
+    return (
+      <StreamingToolbar
+        onStop={() => void dispatch(stopActiveSessionStream())}
+      />
+    );
   }
 
   if (pendingToolCalls.length > 0) {

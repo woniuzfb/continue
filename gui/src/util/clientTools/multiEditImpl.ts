@@ -26,7 +26,11 @@ export const multiEditImpl: ClientToolImpl = async (
 
   const streamId = uuid();
   applyEditToolChanges(
-    { sessionId: extras.sessionId, dispatch: extras.dispatch },
+    {
+      sessionId: extras.sessionId,
+      dispatch: extras.dispatch,
+      getState: extras.getState,
+    },
     {
       streamId,
       toolCallId,

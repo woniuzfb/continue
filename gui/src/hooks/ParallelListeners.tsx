@@ -35,13 +35,18 @@ import { isJetBrains } from "../util";
 import { setLocalStorage } from "../util/localStorage";
 import { migrateLocalStorage } from "../util/migrateLocalStorage";
 import { useWebviewListener } from "./useWebviewListener";
-import { selectActiveSessionId } from "../redux/selectors/sessionView";
+import {
+  selectActiveHistory,
+  selectActiveIsInEdit,
+  selectActiveSessionId,
+  selectLastSessionId,
+} from "../redux/selectors/sessionView";
 
 function ParallelListeners() {
   const dispatch = useAppDispatch();
   const ideMessenger = useContext(IdeMessengerContext);
-  const history = useAppSelector((store) => store.session.history);
-  const isInEdit = useAppSelector((store) => store.session.isInEdit);
+  const history = useAppSelector(selectActiveHistory);
+  const isInEdit = useAppSelector(selectActiveIsInEdit);
   const selectedProfileId = useAppSelector(
     (store) => store.profiles.selectedProfileId,
   );
@@ -52,7 +57,7 @@ function ParallelListeners() {
 
   // Load symbols for chat on any session change
   const sessionId = useAppSelector((state) => selectActiveSessionId(state));
-  const lastSessionId = useAppSelector((store) => store.session.lastSessionId);
+  const lastSessionId = useAppSelector(selectLastSessionId);
   const [initialSessionId] = useState(sessionId || lastSessionId);
 
   const handleConfigUpdate = useCallback(
@@ -259,13 +264,16 @@ function ParallelListeners() {
       // even after the user switched tabs. Unregistered streams keep the legacy
       // active-session path.
       const origin = lookupApplyOrigin(state.streamId);
-      if (origin) {
+      // Without a recorded origin the event belongs to the visible session
+      // (global active UI entry point, 方案.md §五.21).
+      const targetSessionId = origin?.sessionId ?? sessionId;
+      if (targetSessionId) {
         void dispatch(
           handleSessionApplyStateUpdate({
-            sessionId: origin.sessionId,
+            sessionId: targetSessionId,
             applyState: {
               ...state,
-              toolCallId: state.toolCallId ?? origin.toolCallId,
+              toolCallId: state.toolCallId ?? origin?.toolCallId,
             },
           }),
         );
