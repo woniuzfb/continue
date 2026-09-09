@@ -9,7 +9,6 @@ import {
   ChatHistoryItemWithMessageId,
   mergeSplitReplies,
   newSession,
-  restoreCachedSession,
   sessionSlice,
 } from "./sessionSlice";
 
@@ -1065,36 +1064,6 @@ describe("background streaming (session switch)", () => {
     const newState = sessionSlice.reducer(state, newSession());
     expect(newState.streamAborter).not.toBe(oldAborter);
     expect(oldAborter.signal.aborted).toBe(false);
-  });
-
-  it("restoreCachedSession does NOT abort the previous session's streamAborter", () => {
-    const state = createState();
-    const oldAborter = state.streamAborter;
-    const cached = {
-      sessionId: "session-b",
-      title: "B",
-      history: [],
-      mode: "agent" as const,
-      symbols: {},
-    };
-    const newState = sessionSlice.reducer(state, restoreCachedSession(cached));
-    expect(newState.streamAborter).not.toBe(oldAborter);
-    expect(oldAborter.signal.aborted).toBe(false);
-    expect(newState.isStreaming).toBe(false);
-  });
-
-  it("restoreCachedSession restores isStreaming from the cached snapshot", () => {
-    const state = createState();
-    const cached = {
-      sessionId: "session-b",
-      title: "B",
-      history: [],
-      mode: "agent" as const,
-      symbols: {},
-      isStreaming: true,
-    };
-    const newState = sessionSlice.reducer(state, restoreCachedSession(cached));
-    expect(newState.isStreaming).toBe(true);
   });
 
   it("abortStream aborts only the current session's controller", () => {

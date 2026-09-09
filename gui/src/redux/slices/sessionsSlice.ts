@@ -889,6 +889,15 @@ export const sessionsSlice = createSlice({
         session.mainEditorAttachmentsRestore = action.payload.attachments;
       }
     },
+    setSessionIsInEdit: (
+      state,
+      action: PayloadAction<{ sessionId: string; isInEdit: boolean }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.isInEdit = action.payload.isInEdit;
+      }
+    },
     setSessionCodeToEdit: (
       state,
       action: PayloadAction<{
@@ -1171,6 +1180,7 @@ export const {
   setSessionMainEditorDraft,
   setSessionMainEditorContentTrigger,
   setSessionMainEditorAttachmentsRestore,
+  setSessionIsInEdit,
   setSessionCodeToEdit,
   updateSessionEditApplyState,
   setSessionReturnToMode,

@@ -14,17 +14,20 @@ import {
   setReturnToModeAfterEdit,
   updateEditStateApplyState,
 } from "../slices/editState";
+import { selectActiveSessionId } from "../selectors/sessionView";
+import { createAndActivateSession } from "./sessionActivation";
 import {
-  newSession,
-  setActive,
-  setInactive,
-  setIsInEdit,
-  setMainEditorContentTrigger,
-  setMode,
-} from "../slices/sessionSlice";
+  beginSessionStream,
+  finishSessionStream,
+  setSessionIsInEdit,
+  setSessionMainEditorContentTrigger,
+  setSessionMode,
+} from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
-import { loadLastSession, saveCurrentSession } from "./session";
-import { streamThunkWrapper } from "./streamThunkWrapper";
+import { bootstrapLastSession } from "./sessionLifecycle";
+import { flushSessionSave } from "./sessionPersistence";
+import { sessionStreamWrapper } from "./sessionStreamWrapper";
+import { v4 as uuidv4 } from "uuid";
 
 export const streamEditThunk = createAsyncThunk<
   boolean,
@@ -36,38 +39,54 @@ export const streamEditThunk = createAsyncThunk<
 >(
   "edit/streamResponse",
   async ({ editorState, codeToEdit }, { dispatch, extra, getState }) => {
+    const sessionId = selectActiveSessionId(getState());
+    if (!sessionId) {
+      return false;
+    }
     const succeeded = await dispatch(
-      streamThunkWrapper(async () => {
-        dispatch(setActive());
+      sessionStreamWrapper({
+        sessionId,
+        runStream: async () => {
+          const requestId = uuidv4();
+          dispatch(
+            beginSessionStream({
+              sessionId,
+              requestId,
+              aborter: new AbortController(),
+            }),
+          );
 
-        const { selectedContextItems, content } = await resolveEditorContent({
-          editorState,
-          modifiers: {
-            noContext: true,
-            useCodebase: false,
-          },
-          ideMessenger: extra.ideMessenger,
-          defaultContextProviders: [],
-          availableSlashCommands: [],
-          dispatch,
-          getState,
-        });
+          const { selectedContextItems, content } = await resolveEditorContent({
+            editorState,
+            modifiers: {
+              noContext: true,
+              useCodebase: false,
+            },
+            ideMessenger: extra.ideMessenger,
+            defaultContextProviders: [],
+            availableSlashCommands: [],
+            dispatch,
+            getState,
+          });
 
-        const prompt = [
-          ...selectedContextItems.map((item) => item.content),
-          stripImages(content),
-        ].join("\n\n");
+          const prompt = [
+            ...selectedContextItems.map((item) => item.content),
+            stripImages(content),
+          ].join("\n\n");
 
-        const response = await extra.ideMessenger.request("edit/sendPrompt", {
-          prompt,
-          range: codeToEdit[0] as RangeInFileWithContents,
-        });
+          const response = await extra.ideMessenger.request("edit/sendPrompt", {
+            prompt,
+            range: codeToEdit[0] as RangeInFileWithContents,
+          });
 
-        dispatch(setInactive());
+          dispatch(
+            finishSessionStream({ sessionId, requestId, status: "completed" }),
+          );
 
-        if (response.status === "error") {
-          throw new Error(response.error);
-        }
+          if (response.status === "error") {
+            throw new Error(response.error);
+          }
+        },
       }),
     ).unwrap();
     return succeeded;
@@ -81,7 +100,10 @@ export const exitEdit = createAsyncThunk<
 >("edit/exit", async ({ openNewSession }, { dispatch, extra, getState }) => {
   const state = getState();
   const codeToEdit = state.editModeState.codeToEdit;
-  const isInEdit = state.session.isInEdit;
+  const sessionId = selectActiveSessionId(state);
+  const isInEdit = sessionId
+    ? (state.sessions.sessionsById[sessionId]?.isInEdit ?? false)
+    : false;
   const previousModeEditorContent =
     state.editModeState.previousModeEditorContent;
 
@@ -99,21 +121,36 @@ export const exitEdit = createAsyncThunk<
 
   dispatch(clearCodeToEdit());
   dispatch(updateEditStateApplyState(INITIAL_EDIT_APPLY_STATE));
-  dispatch(setIsInEdit(false));
+  if (sessionId) {
+    dispatch(setSessionIsInEdit({ sessionId, isInEdit: false }));
+  }
 
   // Restore the previous editor content if available
-  if (previousModeEditorContent) {
-    dispatch(setMainEditorContentTrigger(previousModeEditorContent));
+  if (previousModeEditorContent && sessionId) {
+    dispatch(
+      setSessionMainEditorContentTrigger({
+        sessionId,
+        content: previousModeEditorContent,
+      }),
+    );
     dispatch(setPreviousModeEditorContent(undefined));
   }
 
   if (openNewSession || state.editModeState.lastNonEditSessionWasEmpty) {
-    dispatch(newSession());
+    await dispatch(createAndActivateSession({ origin: "new" }));
   } else {
-    await dispatch(loadLastSession());
+    await dispatch(bootstrapLastSession());
   }
 
-  dispatch(setMode(state.editModeState.returnToMode));
+  const nextSessionId = selectActiveSessionId(getState());
+  if (nextSessionId) {
+    dispatch(
+      setSessionMode({
+        sessionId: nextSessionId,
+        mode: state.editModeState.returnToMode,
+      }),
+    );
+  }
 });
 
 export const enterEdit = createAsyncThunk<
@@ -124,9 +161,12 @@ export const enterEdit = createAsyncThunk<
   "edit/enter",
   async ({ returnToMode, editorContent }, { dispatch, extra, getState }) => {
     const state = getState();
-    const isInEdit = state.session.isInEdit;
+    const sessionId = selectActiveSessionId(state);
+    const isInEdit = sessionId
+      ? (state.sessions.sessionsById[sessionId]?.isInEdit ?? false)
+      : false;
 
-    if (isInEdit) {
+    if (isInEdit || !sessionId) {
       return;
     }
 
@@ -138,19 +178,19 @@ export const enterEdit = createAsyncThunk<
       return;
     }
 
-    dispatch(setMainEditorContentTrigger({}));
+    dispatch(setSessionMainEditorContentTrigger({ sessionId, content: {} }));
     dispatch(setPreviousModeEditorContent(editorContent));
 
-    dispatch(setReturnToModeAfterEdit(returnToMode ?? state.session.mode));
+    const currentMode = state.sessions.sessionsById[sessionId]?.mode ?? "chat";
+    dispatch(setReturnToModeAfterEdit(returnToMode ?? currentMode));
     dispatch(updateEditStateApplyState(INITIAL_EDIT_APPLY_STATE));
 
-    await dispatch(
-      saveCurrentSession({
-        openNewSession: true,
-        // Because this causes a lag before Edit is focused. TODO just have that happen in background
-      }),
-    );
+    await dispatch(flushSessionSave({ sessionId }));
+    await dispatch(createAndActivateSession({ origin: "new" }));
 
-    dispatch(setIsInEdit(true));
+    const newSessionId = selectActiveSessionId(getState());
+    if (newSessionId) {
+      dispatch(setSessionIsInEdit({ sessionId: newSessionId, isInEdit: true }));
+    }
   },
 );

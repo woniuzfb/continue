@@ -10,15 +10,11 @@ import { selectSelectedChatModel } from "../slices/configSlice";
 import { selectSelectedProfile } from "../slices/profilesSlice";
 import {
   clearContextMetrics,
-  deleteCachedSession,
   deleteSessionMetadata,
-  getCachedSession,
   markSessionDirty,
   markSessionPersisted,
   newSession,
-  restoreCachedSession,
   setAllSessionMetadata,
-  setCachedSession,
   setHistoryPagination,
   setIsSessionMetadataLoading,
   updateSessionMetadata,
@@ -36,49 +32,6 @@ import {
 import { enqueueSessionSave, flushSessionSave } from "./sessionPersistence";
 
 const MAX_TITLE_LENGTH = 100;
-
-/**
- * Snapshots the current session state into the LRU cache.
- * Called before switching to / creating a new session so that switching back
- * restores the in-memory state (including lazily-loaded full history) without
- * re-reading from disk.
- */
-export function cacheCurrentSession(state: RootState): void {
-  const session = state.session;
-  if (!session.id) {
-    return;
-  }
-  // 空 session 也缓存：让 new session tab 切回时命中 LRU 走同步路径，
-  // 避免对不存在的 session id 做 IPC 往返（loadPage → 文件不存在 → 返回空）。
-  // 伪空 session（redux-persist 恢复的 {id:A, history:[]}，磁盘有历史）
-  // 不会进入缓存：它只在重启后出现，而启动时 loadSession 的
-  // sessionId===state.session.id 分支会跳过 cacheCurrentSession。
-  const selectedChatModel = selectSelectedChatModel(state);
-  setCachedSession(session.id, {
-    sessionId: session.id,
-    title: session.title,
-    history: session.history,
-    mode: session.mode,
-    chatModelTitle: selectedChatModel?.title,
-    hasReasoningEnabled: session.hasReasoningEnabled,
-    isStreaming: session.isStreaming,
-    dirty: session.dirty,
-    historyTruncated: session.historyTruncated,
-    historyLoadedOffset: session.historyLoadedOffset,
-    historyTotalCount: session.historyTotalCount,
-    hasMoreHistory: session.hasMoreHistory,
-    loadedDiskCount: session.loadedDiskCount,
-    dontMergeReplyBubbles: session.dontMergeReplyBubbles,
-    dontMergeHistoricalReplyBubbles: session.dontMergeHistoricalReplyBubbles,
-    isPruned: session.isPruned,
-    contextPercentage: session.contextPercentage,
-    contextInputTokens: session.contextInputTokens,
-    contextLength: session.contextLength,
-    contextMetrics: session.contextMetrics,
-    mainEditorDraft: session.mainEditorDraft,
-    symbols: session.symbols,
-  });
-}
 
 // Async session functions live in thunks (because of IDE messaging mostly)
 // see sessionSlice for sync redux session functions
@@ -187,93 +140,6 @@ export const updateSession = createAsyncThunk<void, Session, ThunkApiType>(
  * getState().session 是别的会话，完整内容在 LRU 缓存副本里。
  * 标题逻辑与 saveCurrentSession 保持一致（LLM 生成 + 文本回退）。
  */
-export const saveSessionFromCache = createAsyncThunk<
-  void,
-  string,
-  ThunkApiType
->("session/saveFromCache", async (sessionId, { dispatch, extra, getState }) => {
-  const cached = getCachedSession(sessionId);
-  if (!cached) {
-    return;
-  }
-
-  const selectedChatModel = selectSelectedChatModel(getState());
-  let title = cached.title;
-  if (
-    title === NEW_SESSION_TITLE &&
-    !getState().config.config?.disableSessionTitles &&
-    selectedChatModel
-  ) {
-    const assistantResponse = getAssistantResponseText(cached.history);
-
-    if (assistantResponse) {
-      // 复用 constructMessages，与发送消息路径对齐：
-      // 注入 contextItems、过滤 thinking、处理 file_content 块等
-      const withoutMessageIds = cached.history.map((item) => {
-        const { id, ...messageWithoutId } = item.message;
-        return { ...item, message: messageWithoutId };
-      });
-      const { messages: compiledMessages } = constructMessages(
-        withoutMessageIds,
-        undefined,
-        [],
-        {},
-      );
-
-      try {
-        const result = await extra.ideMessenger.request(
-          "chatDescriber/describe",
-          {
-            text: assistantResponse,
-            // 传对齐后的完整历史，让服务端能识别这不是新会话
-            messages: compiledMessages,
-          },
-        );
-        if (result.status === "success" && result.content) {
-          title = result.content;
-        }
-      } catch (e) {
-        console.error("Error generating chat title", e);
-      }
-    }
-  }
-  if (title === NEW_SESSION_TITLE) {
-    const first = cached.history[0];
-    title = first ? getChatTitleFromMessage(first.message) : NEW_SESSION_TITLE;
-  }
-  if (!title.length) {
-    title = NEW_SESSION_TITLE;
-  }
-
-  const session: Session = {
-    sessionId,
-    title,
-    workspaceDirectory: window.workspacePaths?.[0] || "",
-    history: cached.history,
-    mode: cached.mode,
-    chatModelTitle: cached.chatModelTitle ?? null,
-    historyTruncated: cached.historyTruncated,
-    historyLoadedOffset: cached.historyLoadedOffset,
-    contextMetrics: cached.contextMetrics,
-  };
-  unwrapResult(await dispatch(updateSession(session)));
-
-  // Only clear the exact cache snapshot that was persisted. A replacement
-  // created while the save was in flight must remain dirty.
-  const currentCached = getCachedSession(sessionId);
-  if (currentCached === cached) {
-    setCachedSession(sessionId, {
-      ...currentCached,
-      title,
-      isStreaming: false,
-      dirty: false,
-    });
-  }
-});
-
-/*
- this is only used for the custom focusContinueSessionId command at the moment
-*/
 export const loadSession = createAsyncThunk<
   void,
   { sessionId: string; saveCurrentSession: boolean },
@@ -398,145 +264,22 @@ export const saveCurrentSession = createAsyncThunk<
   void,
   { openNewSession: boolean },
   ThunkApiType
->(
-  "session/saveCurrent",
-  async ({ openNewSession }, { dispatch, extra, getState }) => {
-    // Phase 4 handoff: once the active session has a runtime, the per-session
-    // save queue owns persistence (方案.md §六 sessionPersistence). The legacy
-    // body below only runs while no runtime exists (pre-bootstrap / legacy
-    // tests) and disappears with the legacy slice.
-    const activeState = getState();
-    const activeSessionId = activeState.sessions.activeSessionId;
-    const runtime = activeSessionId
-      ? activeState.sessions.sessionsById[activeSessionId]
-      : undefined;
-
-    if (runtime) {
-      if (
-        runtime.history.length > 0 &&
-        (runtime.dirty || runtime.title === NEW_SESSION_TITLE)
-      ) {
-        await dispatch(flushSessionSave({ sessionId: activeSessionId! }));
-      }
-      if (openNewSession) {
-        await dispatch(createAndActivateSession({ origin: "new" }));
-      }
-      return;
-    }
-
-    const session = getState().session; // assign to a variable so that even when current session changes, we have the reference to the old session
-    if (session.history.length === 0) {
-      // 空 session 上再次触发 newSession（如连续点 "+" 按钮）：
-      // 跳过 save，但仍需 dispatch newSession 让 UI 生成新 tab，
-      // 否则 currentSessionId 不变，TabBar 不会创建新 tab。
-      if (openNewSession) {
-        dispatch(newSession());
-      }
-      return;
-    }
-
-    // Cache current session before opening a new one (so user can switch back)
-    if (openNewSession) {
-      cacheCurrentSession(getState());
-      dispatch(newSession());
-    }
-
-    // 脏标记跳过：会话内容（history/title/metrics/mode）自上次成功保存后
-    // 未变更（分页加载只读不写盘，不置脏），history/save 是纯冗余 ——
-    // 长会话的全量 structured clone + 写盘会阻塞后续 IPC ~2s。
-    // 标题仍是 NEW_SESSION_TITLE 的会话不跳过：需要生成标题并落盘。
-    if (!session.dirty && session.title !== NEW_SESSION_TITLE) {
-      return;
-    }
-
-    const selectedChatModel = selectSelectedChatModel(getState());
-
-    // New session has already been dispatched
-    // Now save previous session and update chat title if relevant
-    let title = session.title;
-    if (title === NEW_SESSION_TITLE) {
-      // 仅在标题仍是默认 "New Session" 时才生成标题，避免每次流式响应结束都调用 LLM。
-      // 已有自定义标题的会话不再重复生成，节省 LLM 调用。
-      if (
-        !getState().config.config?.disableSessionTitles &&
-        selectedChatModel
-      ) {
-        let assistantResponse = getAssistantResponseText(session.history);
-
-        if (assistantResponse) {
-          // 复用 constructMessages，与发送消息路径对齐：
-          // 注入 contextItems、过滤 thinking、处理 file_content 块等。
-          // Provider ID 剥离由 constructMessages 统一完成。
-          const { messages: compiledMessages } = constructMessages(
-            session.history,
-            undefined,
-            [],
-            {},
-          );
-
-          try {
-            const result = await extra.ideMessenger.request(
-              "chatDescriber/describe",
-              {
-                text: assistantResponse,
-                // 传对齐后的完整历史，让服务端能识别这不是新会话
-                messages: compiledMessages,
-              },
-            );
-            if (result.status === "success" && result.content) {
-              title = result.content;
-            }
-          } catch (e) {
-            console.error("Error generating chat title", e);
-          }
-        }
-      }
-      // Fallbacks if above doesn't work out or session titles disabled
-      if (title === NEW_SESSION_TITLE) {
-        title = getChatTitleFromMessage(session.history[0].message);
-      }
-    }
-    // More fallbacks in case of no title
-    if (!title.length) {
-      const metadata = session.allSessionMetadata.find(
-        (m) => m.sessionId === session.id,
-      );
-      if (metadata?.title) {
-        title = metadata.title;
-      }
-    }
-    if (!title.length) {
-      title = NEW_SESSION_TITLE;
-    }
-
-    const updatedSession: Session = {
-      sessionId: session.id,
-      title,
-      workspaceDirectory: window.workspacePaths?.[0] || "",
-      history: session.history,
-      mode: session.mode,
-      chatModelTitle: selectedChatModel?.title ?? null,
-      // 懒加载合并保存：把分页标记传给后端，save 时保留未加载的头部
-      historyTruncated: session.historyTruncated,
-      historyLoadedOffset: session.historyLoadedOffset,
-      // 持久化 context 指标快照，下次加载会话时直接还原
-      contextMetrics: session.contextMetrics,
-    };
-    // Retain the cache identity observed before persisting. A background
-    // stream may replace it while the write is in flight; that replacement
-    // must stay dirty because its contents are newer than this snapshot.
-    const cachedBeforeSave = getCachedSession(session.id);
-    const result = await dispatch(updateSession(updatedSession));
-    unwrapResult(result);
-
-    // 持久化成功：清脏标记（当前会话）+ 同步 LRU 缓存副本
-    dispatch(markSessionPersisted(session.id));
-    if (
-      cachedBeforeSave &&
-      getCachedSession(session.id) === cachedBeforeSave &&
-      !cachedBeforeSave.isStreaming
-    ) {
-      setCachedSession(session.id, { ...cachedBeforeSave, dirty: false });
-    }
-  },
-);
+>("session/saveCurrent", async ({ openNewSession }, { dispatch, getState }) => {
+  // The runtime in sessionsById[sessionId] is the only save snapshot
+  // (方案.md §六 sessionPersistence).
+  const sessionId = getState().sessions.activeSessionId;
+  const runtime = sessionId
+    ? getState().sessions.sessionsById[sessionId]
+    : undefined;
+  if (
+    sessionId &&
+    runtime &&
+    runtime.history.length > 0 &&
+    (runtime.dirty || runtime.title === NEW_SESSION_TITLE)
+  ) {
+    await dispatch(flushSessionSave({ sessionId }));
+  }
+  if (openNewSession) {
+    await dispatch(createAndActivateSession({ origin: "new" }));
+  }
+});

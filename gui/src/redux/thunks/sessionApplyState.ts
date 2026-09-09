@@ -1,10 +1,12 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { ApplyState, ApplyToFilePayload, ContextItem } from "core";
 import { logAgentModeEditOutcome } from "../../util/editOutcomeLogger";
+import { EDIT_MODE_STREAM_ID } from "core/edit/constants";
 import { selectSessionById } from "../selectors/sessions";
 import {
   resetSessionCodeBlockApplyIndex,
   updateSessionApplyState,
+  updateSessionEditApplyState,
 } from "../slices/sessionsSlice";
 import { AppThunkDispatch, ThunkApiType } from "../store";
 import { logToolUsage } from "../util";
@@ -12,6 +14,7 @@ import {
   applySessionToolCallUpdate,
   findSessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
+import { exitEdit } from "./edit";
 import { continueToolLoop } from "./sessionTools";
 
 /**
@@ -99,6 +102,27 @@ export const handleSessionApplyStateUpdate = createAsyncThunk<
   "sessions/handleApplyStateUpdate",
   async ({ sessionId, applyState }, { dispatch, getState, extra }) => {
     const api = { dispatch, getState };
+
+    // Edit mode (⌘I) keeps its own apply state on the edit slice: the IDE
+    // streams diffs for the inline-edit flow, not for a chat tool call
+    // (方案.md §五.20 edit mode).
+    if (applyState.streamId === EDIT_MODE_STREAM_ID) {
+      dispatch(updateSessionEditApplyState({ sessionId, updates: applyState }));
+      if (applyState.status === "closed") {
+        const toolCallState = applyState.toolCallId
+          ? findSessionToolCallTarget(
+              selectSessionById(getState(), sessionId)?.history ?? [],
+              applyState.toolCallId,
+            )?.toolCallState
+          : undefined;
+        if (toolCallState) {
+          logToolUsage(toolCallState, true, true, extra.ideMessenger);
+        }
+        void dispatch(exitEdit({}));
+      }
+      return;
+    }
+
     dispatch(updateSessionApplyState({ sessionId, applyState }));
 
     const toolCallId = applyState.toolCallId;

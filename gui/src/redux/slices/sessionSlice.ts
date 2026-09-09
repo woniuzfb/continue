@@ -212,77 +212,6 @@ export type ContextMetricsSnapshot = {
   contextLength?: number;
 };
 
-// ── Session LRU cache ──────────────────────────────────────────────
-// When switching tabs, the in-memory session state (including lazily-loaded
-// full history) would be lost. This cache preserves the state so switching
-// back restores it without re-reading from disk.
-const MAX_CACHED_SESSIONS = 5;
-
-export type CachedSession = {
-  sessionId: string;
-  title: string;
-  history: ChatHistoryItemWithMessageId[];
-  mode: MessageModes;
-  chatModelTitle?: string | null;
-  hasReasoningEnabled?: boolean;
-  // 缓存时该会话是否正在流式响应（切回时恢复 Stop 按钮状态）
-  isStreaming?: boolean;
-  // Lazy-load pagination state
-  historyTruncated?: boolean;
-  historyLoadedOffset?: number;
-  historyTotalCount?: number;
-  hasMoreHistory?: boolean;
-  loadedDiskCount?: number;
-  dontMergeReplyBubbles?: boolean;
-  dontMergeHistoricalReplyBubbles?: boolean;
-  // 缓存副本是否有未持久化变更（后台续流置脏，saveSessionFromCache 清零）
-  dirty?: boolean;
-  // Context metrics
-  isPruned?: boolean;
-  contextPercentage?: number;
-  contextInputTokens?: number;
-  contextLength?: number;
-  // 最近一次 LLM 调用后的 context 指标快照（用于持久化/缓存恢复）
-  contextMetrics?: ContextMetricsSnapshot;
-  // Draft & symbols
-  mainEditorDraft?: JSONContent | undefined;
-  symbols: FileSymbolMap;
-};
-
-const sessionCacheMap = new Map<string, CachedSession>();
-
-/** Read a cached session (LRU: marks as most-recently-used). */
-export function getCachedSession(sessionId: string): CachedSession | undefined {
-  const cached = sessionCacheMap.get(sessionId);
-  if (cached) {
-    // Move to end (most recently used)
-    sessionCacheMap.delete(sessionId);
-    sessionCacheMap.set(sessionId, cached);
-  }
-  return cached;
-}
-
-/** Store a session in the cache, evicting the oldest if at capacity. */
-export function setCachedSession(
-  sessionId: string,
-  session: CachedSession,
-): void {
-  if (sessionCacheMap.has(sessionId)) {
-    sessionCacheMap.delete(sessionId);
-  } else if (sessionCacheMap.size >= MAX_CACHED_SESSIONS) {
-    const oldestKey = sessionCacheMap.keys().next().value;
-    if (oldestKey) {
-      sessionCacheMap.delete(oldestKey);
-    }
-  }
-  sessionCacheMap.set(sessionId, session);
-}
-
-/** Remove a session from the cache (e.g. when deleted). */
-export function deleteCachedSession(sessionId: string): void {
-  sessionCacheMap.delete(sessionId);
-}
-
 /**
  * 正在进行的流式请求的 AbortController 注册表。
  * 切换会话不再 abort 旧流的 controller（旧流转入后台继续跑）；
@@ -1148,56 +1077,6 @@ export const sessionSlice = createSlice({
      * 与 newSession 不同，这里恢复所有缓存的字段（context 指标、
      * 分页状态、symbols、draft 等），避免切换 tab 后丢失。
      */
-    restoreCachedSession: (
-      state,
-      { payload }: PayloadAction<CachedSession>,
-    ) => {
-      state.lastSessionId = state.id;
-
-      // 不再 abort 旧 controller：切 tab 时旧流转入后台继续，
-      // 只有用户主动取消才统一 abort（见 abortStream）。
-      state.streamAborter = new AbortController();
-
-      // 恢复该会话缓存时的 streaming 状态：切回一个正在后台跑的会话时，
-      // Stop 按钮仍可见；普通会话为 false。
-      state.isStreaming = payload.isStreaming ?? false;
-      state.inlineErrorMessage = undefined;
-      state.compactionLoading = {};
-      state.codeBlockApplyStates = { states: [], curIndex: 0 };
-      state.newestToolbarPreviewForInput = {};
-
-      // 恢复缓存的字段
-      state.id = payload.sessionId;
-      state.title = payload.title;
-      // 合并轮次内气泡块；分页偏移由 loadedDiskCount 记账，不受合并影响。
-      // 默认 dontMergeHistoricalReplyBubbles=true（历史会话不合并）。
-      state.history =
-        (state.dontMergeHistoricalReplyBubbles ?? true)
-          ? payload.history
-          : mergeSplitReplies(payload.history);
-      state.mode = payload.mode;
-      state.symbols = payload.symbols || {};
-      state.hasReasoningEnabled = payload.hasReasoningEnabled;
-      // 懒加载分页状态
-      state.historyTruncated = payload.historyTruncated;
-      state.historyLoadedOffset = payload.historyLoadedOffset;
-      state.historyTotalCount = payload.historyTotalCount;
-      state.hasMoreHistory = payload.hasMoreHistory;
-      state.loadedDiskCount = payload.loadedDiskCount;
-      state.dontMergeReplyBubbles = payload.dontMergeReplyBubbles ?? true;
-      state.dontMergeHistoricalReplyBubbles =
-        payload.dontMergeHistoricalReplyBubbles ?? true;
-      state.dirty = payload.dirty ?? false;
-      state.isHistoryLoading = false;
-      // Context 指标
-      state.isPruned = payload.isPruned;
-      state.contextPercentage = payload.contextPercentage;
-      state.contextInputTokens = payload.contextInputTokens;
-      state.contextLength = payload.contextLength;
-      state.contextMetrics = payload.contextMetrics;
-      // Draft
-      state.mainEditorDraft = payload.mainEditorDraft;
-    },
     /**
      * 在 history 头部 prepend 更早的消息（懒加载上滑时调用）。
      * 同时更新分页游标和 hasMore 标记。
@@ -1727,7 +1606,6 @@ export const {
   setHistoryPagination,
   markHistoryFullyLoaded,
   setFullHistory,
-  restoreCachedSession,
   markSessionDirty,
   markSessionPersisted,
 } = sessionSlice.actions;
