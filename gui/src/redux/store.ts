@@ -131,6 +131,11 @@ export function setupStore(options: { ideMessenger?: IIdeMessenger }) {
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
         serializableCheck: false,
+        // AbortControllers live in session runtime state by design
+        // (方案.md §五.11): Stop aborts the target session's controller, which
+        // is a deliberate out-of-reducer mutation of a non-serializable
+        // object. The immutable check cannot model that.
+        immutableCheck: false,
         thunk: {
           extraArgument: {
             ideMessenger,

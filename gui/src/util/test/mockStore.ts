@@ -86,6 +86,8 @@ export const createMockStore = (
     },
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
+        // Session runtime state holds AbortControllers (方案.md §五.11).
+        immutableCheck: false,
         serializableCheck: {
           ignoredPaths: [
             "session.streamAborter",

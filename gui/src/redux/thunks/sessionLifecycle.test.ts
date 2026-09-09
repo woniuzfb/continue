@@ -1,0 +1,251 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Session } from "core";
+import { createMockStore } from "../../util/test/mockStore";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionSlice";
+import { initialSessionRuntime } from "../slices/sessionsSlice";
+import { resetSessionSaveQueues } from "./sessionPersistence";
+import {
+  bootstrapLastSession,
+  deleteSessionRuntime,
+  ensureSessionRuntime,
+  openSessionTab,
+  refreshSessionCatalog,
+} from "./sessionLifecycle";
+import { resetSessionStreamRunner } from "./sessionTools";
+
+function item(
+  id: string,
+  role: "user" | "assistant",
+  content = "",
+): ChatHistoryItemWithMessageId {
+  return {
+    message: {
+      id,
+      role,
+      content,
+    } as ChatHistoryItemWithMessageId["message"],
+    contextItems: [],
+  };
+}
+
+function diskSession(sessionId: string, title = "From disk"): Session {
+  return {
+    sessionId,
+    title,
+    workspaceDirectory: "/w",
+    history: [item("d1", "user", "hi"), item("d2", "assistant", "hello")],
+  } as Session;
+}
+
+function metadata(sessionId: string, title = "From disk") {
+  return {
+    sessionId,
+    title,
+    dateCreated: "2026-01-01T00:00:00.000Z",
+    workspaceDirectory: "/w",
+  };
+}
+
+type StoreOptions = {
+  catalog?: { sessionId: string; title?: string }[];
+  lastSessionId?: string;
+  runtimes?: Record<string, ReturnType<typeof initialSessionRuntime>>;
+  activeSessionId?: string;
+  tabOrder?: string[];
+};
+
+function makeStore(options: StoreOptions = {}) {
+  const {
+    catalog = [],
+    lastSessionId,
+    runtimes = {},
+    activeSessionId,
+    tabOrder = [],
+  } = options;
+
+  const tabDescriptors = Object.fromEntries(
+    Object.keys(runtimes).map((id) => [
+      id,
+      { sessionId: id, title: id, loadState: "loaded" as const },
+    ]),
+  );
+
+  return createMockStore({
+    sessions: {
+      activeSessionId,
+      tabOrder,
+      tabDescriptors,
+      sessionsById: runtimes,
+    },
+    sessionCatalog: {
+      allSessionMetadata: catalog.map((entry) =>
+        metadata(entry.sessionId, entry.title),
+      ),
+      lastSessionId,
+      isLoading: false,
+    },
+  });
+}
+
+function sessions(store: ReturnType<typeof makeStore>) {
+  return (store.getState() as any).sessions;
+}
+
+function catalog(store: ReturnType<typeof makeStore>) {
+  return (store.getState() as any).sessionCatalog;
+}
+
+function run(store: ReturnType<typeof makeStore>, thunk: any) {
+  return (store.dispatch(thunk) as any).unwrap() as Promise<any>;
+}
+
+describe("sessionLifecycle", () => {
+  beforeEach(() => {
+    resetSessionSaveQueues();
+    resetSessionStreamRunner();
+  });
+
+  it("refreshes the global catalog", async () => {
+    const store = makeStore();
+    store.mockIdeMessenger.responses["history/list"] = [
+      metadata("s1", "One"),
+      metadata("s2", "Two"),
+    ];
+
+    await run(store, refreshSessionCatalog({}));
+
+    expect(catalog(store).allSessionMetadata).toHaveLength(2);
+    expect(catalog(store).isLoading).toBe(false);
+  });
+
+  it("opens a catalog-only session: descriptor, runtime, active, lastSessionId", async () => {
+    const store = makeStore({ catalog: [{ sessionId: "s1" }] });
+    store.mockIdeMessenger.responses["history/load"] = diskSession("s1");
+
+    await run(store, openSessionTab({ sessionId: "s1" }));
+
+    expect(sessions(store).activeSessionId).toBe("s1");
+    expect(sessions(store).tabDescriptors["s1"].loadState).toBe("loaded");
+    expect(sessions(store).sessionsById["s1"].history).toHaveLength(2);
+    expect(sessions(store).sessionsById["s1"].title).toBe("From disk");
+    expect(catalog(store).lastSessionId).toBe("s1");
+  });
+
+  it("reuses a hidden runtime instead of loading a second one", async () => {
+    const runtime = initialSessionRuntime("s1", "Hidden", {
+      history: [item("h1", "user", "kept")],
+    });
+    const store = makeStore({
+      catalog: [{ sessionId: "s1" }],
+      runtimes: { s1: runtime },
+      tabOrder: ["s2"],
+      activeSessionId: "s2",
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, openSessionTab({ sessionId: "s1" }));
+
+    expect(sessions(store).activeSessionId).toBe("s1");
+    expect(sessions(store).sessionsById["s1"].history[0].message.content).toBe(
+      "kept",
+    );
+    expect(request).not.toHaveBeenCalledWith("history/load", expect.anything());
+  });
+
+  it("bootstraps the last session from the catalog", async () => {
+    const store = makeStore({
+      catalog: [{ sessionId: "s1" }],
+      lastSessionId: "s1",
+    });
+    store.mockIdeMessenger.responses["history/load"] = diskSession("s1");
+
+    await run(store, bootstrapLastSession());
+
+    expect(sessions(store).activeSessionId).toBe("s1");
+    expect(sessions(store).sessionsById["s1"].history).toHaveLength(2);
+  });
+
+  it("creates a new empty session when there is nothing to restore", async () => {
+    const store = makeStore();
+
+    await run(store, bootstrapLastSession());
+
+    const activeId = sessions(store).activeSessionId;
+    expect(activeId).toBeTruthy();
+    expect(sessions(store).sessionsById[activeId].history).toEqual([]);
+    expect(sessions(store).tabOrder).toEqual([activeId]);
+  });
+
+  it("creates a new session when the last one no longer exists", async () => {
+    const store = makeStore({
+      catalog: [{ sessionId: "other" }],
+      lastSessionId: "gone",
+    });
+
+    await run(store, bootstrapLastSession());
+
+    const activeId = sessions(store).activeSessionId;
+    expect(activeId).not.toBe("gone");
+    expect(sessions(store).sessionsById[activeId].history).toEqual([]);
+  });
+
+  it("deletes a session without touching its neighbour", async () => {
+    const s1 = initialSessionRuntime("s1", "One", {
+      history: [item("a", "user", "x")],
+    });
+    const s2 = initialSessionRuntime("s2", "Two", {
+      history: [item("b", "user", "y")],
+    });
+    const store = makeStore({
+      catalog: [{ sessionId: "s1" }, { sessionId: "s2" }],
+      runtimes: { s1, s2 },
+      tabOrder: ["s1", "s2"],
+      activeSessionId: "s1",
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    store.mockIdeMessenger.responses["history/delete"] = undefined;
+
+    await run(store, deleteSessionRuntime({ sessionId: "s1" }));
+
+    expect(request).toHaveBeenCalledWith("history/delete", { id: "s1" });
+    expect(sessions(store).sessionsById["s1"]).toBeUndefined();
+    expect(sessions(store).tabOrder).toEqual(["s2"]);
+    expect(sessions(store).activeSessionId).toBe("s2");
+    expect(sessions(store).sessionsById["s2"].history).toHaveLength(1);
+    expect(
+      catalog(store).allSessionMetadata.map((m: any) => m.sessionId),
+    ).toEqual(["s2"]);
+  });
+
+  it("stops the deleted session's own stream first", async () => {
+    const aborter = new AbortController();
+    const s1 = initialSessionRuntime("s1", "One", {
+      stream: { status: "streaming", requestId: "req-1", aborter },
+    });
+    const store = makeStore({
+      catalog: [{ sessionId: "s1" }],
+      runtimes: { s1 },
+      tabOrder: ["s1"],
+      activeSessionId: "s1",
+    });
+    store.mockIdeMessenger.responses["history/delete"] = undefined;
+
+    await run(store, deleteSessionRuntime({ sessionId: "s1" }));
+
+    expect(aborter.signal.aborted).toBe(true);
+    expect(sessions(store).sessionsById["s1"]).toBeUndefined();
+  });
+
+  it("ensureSessionRuntime is a no-op when the runtime already exists", async () => {
+    const store = makeStore({
+      runtimes: { s1: initialSessionRuntime("s1", "One") },
+      tabOrder: ["s1"],
+      activeSessionId: "s1",
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, ensureSessionRuntime({ sessionId: "s1" }));
+
+    expect(request).not.toHaveBeenCalled();
+  });
+});
