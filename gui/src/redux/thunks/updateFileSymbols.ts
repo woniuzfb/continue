@@ -2,6 +2,7 @@ import { createAsyncThunk } from "@reduxjs/toolkit";
 import { ChatHistoryItem, ContextItemWithId } from "core";
 import { CodeBlock } from "../../components/mainInput/TipTapEditor/extensions";
 import { updateFileSymbols } from "../slices/sessionSlice";
+import { setSessionSymbols } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 
 export function getContextItemsFromHistory(
@@ -63,6 +64,50 @@ export const updateFileSymbolsFromFiles = createAsyncThunk<
       }
     } catch (e) {
       console.error("Error updating file symbols from filepaths", e, filepaths);
+    }
+  },
+);
+
+/**
+ * Phase 1 session-scoped variant of {@link updateFileSymbolsFromFiles}
+ * (方案.md §五.20): merges the fetched symbols into the target session instead
+ * of the active one.
+ */
+export const updateSessionFileSymbolsFromFiles = createAsyncThunk<
+  void,
+  { sessionId: string; filepaths: string[] },
+  ThunkApiType
+>(
+  "sessions/updateFileSymbols",
+  async ({ sessionId, filepaths }, { dispatch, extra, getState }) => {
+    try {
+      const uniqueUris = Array.from(new Set(filepaths));
+      if (uniqueUris.length === 0) {
+        return;
+      }
+      const result = await extra.ideMessenger.request(
+        "context/getSymbolsForFiles",
+        { uris: uniqueUris },
+      );
+      if (result.status === "error") {
+        throw new Error(result.error);
+      }
+      const session = getState().sessions.sessionsById[sessionId];
+      if (!session) {
+        return;
+      }
+      dispatch(
+        setSessionSymbols({
+          sessionId,
+          symbols: { ...session.symbols, ...result.content },
+        }),
+      );
+    } catch (e) {
+      console.error(
+        "Error updating session file symbols from filepaths",
+        e,
+        filepaths,
+      );
     }
   },
 );

@@ -48,3 +48,18 @@ export function extractAttachmentsFromMessage(message: {
     }))
     .filter((f) => foundPaths.has(f.path));
 }
+
+/**
+ * Builds the text block appended to `message.content` (the payload sent to the
+ * LLM) when files are attached. The text is NOT injected into editorState, so
+ * it does not show up when the already-sent user message is echoed back; the
+ * UI renders file chips from `message.metadata.attachments` instead.
+ */
+export function buildAttachedFilesText(files: AttachedFile[]): string {
+  const blocks = files
+    .map(
+      (f) => `<file_content path="${f.path}">\n${f.content}\n</file_content>`,
+    )
+    .join("\n\n");
+  return `\n\nFiles attached by the user:\n\n${blocks}\n`;
+}

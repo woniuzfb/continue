@@ -746,11 +746,28 @@ export const sessionsSlice = createSlice({
         session.persistence = action.payload.persistence;
       }
     },
+    /**
+     * Marks a session dirty and advances the save-queue revision (方案.md
+     * §七.1/§七.3): `revision` is what the per-session save queue compares to
+     * decide whether a newer snapshot is still pending.
+     */
     markSessionDirty: (state, action: PayloadAction<{ sessionId: string }>) => {
       const session = findRuntime(state, action.payload.sessionId);
-      if (session) {
-        session.dirty = true;
+      if (!session) {
+        return;
       }
+      session.dirty = true;
+      const persistence = session.persistence ?? {
+        state: "clean" as const,
+        revision: 0,
+        persistedRevision: 0,
+        hasPersistedBaseline: false,
+      };
+      session.persistence = {
+        ...persistence,
+        state: persistence.state === "saving" ? "saving" : "pending",
+        revision: persistence.revision + 1,
+      };
     },
     markSessionPersisted: (
       state,
