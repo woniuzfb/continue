@@ -108,6 +108,9 @@ export const selectTabSummaries = createSelector(
         loadState: descriptor?.loadState ?? "unloaded",
         isStreaming: runtime?.stream.status === "streaming",
         pendingApprovalCount: runtime?.pendingApprovalCount ?? 0,
+        // Background failure is visible in the tab bar (方案.md §七.7).
+        persistenceState: runtime?.persistence?.state ?? "clean",
+        interrupted: runtime?.interrupted ?? false,
       };
     }),
 );

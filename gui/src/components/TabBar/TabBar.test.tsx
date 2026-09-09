@@ -59,3 +59,39 @@ describe("TabBar", () => {
     expect(store.getActions()).toEqual([]);
   });
 });
+
+describe("TabBar failure projection", () => {
+  it("shows a retry affordance for a session whose save failed", () => {
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: "s1",
+        tabOrder: ["s1", "s2"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Failed", loadState: "loaded" },
+          s2: { sessionId: "s2", title: "Other", loadState: "loaded" },
+        },
+        sessionsById: {
+          s1: initialSessionRuntime("s1", "Failed", {
+            persistence: {
+              state: "failed",
+              revision: 1,
+              persistedRevision: 0,
+              hasPersistedBaseline: false,
+              error: { code: "SESSION_SAVE_FAILED", message: "disk full" },
+            },
+            dirty: true,
+          }),
+          s2: initialSessionRuntime("s2", "Other"),
+        },
+      },
+    });
+
+    render(
+      <Provider store={store}>
+        <TabBar />
+      </Provider>,
+    );
+
+    expect(screen.getByTitle("Save failed - click to retry")).toBeTruthy();
+  });
+});

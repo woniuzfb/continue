@@ -10,7 +10,10 @@ import {
   createAndActivateSession,
 } from "../../redux/thunks/sessionActivation";
 import { selectTabSummaries } from "../../redux/selectors/sessions";
-import { saveActiveSession } from "../../redux/thunks/sessionPersistence";
+import {
+  retrySessionSave,
+  saveActiveSession,
+} from "../../redux/thunks/sessionPersistence";
 import { varWithFallback } from "../../styles/theme";
 import {
   selectActiveHistory,
@@ -190,6 +193,28 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
             }}
           >
             <TabTitle>{tab.title}</TabTitle>
+            {(tab.persistenceState === "failed" || tab.interrupted) && (
+              <span
+                title={
+                  tab.persistenceState === "failed"
+                    ? "Save failed - click to retry"
+                    : "Turn interrupted - click to open"
+                }
+                className="text-error cursor-pointer px-1 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (tab.persistenceState === "failed") {
+                    void dispatch(
+                      retrySessionSave({ sessionId: tab.sessionId }),
+                    );
+                  } else {
+                    handleTabClick(tab.sessionId);
+                  }
+                }}
+              >
+                !
+              </span>
+            )}
             <CloseButton
               /* disabled={tabs.length === 1} */
               onClick={(e) => {
