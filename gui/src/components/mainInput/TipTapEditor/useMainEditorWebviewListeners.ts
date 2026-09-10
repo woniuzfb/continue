@@ -11,7 +11,8 @@ import { AppDispatch } from "../../../redux/store";
 import { CodeBlock, PromptBlock } from "./extensions";
 import { insertCurrentFileContextMention } from "./utils/insertCurrentFileContextMention";
 import { useSessionIsInEdit } from "../../../redux/selectors/sessionView";
-import { saveActiveSession } from "../../../redux/thunks/sessionPersistence";
+import { flushSessionSave } from "../../../redux/thunks/sessionPersistence";
+import { createAndActivateSession } from "../../../redux/thunks/sessionActivation";
 import { openSessionTab } from "../../../redux/thunks/sessionLifecycle";
 
 /**
@@ -70,7 +71,8 @@ export function useMainEditorWebviewListeners({
       dispatch(setSessionCodeToEdit({ sessionId, codeToEdit: [] }));
 
       if (historyLength > 0) {
-        await dispatch(saveActiveSession({ openNewSession: false }));
+        // Explicit flush — not a tab switch and not a new session.
+        await dispatch(flushSessionSave({ sessionId }));
       }
 
       setTimeout(() => {
@@ -94,7 +96,7 @@ export function useMainEditorWebviewListeners({
   useWebviewListener(
     "focusContinueInputWithNewSession",
     async () => {
-      await dispatch(saveActiveSession({ openNewSession: true }));
+      await dispatch(createAndActivateSession({ origin: "new" }));
 
       setTimeout(() => {
         editor?.commands.focus("end");

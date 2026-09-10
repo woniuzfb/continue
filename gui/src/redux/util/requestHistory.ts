@@ -1,8 +1,6 @@
+import { extractFirstTurnItems } from "core/util/firstTurn";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
-import {
-  firstTurnItemsOf,
-  getCurrentTurnItems,
-} from "../slices/sessionHistory";
+import { getCurrentTurnItems } from "../slices/sessionHistory";
 import type { SessionRuntimeState } from "../slices/sessionsSlice";
 
 /**
@@ -69,6 +67,6 @@ export function requestHistoryFromFullHistory(
 } {
   return {
     requestHistory: history,
-    firstTurnItems: firstTurnItemsOf(history),
+    firstTurnItems: extractFirstTurnItems(history),
   };
 }

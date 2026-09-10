@@ -71,8 +71,8 @@ import {
  *
  * One model request per `requestId`, created here with its own
  * `AbortController`, written straight into `sessionsById[sessionId]`. There is
- * no LRU routing, no `routeToCachedSession`, no `bgCache` and no active-session
- * read: a background tab streams exactly like the visible one.
+ * no LRU routing and no active-session read: a background tab streams exactly
+ * like the visible one.
  *
  * The request stays live while the session is awaiting tool approval, so the
  * tool loop can continue it. Terminal states save immediately.

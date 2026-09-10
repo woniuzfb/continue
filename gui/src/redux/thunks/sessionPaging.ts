@@ -5,8 +5,10 @@ import {
   setSessionHistory,
   setSessionHistoryLoading,
   setSessionPagination,
+  trimSessionHistoryWindow,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
+import { getLazyLoadTrimLimit, planHistoryTrim } from "../util/lazyLoadHistory";
 import { ensureMessageIds } from "../util/messageIds";
 
 /**
@@ -171,5 +173,122 @@ export const loadFullHistory = createAsyncThunk<
         },
       }),
     );
+  },
+);
+
+/**
+ * 方案.md §九.5/§九.7: after a save proves the window is on disk, release the
+ * frozen head from memory by trimming the visible window to
+ * `max(lazyLoadHistoryInitialCount, 当前完整回合)`.
+ *
+ * Self-guarding so it is safe to call from any save path: every condition is
+ * re-read from state, and the caller only supplies the authoritative disk count
+ * from the matching `history/save` response.
+ *
+ * Deliberately out of scope for this step: 方案.md §九.8(切出后台 trim) and
+ * §九.9(流式期间 trim 已落盘旧头部) — both need the scroll-anchor path proven
+ * first. So this never runs while the model is actually streaming
+ * (`stream.status === "streaming"`) and never while a tool approval is pending.
+ *
+ * Note the state matrix (方案.md 已知限制 #51): `pauseSessionStream` writes
+ * `status: "idle"` + live `requestId`, so awaiting-approval and a pending edit
+ * apply are both `idle`.
+ *
+ * A pending tool approval is excluded by `pendingApprovalCount > 0`.
+ * Waiting for an edit apply is represented as `idle` with a live requestId,
+ * so it is not independently excluded here. `planHistoryTrim` still retains
+ * the complete current turn from the latest user message to the history tail.
+ */
+export const reconcilePaginationAfterPersist = createAsyncThunk<
+  boolean,
+  { sessionId: string; savedRevision: number; totalHistoryCount?: number },
+  ThunkApiType
+>(
+  "sessions/reconcilePaginationAfterPersist",
+  async (
+    { sessionId, savedRevision, totalHistoryCount },
+    { getState, dispatch },
+  ) => {
+    const state = getState();
+    const ui = state.config.config?.ui;
+    if (!ui?.lazyLoadHistory) {
+      return false;
+    }
+    const session = selectSessionById(state, sessionId);
+    if (!session) {
+      return false;
+    }
+
+    const persistence = session.persistence;
+    // Stale or failed saves never trim (方案.md §七.6/§七.7): a newer revision
+    // means content arrived while the request was in flight, so the response
+    // describes an older window.
+    if (!persistence || persistence.state !== "clean") {
+      return false;
+    }
+    if (persistence.revision !== savedRevision) {
+      return false;
+    }
+    if (!persistence.hasPersistedBaseline) {
+      return false;
+    }
+    // 方案.md §九.4: the stream is only "idle" / "streaming" / "failed" —
+    // `stopSessionStream` aborts the controller instead of writing an
+    // "aborting" state, so "streaming" is the only unsafe value here.
+    if (session.stream.status === "streaming") {
+      return false;
+    }
+    if (session.pendingApprovalCount > 0) {
+      return false;
+    }
+    if (session.pagination.loading) {
+      return false;
+    }
+    if (session.pagination.persistPending) {
+      return false;
+    }
+
+    // 方案.md §九.7: the save just rewrote the disk tail with this very window,
+    // so the window's disk length is now `history.length`. `loadedDiskCount` is
+    // still the PRE-save raw-page count (bubble merge makes it larger), and
+    // `loadMoreHistory` passes it straight to `history/loadPage` as `offset` —
+    // a stale value would skip items and leave a hole in the window. Only
+    // reconcile when the response proves the head/window split.
+    const loadedOffset = session.pagination.loadedOffset ?? 0;
+    const diskSplitIsAuthoritative =
+      totalHistoryCount !== undefined &&
+      totalHistoryCount === loadedOffset + session.history.length;
+    if (
+      diskSplitIsAuthoritative &&
+      session.pagination.truncated &&
+      session.pagination.loadedDiskCount !== session.history.length
+    ) {
+      dispatch(
+        setSessionPagination({
+          sessionId,
+          pagination: { loadedDiskCount: session.history.length },
+        }),
+      );
+    }
+
+    const plan = planHistoryTrim(
+      session,
+      getLazyLoadTrimLimit(ui.lazyLoadHistoryInitialCount),
+      totalHistoryCount,
+    );
+    if (!plan) {
+      return false;
+    }
+
+    dispatch(
+      trimSessionHistoryWindow({
+        sessionId,
+        keepCount: plan.keepCount,
+        removedDiskItems: plan.removedDiskItems,
+        fullDiskItemCount: plan.fullDiskItemCount,
+        retainedDiskItemCount: plan.retainedDiskItemCount,
+      }),
+    );
+    return true;
   },
 );

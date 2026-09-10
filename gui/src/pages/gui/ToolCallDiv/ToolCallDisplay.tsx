@@ -11,7 +11,7 @@ interface ToolCallDisplayProps {
   icon: React.ReactNode;
   tool: Tool | undefined;
   toolCallState: ToolCallState;
-  historyIndex: number;
+  messageId: string;
 }
 
 export function ToolCallDisplay({
@@ -19,7 +19,7 @@ export function ToolCallDisplay({
   toolCallState,
   children,
   icon,
-  historyIndex,
+  messageId,
 }: ToolCallDisplayProps) {
   const ideMessenger = useContext(IdeMessengerContext);
   const shownContextItems = useMemo(() => {
@@ -53,7 +53,7 @@ export function ToolCallDisplay({
             <ToolCallStatusMessage tool={tool} toolCallState={toolCallState} />
           </div>
           {!!toolCallState.output?.length && (
-            <ToolTruncateHistoryIcon historyIndex={historyIndex} />
+            <ToolTruncateHistoryIcon messageId={messageId} />
           )}
         </div>
       </div>

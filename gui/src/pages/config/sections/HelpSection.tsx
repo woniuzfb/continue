@@ -21,7 +21,7 @@ import {
   selectActiveIsStreaming,
   selectActiveSessionId,
 } from "../../../redux/selectors/sessionView";
-import { saveActiveSession } from "../../../redux/thunks/sessionPersistence";
+import { createAndActivateSession } from "../../../redux/thunks/sessionActivation";
 
 interface KeyboardShortcutProps {
   shortcut: string;
@@ -232,7 +232,7 @@ export function HelpSection() {
                 onClick={async () => {
                   navigate("/");
                   // Used to clear the chat panel before showing onboarding card
-                  await dispatch(saveActiveSession({ openNewSession: true }));
+                  await dispatch(createAndActivateSession({ origin: "new" }));
                   dispatch(
                     setOnboardingCard({
                       show: true,

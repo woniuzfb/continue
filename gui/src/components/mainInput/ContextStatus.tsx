@@ -6,7 +6,7 @@ import {
   useSessionContextMetricsFields,
   useSessionHistory,
 } from "../../redux/selectors/sessionView";
-import { saveActiveSession } from "../../redux/thunks/sessionPersistence";
+import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
 
 // 将 token 数格式化为紧凑形式：1234 -> 1.2K, 128000 -> 128K
 function formatTokens(tokens: number): string {
@@ -106,7 +106,7 @@ const ContextStatus = () => {
                     className="hover:text-link inline-block cursor-pointer underline"
                     onClick={() => {
                       void dispatch(
-                        saveActiveSession({ openNewSession: true }),
+                        createAndActivateSession({ origin: "new" }),
                       );
                     }}
                   >

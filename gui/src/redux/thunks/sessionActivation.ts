@@ -15,14 +15,14 @@ import {
 } from "../slices/sessionsSlice";
 import type { RootState, ThunkApiType } from "../store";
 import { ensureMessageIds } from "../util/messageIds";
-import { firstTurnItemsOf, latestSummaryOf } from "../slices/sessionHistory";
+import { extractFirstTurnItems } from "core/util/firstTurn";
+import { latestSummaryOf } from "../slices/sessionHistory";
 import type { ChatHistoryItem } from "core";
 import {
   compileSessionChatForContextMetrics,
   needsContextMetricsRecompute,
 } from "./sessionMetrics";
 import { getSession, getSessionPage } from "./session";
-import { enqueueSessionSave } from "./sessionPersistence";
 import { hasUnresumableTurn } from "./sessionInterruption";
 
 /**
@@ -125,7 +125,7 @@ export const loadSessionRuntime = createAsyncThunk<
         // — from the page response when paging, or computed on a full load.
         firstTurnItems: hasMore
           ? ensureMessageIds(pageFirstTurnItems ?? [])
-          : firstTurnItemsOf(history),
+          : extractFirstTurnItems(history),
         mode: session.mode ?? "chat",
         chatModelTitle: session.chatModelTitle ?? undefined,
         hasReasoningEnabled: session.hasReasoningEnabled,
@@ -213,23 +213,13 @@ export const activateSessionTab = createAsyncThunk<
   if (!selectTabDescriptor(getState(), sessionId)) {
     return;
   }
-  const outgoingSessionId = getState().sessions.activeSessionId;
   // Activate first so the UI responds immediately, then finish the
   // side-effects; a slow disk load never blocks the switch.
+  //
+  // 方案.md §七.11: switching tabs must not save. Every content mutation already
+  // enqueues its own save (§七.2), so the Phase 1 transitional save is gone —
+  // activation only selects the target and applies the side effects below.
   dispatch(setActiveSessionId({ sessionId }));
-  // Phase 1 transitional save (方案.md §五.15): switching out persists the
-  // outgoing session in the background.
-  if (outgoingSessionId && outgoingSessionId !== sessionId) {
-    const outgoing = selectSessionById(getState(), outgoingSessionId);
-    if (outgoing?.dirty) {
-      void dispatch(
-        enqueueSessionSave({
-          sessionId: outgoingSessionId,
-          reason: "TAB_SWITCH",
-        }),
-      );
-    }
-  }
   await dispatch(completeSessionActivation({ sessionId }));
 });
 

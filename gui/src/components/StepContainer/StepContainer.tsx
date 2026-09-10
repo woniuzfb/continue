@@ -1,10 +1,9 @@
-import { ChatHistoryItem } from "core";
 import { renderChatMessage, stripImages } from "core/util/messageContent";
 import { useEffect, useState } from "react";
-import { useDispatch } from "react-redux";
-import { useAppSelector } from "../../redux/hooks";
+import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { selectUIConfig } from "../../redux/slices/configSlice";
-import { deleteTurnByMessageId } from "../../redux/slices/sessionsSlice";
+import type { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionHistory";
+import { deleteSessionTurn } from "../../redux/thunks/sessionChanges";
 import ThinkingBlockPeek from "../mainInput/belowMainInput/ThinkingBlockPeek";
 import StyledMarkdownPreview from "../StyledMarkdownPreview";
 import ConversationSummary from "./ConversationSummary";
@@ -17,7 +16,7 @@ import {
 import { useSessionId } from "../mainInput/TipTapEditor/SessionScope";
 
 interface StepContainerProps {
-  item: ChatHistoryItem;
+  item: ChatHistoryItemWithMessageId;
   index: number;
   isLast: boolean;
   latestSummaryIndex?: number;
@@ -25,9 +24,8 @@ interface StepContainerProps {
 }
 
 export default function StepContainer(props: StepContainerProps) {
-  const dispatch = useDispatch();
+  const dispatch = useAppDispatch();
   const sessionId = useSessionId();
-  const activeHistory = useSessionHistory();
   const [isTruncated, setIsTruncated] = useState(false);
   const isStreaming = useSessionIsStreaming();
   const uiConfig = useAppSelector(selectUIConfig);
@@ -75,10 +73,15 @@ export default function StepContainer(props: StepContainerProps) {
   }, [props.item.message.content, isStreaming]);
 
   function onDelete() {
-    const messageId = activeHistory[props.index]?.message.id;
-    if (messageId) {
-      dispatch(deleteTurnByMessageId({ sessionId, messageId }));
-    }
+    // 方案.md §七.2/§十二: identify the turn by the stable message id carried by
+    // the rendered item, never by re-resolving an index. The visible window can
+    // shrink (send-time trim), grow (prepend) or be bubble-merged between render
+    // and click, so an index lookup here could select a different message.
+    // 方案.md §七.2: the mutation and its save boundary travel together — a
+    // deletion that never reaches disk would silently reappear on reload.
+    void dispatch(
+      deleteSessionTurn({ sessionId, messageId: props.item.message.id }),
+    );
   }
 
   function onContinueGeneration() {

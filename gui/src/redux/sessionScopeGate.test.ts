@@ -18,7 +18,7 @@ import { describe, expect, test } from "vitest";
  *   - config pages (no session tree)
  *   - the selectors that *define* the active projections
  *   - thunks whose whole job is to resolve the visible session once
- *     (`stopActiveSessionStream`, `approveActiveToolCall`, `saveActiveSession`,
+ *     (`stopActiveSessionStream`, `approveActiveToolCall`,
  *     activation/lifecycle)
  *   - the SessionScope/editor-registry plumbing that needs to know visibility
  *   - persistV2 (stores the last active id) and the test harness

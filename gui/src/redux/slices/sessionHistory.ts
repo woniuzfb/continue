@@ -328,8 +328,9 @@ export function mergeSplitReplies(
 }
 
 /**
- * streamUpdate 的目标对象：既能是 session slice 的 state（正常流），
- * 也能是 LRU 缓存里的 CachedSession（后台续流时，流所属会话已切走）。
+ * streamUpdate 的目标对象：总是 `sessionsById[sessionId]` 的 runtime
+ * （方案.md §五.10）。无论该 tab 是否可见都写入同一个 runtime —— 没有 LRU
+ * 搬运，也没有第二份缓存副本。
  */
 export type StreamUpdateTarget = {
   history: ChatHistoryItemWithMessageId[];
@@ -586,28 +587,6 @@ export function latestSummaryOf(
     }
   }
   return undefined;
-}
-
-export function firstTurnItemsOf(
-  history: ChatHistoryItemWithMessageId[],
-): ChatHistoryItemWithMessageId[] {
-  if (history.length === 0) {
-    return [];
-  }
-  const firstUserIndex = history.findIndex(
-    (item) => item.message.role === "user",
-  );
-  if (firstUserIndex < 0) {
-    return [];
-  }
-  let end = history.length;
-  for (let i = firstUserIndex + 1; i < history.length; i++) {
-    if (history[i].message.role === "user") {
-      end = i;
-      break;
-    }
-  }
-  return history.slice(firstUserIndex, end);
 }
 
 /**

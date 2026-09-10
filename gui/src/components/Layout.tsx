@@ -24,7 +24,7 @@ import { useMainEditor } from "./mainInput/TipTapEditor";
 import { isNewUserOnboarding, useOnboardingCard } from "./OnboardingCard";
 import OSRContextMenu from "./OSRContextMenu";
 import { selectActiveIsInEdit } from "../redux/selectors/sessionView";
-import { saveActiveSession } from "../redux/thunks/sessionPersistence";
+import { createAndActivateSession } from "../redux/thunks/sessionActivation";
 
 const LayoutTopDiv = styled(CustomScrollbarDiv)`
   height: 100%;
@@ -88,10 +88,9 @@ const Layout = () => {
           exitEdit({ sessionId: selectActiveSessionId(store.getState()) }),
         );
       } else {
-        // fire-and-forget：saveCurrentSession 内部 cacheCurrentSession +
-        // dispatch(newSession()) 同步执行让 UI 立即响应，LLM 标题生成和
-        // 写盘在后台进行。不 await 避免 listener 回调阻塞。
-        void dispatch(saveActiveSession({ openNewSession: true }));
+        // 方案.md §五.18: creating a session never touches the outgoing one.
+        // Its content was already saved by the mutation that produced it.
+        void dispatch(createAndActivateSession({ origin: "new" }));
       }
     },
     [isInEdit],
@@ -119,7 +118,7 @@ const Layout = () => {
         );
       } else {
         // fire-and-forget：同 newSession listener
-        void dispatch(saveActiveSession({ openNewSession: true }));
+        void dispatch(createAndActivateSession({ origin: "new" }));
       }
     },
     [isHome, isInEdit],

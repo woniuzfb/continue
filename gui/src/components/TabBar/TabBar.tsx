@@ -10,15 +10,9 @@ import {
   createAndActivateSession,
 } from "../../redux/thunks/sessionActivation";
 import { selectTabSummaries } from "../../redux/selectors/sessions";
-import {
-  retrySessionSave,
-  saveActiveSession,
-} from "../../redux/thunks/sessionPersistence";
+import { retrySessionSave } from "../../redux/thunks/sessionPersistence";
 import { varWithFallback } from "../../styles/theme";
-import {
-  selectActiveHistory,
-  selectActiveSessionId,
-} from "../../redux/selectors/sessionView";
+import { selectActiveSessionId } from "../../redux/selectors/sessionView";
 
 // Haven't set up theme colors for tabs yet
 // Will keep it simple and choose from existing ones. Comments show vars we could use
@@ -137,20 +131,14 @@ export const TabBar = React.forwardRef<HTMLDivElement>((_, ref) => {
   const currentSessionId = useSelector((state: RootState) =>
     selectActiveSessionId(state),
   );
-  const hasHistory = useSelector(
-    (state: RootState) => selectActiveHistory(state).length > 0,
-  );
   // 方案.md §五.1: the tab bar is a projection of tabOrder + descriptors +
   // runtime, never its own state.
   const tabs = useSelector((state: RootState) => selectTabSummaries(state));
 
   const handleNewTab = useCallback(async () => {
-    if (hasHistory) {
-      await dispatch(saveActiveSession({ openNewSession: true }));
-    } else {
-      await dispatch(createAndActivateSession({ origin: "new" }));
-    }
-  }, [dispatch, hasHistory]);
+    // 方案.md §五.18: the outgoing session is not part of creating a new one.
+    await dispatch(createAndActivateSession({ origin: "new" }));
+  }, [dispatch]);
 
   useEffect(() => {
     if (tabs.length === 0) {

@@ -67,6 +67,19 @@ export type SessionPaginationState = {
   truncated: boolean;
   loadedOffset: number;
   totalCount?: number;
+  /**
+   * 分页簿记字段，**不是磁盘一致性证明**（方案.md §九.6「loadedDiskCount 的
+   * 时序语义」）。含义随阶段变化：
+   *
+   * - loadSessionRuntime / loadPage 后：当前窗口覆盖的 raw disk item 数
+   * - prependSessionHistory 后：累加本页 raw page size，仍是未 bubble merge 计数
+   * - 成功保存重写磁盘尾部后：**旧值已陈旧**，窗口的磁盘条目数变为 history.length
+   * - 保存响应证明映射后：校正为 history.length（即使不 trim 也要校正）
+   * - trim 后：retainedDiskItemCount（= keepCount）
+   *
+   * `loadMoreHistory` 直接把它当作 `history/loadPage` 的 `offset`，因此陈旧值会
+   * 跳过条目并在窗口中留下空洞。
+   */
   loadedDiskCount?: number;
   hasMore: boolean;
   loading: boolean;
@@ -75,7 +88,7 @@ export type SessionPaginationState = {
 };
 
 export type SessionStreamState = {
-  status: "idle" | "streaming" | "aborting" | "failed";
+  status: "idle" | "streaming" | "failed";
   requestId?: string;
   aborter?: AbortController;
   error?: string;
@@ -1010,8 +1023,13 @@ export const sessionsSlice = createSlice({
       }
     },
     /**
-     * Config-derived UI merge settings for one session (方案.md §五.28):
-     * written by the config listener, never mirrored from a render effect.
+     * Per-session snapshot of the global `config.ui` merge settings
+     * (方案.md §十九.26).
+     *
+     * Semantics: the global config is the default, the session runtime field is
+     * the effective value. It is seeded from config when the runtime is created
+     * and refreshed for whichever session is visible when the config values
+     * change (the shell's config effect). Never persisted.
      */
     setSessionMergeSettings: (
       state,

@@ -14,11 +14,14 @@ import { getIconByName, getStatusIcon } from "./utils";
 interface ToolCallDivProps {
   toolCallStates: ToolCallState[];
   historyIndex: number;
+  /** Stable identity of the assistant item these tool calls belong to. */
+  messageId: string;
 }
 
 export function ToolCallDiv({
   toolCallStates,
   historyIndex,
+  messageId,
 }: ToolCallDivProps) {
   const [open, setOpen] = useState(true);
   const availableTools = useAppSelector(
@@ -53,7 +56,7 @@ export function ToolCallDiv({
           icon={getStatusIcon(toolCallState.status)}
           tool={tool}
           toolCallState={toolCallState}
-          historyIndex={historyIndex}
+          messageId={messageId}
         >
           <McpAppRenderer toolCallState={toolCallState} />
         </ToolCallDisplay>
@@ -66,7 +69,7 @@ export function ToolCallDiv({
           tool={tool}
           toolCallState={toolCallState}
           icon={toolCallState.status === "generated" ? ArrowRightIcon : icon}
-          historyIndex={historyIndex}
+          messageId={messageId}
         />
       );
     }
@@ -95,7 +98,7 @@ export function ToolCallDiv({
         icon={getStatusIcon(toolCallState.status)}
         tool={tool}
         toolCallState={toolCallState}
-        historyIndex={historyIndex}
+        messageId={messageId}
       >
         <FunctionSpecificToolCallDiv
           toolCallState={toolCallState}

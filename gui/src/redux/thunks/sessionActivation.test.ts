@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
 import { selectSelectedChatModel } from "../slices/configSlice";
 import { EMPTY_CONFIG } from "../slices/configSlice";
@@ -560,5 +560,61 @@ describe("projectSessionModelToActiveUi", () => {
     expect(selectSelectedChatModel(store.getState() as any)?.title).toBe(
       "model-a",
     );
+  });
+});
+
+describe("activateSessionTab does not save", () => {
+  /**
+   * 方案.md §七.11 / §十六: switching tabs is not a save boundary. Every content
+   * mutation enqueues its own save (§七.2), so activation must not flush the
+   * outgoing session — that was the Phase 1 transitional behaviour.
+   */
+  function twoTabStore() {
+    const a = initialSessionRuntime("s1", "A", {
+      history: [item("u1", "user"), item("a1", "assistant")],
+      dirty: true,
+      persistence: {
+        state: "pending",
+        revision: 3,
+        persistedRevision: 2,
+        hasPersistedBaseline: true,
+      },
+    });
+    const b = initialSessionRuntime("s2", "B", {
+      history: [item("u2", "user"), item("a2", "assistant")],
+    });
+    return makeStore({
+      activeSessionId: "s1",
+      tabOrder: ["s1", "s2"],
+      tabDescriptors: {
+        s1: { sessionId: "s1", title: "A", loadState: "loaded" },
+        s2: { sessionId: "s2", title: "B", loadState: "loaded" },
+      },
+      sessionsById: { s1: a, s2: b },
+    });
+  }
+
+  it("never flushes the outgoing session on a tab switch", async () => {
+    const store = twoTabStore();
+    // The activation pipeline may recompute context metrics; that is not a save.
+    store.mockIdeMessenger.responses["llm/compileChat"] = {
+      didPrune: false,
+      contextPercentage: 0,
+      inputTokens: 1,
+      contextLength: 100,
+    } as any;
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, activateSessionTab({ sessionId: "s2" }));
+
+    expect((store.getState() as any).sessions.activeSessionId).toBe("s2");
+    expect(request.mock.calls.filter((c) => c[0] === "history/save")).toEqual(
+      [],
+    );
+    // The outgoing session keeps its pending state — nothing was resolved.
+    const a = selectSessionById(store.getState() as any, "s1")!;
+    expect(a.dirty).toBe(true);
+    expect(a.persistence?.revision).toBe(3);
+    expect(a.persistence?.state).toBe("pending");
   });
 });

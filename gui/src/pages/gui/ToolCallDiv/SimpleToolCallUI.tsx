@@ -14,14 +14,14 @@ interface SimpleToolCallUIProps {
   toolCallState: ToolCallState;
   tool: Tool | undefined;
   icon?: ComponentType<React.SVGProps<SVGSVGElement>>;
-  historyIndex: number;
+  messageId: string;
 }
 
 export function SimpleToolCallUI({
   icon: Icon,
   toolCallState,
   tool,
-  historyIndex,
+  messageId,
 }: SimpleToolCallUIProps) {
   const ideMessenger = useContext(IdeMessengerContext);
   const shownContextItems = useMemo(() => {
@@ -64,7 +64,7 @@ export function SimpleToolCallUI({
         </div>
 
         {!!toolCallState.output?.length && (
-          <ToolTruncateHistoryIcon historyIndex={historyIndex} />
+          <ToolTruncateHistoryIcon messageId={messageId} />
         )}
       </div>
 

@@ -626,6 +626,7 @@ export function Chat() {
               <ToolCallDiv
                 toolCallStates={toolCallStates}
                 historyIndex={index}
+                messageId={item.message.id}
               />
             )}
           </>

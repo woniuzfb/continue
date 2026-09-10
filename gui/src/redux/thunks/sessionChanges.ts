@@ -1,11 +1,14 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { MessageModes } from "core";
+import { v4 as uuidv4 } from "uuid";
 import { selectSessionById } from "../selectors/sessions";
 import { setActiveSessionModelProjection } from "../slices/configSlice";
 import {
+  deleteTurnByMessageId,
   setSessionChatModelTitle,
   setSessionMode,
   setSessionReasoningEnabled,
+  truncateHistoryAfterMessageId,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { enqueueSessionSave } from "./sessionPersistence";
@@ -95,5 +98,49 @@ export const setActiveSessionReasoningAndSave = createAsyncThunk<
       return;
     }
     await dispatch(setSessionReasoningAndSave({ sessionId, enabled }));
+  },
+);
+
+/**
+ * 方案.md §七.2「内容变更保存」: deleting a turn and trimming the history are
+ * user content mutations, so each one is its own save boundary. Both take the
+ * target's stable message id — never a window index, which a trim / prepend /
+ * bubble merge can invalidate between render and click.
+ *
+ * Enqueueing after the (synchronous) reducer update means the queued snapshot
+ * describes the mutated history.
+ */
+export const deleteSessionTurn = createAsyncThunk<
+  void,
+  { sessionId: string; messageId: string },
+  ThunkApiType
+>(
+  "sessions/deleteTurnAndSave",
+  async ({ sessionId, messageId }, { dispatch }) => {
+    dispatch(deleteTurnByMessageId({ sessionId, messageId }));
+    void dispatch(enqueueSessionSave({ sessionId, reason: "TURN_DELETED" }));
+  },
+);
+
+export const truncateSessionHistoryAfter = createAsyncThunk<
+  void,
+  { sessionId: string; messageId: string },
+  ThunkApiType
+>(
+  "sessions/truncateHistoryAndSave",
+  async ({ sessionId, messageId }, { dispatch }) => {
+    // 方案.md §六: new ids are generated in the thunk, never by the reducer —
+    // without this the regenerated assistant placeholder would carry an empty
+    // id and be unreachable by every byMessageId write.
+    dispatch(
+      truncateHistoryAfterMessageId({
+        sessionId,
+        messageId,
+        assistantPlaceholderId: uuidv4(),
+      }),
+    );
+    void dispatch(
+      enqueueSessionSave({ sessionId, reason: "HISTORY_TRUNCATED" }),
+    );
   },
 );

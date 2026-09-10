@@ -1,5 +1,4 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
-import { NEW_SESSION_TITLE } from "core/util/constants";
 import { Session } from "core";
 import { selectSessionById } from "../selectors/sessions";
 import { ensureMessageIds } from "../util/messageIds";
@@ -13,7 +12,7 @@ import {
   setSessionPagination,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
-import { createAndActivateSession } from "./sessionActivation";
+import { reconcilePaginationAfterPersist } from "./sessionPaging";
 import { releaseClosingSessionIfClean } from "./sessionLifecycle";
 
 /**
@@ -148,6 +147,19 @@ async function performSave(
       hasPersistedBaseline: true,
     }),
   );
+  // 方案.md §九.7: the saved window is now on disk, so the frozen head can be
+  // released. The thunk re-checks every gate (revision, clean, idle, no
+  // approval, 1:1 GUI/disk mapping) and only uses the response's authoritative
+  // disk count — it never derives the mapping from the visible window.
+  void dispatch(
+    reconcilePaginationAfterPersist({
+      sessionId,
+      savedRevision: request.revision,
+      totalHistoryCount: responseIsCurrent
+        ? result.content?.totalHistoryCount
+        : undefined,
+    }),
+  );
   // A hidden owner that is now clean can be released (方案.md §八).
   void dispatch(releaseClosingSessionIfClean({ sessionId }));
 }
@@ -244,33 +256,6 @@ export const retrySessionSave = createAsyncThunk<
     reason: "retry",
   });
   await (runningSaves.get(sessionId) ?? startSaveLoop(sessionId, thunkApi));
-});
-
-/**
- * Active-UI save entry point (方案.md §五.14): resolves the visible session,
- * flushes its save and optionally opens a new session. Call sites that used the
- * legacy `saveCurrentSession` use this instead.
- */
-export const saveActiveSession = createAsyncThunk<
-  void,
-  { openNewSession: boolean },
-  ThunkApiType
->("sessions/saveActive", async ({ openNewSession }, { dispatch, getState }) => {
-  const sessionId = getState().sessions.activeSessionId;
-  const runtime = sessionId
-    ? getState().sessions.sessionsById[sessionId]
-    : undefined;
-  if (
-    sessionId &&
-    runtime &&
-    runtime.history.length > 0 &&
-    (runtime.dirty || runtime.title === NEW_SESSION_TITLE)
-  ) {
-    await dispatch(flushSessionSave({ sessionId }));
-  }
-  if (openNewSession) {
-    await dispatch(createAndActivateSession({ origin: "new" }));
-  }
 });
 
 /** Test helper: drop module-level queue state between tests. */

@@ -17,6 +17,7 @@ import {
   decodePromptLogDeltas,
   encodePromptLogDeltas,
 } from "./promptLogDelta.js";
+import { extractFirstTurnItems } from "./firstTurn.js";
 import { SessionPersistenceError } from "./sessionPersistenceError.js";
 import type { SaveHistoryResponse } from "../protocol/core";
 import type { ChatHistoryItem } from "../index";
@@ -413,7 +414,7 @@ export class HistoryManager {
     const isFirstPage = safeOffset === 0;
     return {
       items,
-      firstTurnItems: isFirstPage ? this.firstTurnItemsOf(session.history) : [],
+      firstTurnItems: isFirstPage ? extractFirstTurnItems(session.history) : [],
       latestConversationSummary: isFirstPage
         ? this.latestSummaryOf(session.history)
         : undefined,
@@ -636,34 +637,10 @@ export class HistoryManager {
 
     // 方案.md §七.8.1: 返回权威首轮 / 最新摘要 / 完整条数。
     return {
-      firstTurnItems: this.firstTurnItemsOf(finalHistory),
+      firstTurnItems: extractFirstTurnItems(finalHistory),
       latestConversationSummary: this.latestSummaryOf(finalHistory),
       totalHistoryCount: finalHistory.length,
     };
-  }
-
-  /**
-   * 磁盘首轮条目：从第一条 user 消息到第二条 user 消息之前（不含）。
-   * 未经 GUI bubble merge，直接来自落盘的 finalHistory（方案.md §五.5）。
-   */
-  private firstTurnItemsOf(history: ChatHistoryItem[]): ChatHistoryItem[] {
-    if (history.length === 0) {
-      return [];
-    }
-    const firstUserIndex = history.findIndex(
-      (item) => item.message.role === "user",
-    );
-    if (firstUserIndex < 0) {
-      return [];
-    }
-    let end = history.length;
-    for (let i = firstUserIndex + 1; i < history.length; i++) {
-      if (history[i].message.role === "user") {
-        end = i;
-        break;
-      }
-    }
-    return history.slice(firstUserIndex, end);
   }
 
   /** 最近一次 compact 的摘要及其来源条目位置（方案.md §七.8.1）。 */
