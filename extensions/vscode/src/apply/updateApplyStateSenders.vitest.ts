@@ -9,9 +9,12 @@ import { describe, expect, it } from "vitest";
  *
  * A behavioural test can only reach the send sites it can construct, and these
  * payloads are written in `onStatusUpdate` closures inside diff-handler
- * options — easy to add and easy to forget. This is a static guard over the
- * three real send paths, in the spirit of the GUI's `sessionScopeGate.test.ts`:
- * if a new `updateApplyState` is added without `sessionId`, this fails.
+ * options — easy to add and easy to forget. So this is a **static guard over
+ * the known sending files** (in the spirit of the GUI's
+ * `sessionScopeGate.test.ts`), not a whole-repo guarantee: a new sender in a
+ * fourth file would not be scanned. Making it repo-wide means walking the whole
+ * `src` tree recursively and skipping test files — worth doing when a fourth
+ * sender actually appears, not a blocker today.
  */
 
 /** Project root, from `src/apply/`. */

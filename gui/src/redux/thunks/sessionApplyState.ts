@@ -93,11 +93,15 @@ function applyErrorItem(): ContextItem {
  * The event names its session either in the payload (P3, new hosts) or through
  * the origin registry written when the apply request was issued (old hosts).
  * Routing is never derived from the visible session: an event that names
- * nothing, names a session with no runtime, contradicts the registry, or
- * contradicts the registered tool call, is **dropped** with a warning —
- * falling back to `activeSessionId` wrote apply state into a session that never
- * started the apply, advanced *its* `codeBlockApplyStates.curIndex`, and could
- * close its edit mode.
+ * nothing, names a session with no runtime, or contradicts the registered tool
+ * call *of that same session*, is **dropped** with a warning — falling back to
+ * `activeSessionId` wrote apply state into a session that never started the
+ * apply, advanced *its* `codeBlockApplyStates.curIndex`, and could close its
+ * edit mode.
+ *
+ * A registry entry naming a different session is not a drop condition (P3.1):
+ * with the fixed edit streamId the registry slot is shared by every session, so
+ * the payload stays the routing authority and the stale entry is only logged.
  *
  * A drop is expected after a webview reload (the registry is in-memory), for a
  * late event from a stream that already finished, or from a host that predates
@@ -123,6 +127,17 @@ export const routeApplyStateUpdate = createAsyncThunk<
         reason: route.reason,
       });
       return;
+    }
+    if (route.staleOrigin) {
+      // Not an error: with the fixed edit streamId, another session's edit
+      // overwriting the single registry slot is expected. The payload is the
+      // routing identity (P3.1), so the event still reaches the right session.
+      console.warn("Routed by the payload session over a stale apply origin", {
+        streamId: applyState.streamId,
+        payloadSessionId: route.sessionId,
+        staleOriginSessionId: route.staleOrigin.sessionId,
+        staleOriginKind: route.staleOrigin.kind,
+      });
     }
     // The runtime slot stays session-free: the session is the *key* of that
     // state, not a field of it (see `UpdateApplyStatePayload`).

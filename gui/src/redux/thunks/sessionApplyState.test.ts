@@ -12,6 +12,7 @@ import {
   registerEditApplyOrigin,
   registerToolApplyOrigin,
   resetApplyOrigins,
+  resolveApplyRoute,
 } from "../util/applyOrigins";
 import {
   applySessionForEditTool,
@@ -513,7 +514,12 @@ describe("apply state routing", () => {
     });
   });
 
-  it("keeps two sessions' edit streams apart, and drops a stale one", async () => {
+  /**
+   * P3.1: with the fixed edit streamId the registry slot is shared by every
+   * session, so a stale entry must not veto the payload's session — otherwise
+   * S1's own events are deterministically dropped as soon as S2 starts an edit.
+   */
+  it("keeps two sessions' edit streams apart under one shared streamId", async () => {
     const store = makeStore();
     setInEdit(store, "s1", true);
     setInEdit(store, "s2", true);
@@ -534,8 +540,8 @@ describe("apply state routing", () => {
     expect(session(store, "s2").editState.applyState.status).toBe("done");
     expect(editApplyState(store).status).toBe("not-started");
 
-    // S1's still-in-flight event names S1 while the slot says S2: the two
-    // identities disagree, so it is dropped — never written to S2.
+    // S1's in-flight event still names S1. The registry slot says S2, which is
+    // stale, not a conflict: it is routed to S1 (and logged).
     await run(
       store,
       routeApplyStateUpdate({
@@ -547,13 +553,15 @@ describe("apply state routing", () => {
       }),
     );
 
+    expect(editApplyState(store).status).toBe("done");
     expect(session(store, "s2").editState.applyState.status).toBe("done");
-    expect(editApplyState(store).status).toBe("not-started");
+    expect(session(store, "s1").isInEdit).toBe(true);
     expect(session(store, "s2").isInEdit).toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][1]).toMatchObject({
-      reason: "session-id-mismatch",
       payloadSessionId: "s1",
+      staleOriginSessionId: "s2",
+      staleOriginKind: "edit",
     });
     warn.mockRestore();
   });
@@ -585,8 +593,9 @@ describe("apply state routing", () => {
     warn.mockRestore();
   });
 
-  it("drops a payload session that contradicts the registered origin", async () => {
+  it("routes a payload sessionId over a stale registered origin", async () => {
     const store = makeStore();
+    // The slot belongs to s1 from an earlier apply; this event says s2 (P3.1).
     registerCodeBlockApplyOrigin("codeblock-1", { sessionId: "s1" });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -601,16 +610,17 @@ describe("apply state routing", () => {
       }),
     );
 
+    expect(session(store, "s2").codeBlockApplyStates.states).toEqual([
+      { streamId: "codeblock-1", status: "done" },
+    ]);
     expect(session(store, "s1").codeBlockApplyStates).toEqual({
       states: [],
       curIndex: 0,
     });
-    expect(session(store, "s2").codeBlockApplyStates).toEqual({
-      states: [],
-      curIndex: 0,
-    });
+    expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][1]).toMatchObject({
-      reason: "session-id-mismatch",
+      payloadSessionId: "s2",
+      staleOriginSessionId: "s1",
     });
     warn.mockRestore();
   });
@@ -651,5 +661,101 @@ describe("apply state routing", () => {
     expect(toolState(store).status).toBe("done");
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+});
+
+/**
+ * P3.1 at the decision level: the payload's sessionId is the routing identity,
+ * while a tool origin may only *confirm* a tool call **within that same
+ * session**. A tool origin belonging to another session is stale and must not
+ * leak its `toolCallId` into this event.
+ */
+describe("resolveApplyRoute", () => {
+  const context = {
+    sessionExists: (sessionId: string) =>
+      sessionId === "s1" || sessionId === "s2",
+  };
+
+  beforeEach(() => {
+    resetApplyOrigins();
+  });
+
+  it("never borrows a toolCallId from another session's origin", () => {
+    registerToolApplyOrigin("stream-1", {
+      sessionId: "s2",
+      toolCallId: "t2",
+    });
+
+    const route = resolveApplyRoute(
+      { streamId: "stream-1", status: "done", sessionId: "s1" },
+      context,
+    );
+
+    expect(route).toMatchObject({
+      kind: "route",
+      sessionId: "s1",
+      toolCallId: undefined,
+    });
+    expect((route as any).staleOrigin).toMatchObject({
+      kind: "tool",
+      sessionId: "s2",
+    });
+  });
+
+  it("keeps the payload's own toolCallId over a foreign origin", () => {
+    registerToolApplyOrigin("stream-1", {
+      sessionId: "s2",
+      toolCallId: "t2",
+    });
+
+    const route = resolveApplyRoute(
+      {
+        streamId: "stream-1",
+        status: "done",
+        sessionId: "s1",
+        toolCallId: "t1",
+      },
+      context,
+    );
+
+    // Not t2, and not a drop: the registered tool call belongs to s2.
+    expect(route).toMatchObject({
+      kind: "route",
+      sessionId: "s1",
+      toolCallId: "t1",
+    });
+  });
+
+  it("drops a toolCallId that contradicts a same-session tool origin", () => {
+    registerToolApplyOrigin("stream-1", {
+      sessionId: "s1",
+      toolCallId: "t1",
+    });
+
+    expect(
+      resolveApplyRoute(
+        {
+          streamId: "stream-1",
+          status: "done",
+          sessionId: "s1",
+          toolCallId: "t9",
+        },
+        context,
+      ),
+    ).toEqual({ kind: "drop", reason: "tool-call-id-mismatch" });
+  });
+
+  it("uses the registered toolCallId when the payload omits it", () => {
+    registerToolApplyOrigin("stream-1", {
+      sessionId: "s1",
+      toolCallId: "t1",
+    });
+
+    expect(
+      resolveApplyRoute(
+        { streamId: "stream-1", status: "done", sessionId: "s1" },
+        context,
+      ),
+    ).toMatchObject({ kind: "route", sessionId: "s1", toolCallId: "t1" });
   });
 });
