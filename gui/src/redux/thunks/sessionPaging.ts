@@ -10,6 +10,10 @@ import {
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { getLazyLoadTrimLimit, planHistoryTrim } from "../util/lazyLoadHistory";
+import {
+  resolveHistoryTargetOnDisk,
+  type HistoryTargetOnDisk,
+} from "../util/historyTarget";
 import { ensureMessageIds } from "../util/messageIds";
 
 /**
@@ -306,5 +310,70 @@ export const reconcilePaginationAfterPersist = createAsyncThunk<
       }),
     );
     return true;
+  },
+);
+
+/**
+ * 设计 §4/§5: turn one stable message identity into the two coordinates a
+ * mutation needs.
+ *
+ * This is the only place that reaches for the **raw disk array**, and it is
+ * called only when the window holds a merge that is not on disk yet
+ * (`windowHasUnsavedMerge`). When the window is still index-compatible with disk
+ * the callers keep the provable `loadedOffset + windowIndex` arithmetic and
+ * never get here — the default configuration therefore issues no extra read.
+ *
+ * Two sources, one shape:
+ *
+ * - truncated window → `loadFullHistory` hydrates it (a mutation is an explicit
+ *   full-hydration operation, 方案.md §十一) and already hands back the raw
+ *   array it read;
+ * - already hydrated window → the window is *not* the disk array while it holds
+ *   an unsaved merged bubble, so read the raw array **without writing state**.
+ *
+ * Either side missing, or the target not being found in both arrays, returns
+ * `undefined`: the caller aborts explicitly rather than guessing an index
+ * (方案.md §十二).
+ */
+export const resolveHistoryMutationTarget = createAsyncThunk<
+  HistoryTargetOnDisk | undefined,
+  { sessionId: string; targetMessageId: string },
+  ThunkApiType
+>(
+  "sessions/resolveHistoryMutationTarget",
+  async ({ sessionId, targetMessageId }, { getState, dispatch, extra }) => {
+    const session = selectSessionById(getState(), sessionId);
+    if (!session) {
+      return undefined;
+    }
+
+    let diskHistory: ChatHistoryItem[] | undefined;
+    if (session.pagination.truncated) {
+      diskHistory = (await dispatch(loadFullHistory({ sessionId })).unwrap())
+        ?.diskHistory;
+    } else {
+      const res = await extra.ideMessenger.request("history/load", {
+        id: sessionId,
+      });
+      if (res.status === "error") {
+        return undefined;
+      }
+      diskHistory = res.content.history;
+    }
+    if (!diskHistory) {
+      return undefined;
+    }
+
+    // Re-read the window after the await: a full load replaces `session.history`,
+    // and only the post-await array shares the caller's coordinate system.
+    const current = selectSessionById(getState(), sessionId);
+    if (!current) {
+      return undefined;
+    }
+    return resolveHistoryTargetOnDisk({
+      rawDiskHistory: diskHistory,
+      guiHistory: current.history,
+      targetMessageId,
+    });
   },
 );

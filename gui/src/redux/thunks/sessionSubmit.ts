@@ -19,6 +19,10 @@ import {
 } from "../selectors/sessions";
 import { windowToAbsoluteIndex } from "../util/historyIndex";
 import {
+  carrierMessageIdOf,
+  windowHasUnsavedMerge,
+} from "../util/historyTarget";
+import {
   markSessionDirty,
   resetSessionCodeBlockApplyIndex,
   setSessionHistory,
@@ -27,7 +31,7 @@ import {
 } from "../slices/sessionsSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { ThunkApiType } from "../store";
-import { loadFullHistory } from "./sessionPaging";
+import { loadFullHistory, resolveHistoryMutationTarget } from "./sessionPaging";
 import { enqueueSessionSave } from "./sessionPersistence";
 import { sessionStreamWrapper } from "./sessionStreamWrapper";
 import { runSessionStream } from "./sessionStreams";
@@ -101,18 +105,51 @@ export const submitSessionInput = createAsyncThunk<
     sessionStreamWrapper({
       sessionId,
       runStream: async () => {
-        // 1. Lazy-loaded history must be complete before sending, otherwise
-        // the model only sees the tail of the conversation.
+        // 1. Capture the target identity *before* any await (方案.md §十二): the
+        // caller's index is relative to the window that was on screen, and both a
+        // full load (which replaces `session.history`) and a trim moving
+        // `loadedOffset` invalidate that index. The identity survives both.
         const pre = selectSessionById(getState(), sessionId);
         if (!pre) {
           throw new Error("Session no longer exists");
         }
+        const windowHasMerge = windowHasUnsavedMerge(pre.history);
+        let targetMessageId: string | undefined;
+        if (index !== undefined) {
+          const clicked = pre.history[index];
+          targetMessageId = clicked ? carrierMessageIdOf(clicked) : undefined;
+          if (targetMessageId === undefined) {
+            throw new Error(
+              "Cannot resend: the target message is no longer in the loaded history",
+            );
+          }
+        }
+
         // Captured from the pre-await snapshot on purpose: `loadFullHistory`
         // resets `loadedOffset` to 0, but the caller's index is relative to the
         // window that was visible when it was passed (方案.md §十二).
-        let loadedOffset = 0;
-        if (pre.pagination.truncated) {
-          loadedOffset = pre.pagination.loadedOffset ?? 0;
+        const capturedOffset = pre.pagination.loadedOffset ?? 0;
+
+        // 2. Lazy-loaded history must be complete before sending, otherwise the
+        // model only sees the tail of the conversation.
+        //
+        // A window holding an unsaved merged bubble is not 1:1 with disk, so its
+        // index cannot be converted arithmetically: resolve the captured identity
+        // in both arrays — which hydrates the window in the same round trip — and
+        // address the **window** coordinate, because the replacement below writes
+        // to `session.history`. A miss aborts instead of editing another message.
+        let resolvedIndex: number | undefined;
+        if (targetMessageId !== undefined && windowHasMerge) {
+          const resolved = await dispatch(
+            resolveHistoryMutationTarget({ sessionId, targetMessageId }),
+          ).unwrap();
+          if (!resolved) {
+            throw new Error(
+              "Cannot resend: the target message could not be located on disk",
+            );
+          }
+          resolvedIndex = resolved.guiIndex;
+        } else if (pre.pagination.truncated) {
           await dispatch(loadFullHistory({ sessionId })).unwrap();
         }
 
@@ -126,9 +163,11 @@ export const submitSessionInput = createAsyncThunk<
         }
 
         const inputIndex =
-          index !== undefined
-            ? windowToAbsoluteIndex(loadedOffset, index)
-            : session.history.length;
+          resolvedIndex !== undefined
+            ? resolvedIndex
+            : index !== undefined
+              ? windowToAbsoluteIndex(capturedOffset, index)
+              : session.history.length;
         const existingMessage =
           inputIndex >= 0 && inputIndex < session.history.length
             ? session.history[inputIndex].message

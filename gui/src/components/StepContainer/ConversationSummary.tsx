@@ -37,7 +37,9 @@ export default function ConversationSummary(props: ConversationSummaryProps) {
     <SummaryCard
       content={props.item.conversationSummary ?? ""}
       itemIndex={props.index}
-      onDelete={() => deleteCompaction(props.index)}
+      // Identity, not the window index (方案.md §十二): the item holding the
+      // summary is addressed by its own id, and `index` stays for `itemIndex`.
+      onDelete={() => deleteCompaction(messageId ?? "")}
     />
   );
 }

@@ -169,7 +169,7 @@ describe("useCompactConversation", () => {
     });
 
     await act(async () => {
-      await result.current(2);
+      await result.current({ index: 2 });
     });
 
     expect(request).toHaveBeenCalledWith("conversation/compact", {
@@ -212,7 +212,7 @@ describe("useCompactConversation", () => {
     });
 
     await act(async () => {
-      await result.current(1); // relative index 1 -> absolute 5
+      await result.current({ index: 1 }); // relative index 1 -> absolute 5
     });
 
     expect(request).toHaveBeenCalledWith("conversation/compact", {
@@ -248,7 +248,7 @@ describe("useCompactConversation", () => {
     await act(async () => {
       // Relative 0 with a 4-item frozen head is absolute 4, so it is allowed;
       // an absolute 0 only happens when the window starts at the first turn.
-      await result.current(0);
+      await result.current({ index: 0 });
     });
     expect(request).toHaveBeenCalledWith("conversation/compact", {
       index: 4,
@@ -272,13 +272,47 @@ describe("useCompactConversation", () => {
       },
     );
     await act(async () => {
-      await wholeHistory.current(0);
+      await wholeHistory.current({ index: 0 });
     });
     expect(untruncatedRequest).not.toHaveBeenCalledWith(
       "conversation/compact",
       expect.anything(),
     );
     warn.mockRestore();
+  });
+
+  it("accepts an explicit message id and resolves it without an index", async () => {
+    // The compact-all entry (ContextStatus) hands over the window's last item by
+    // identity instead of an arithmetic tail (方案.md §十二).
+    const store = makeStore({
+      scopeSessionId: "A",
+      activeSessionId: "A",
+      truncated: true,
+    });
+    store.mockIdeMessenger.responses["history/load"] = {
+      sessionId: "A",
+      title: "Chat",
+      workspaceDirectory: "/w",
+      history: FULL_HISTORY,
+    } as any;
+    store.mockIdeMessenger.responses["conversation/compact"] = "summary text";
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    const { result } = renderHook(() => useCompactConversation(), {
+      wrapper: wrapperFor(store, "A"),
+    });
+
+    await act(async () => {
+      await result.current({ messageId: "m5" });
+    });
+
+    expect(request).toHaveBeenCalledWith("conversation/compact", {
+      index: 5,
+      sessionId: "A",
+    });
+    const after = selectSessionById(store.getState() as any, "A")!;
+    expect(after.history[5].message.id).toBe("m5");
+    expect(after.history[5].conversationSummary).toBe("summary text");
   });
 
   it("aborts when the full history cannot be loaded", async () => {
@@ -296,7 +330,7 @@ describe("useCompactConversation", () => {
     });
 
     await act(async () => {
-      await result.current(1);
+      await result.current({ index: 1 });
     });
 
     expect(request).not.toHaveBeenCalledWith(
@@ -305,12 +339,172 @@ describe("useCompactConversation", () => {
     );
     error.mockRestore();
   });
+
+  it("sends the group-tail disk index for a pre-save merged bubble", async () => {
+    // 设计 §5: a merged bubble's own id is its group's **first** assistant, while
+    // the disk item its content ends at is the group's **last** raw member — here
+    // a `thinking` item (role is deliberately not restricted). Addressing it by
+    // window index would send 2 (`loadedOffset` + index) or 4, both of which are
+    // a different message on disk.
+    const trace = (
+      id: string,
+      memberIds: string[],
+    ): ChatHistoryItemWithMessageId => ({
+      ...item(id, "assistant", "merged"),
+      mergedReplyProvenance: {
+        sourceMessageIds: memberIds,
+        firstSourceMessageId: memberIds[0],
+        lastSourceMessageId: memberIds[memberIds.length - 1],
+      },
+    });
+    const disk = [
+      item("m0", "user", "q0"),
+      item("m1", "assistant", "a0"),
+      item("m2", "assistant", "a1 part 1"),
+      item("m3", "assistant", "a1 part 2"),
+      item("u5", "user", "q2"),
+      item("m5", "assistant", "a2 part 1"),
+      item("m6", "assistant", "a2 part 2"),
+      {
+        ...item("t7", "assistant", "reasoning"),
+        message: {
+          id: "t7",
+          role: "thinking",
+          content: "reasoning",
+        } as ChatHistoryItemWithMessageId["message"],
+      },
+    ];
+    const runtime = initialSessionRuntime("A", "Chat", {
+      history: [
+        trace("m2", ["m2", "m3"]),
+        item("u5", "user", "q2"),
+        trace("m5", ["m5", "m6", "t7"]),
+      ],
+      pagination: {
+        truncated: true,
+        loadedOffset: 2,
+        totalCount: disk.length,
+        loadedDiskCount: 6,
+        hasMore: true,
+        loading: false,
+        requestGeneration: 0,
+        persistPending: false,
+      },
+    });
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: "A",
+        tabOrder: ["A"],
+        tabDescriptors: {
+          A: { sessionId: "A", title: "Chat", loadState: "loaded" },
+        },
+        sessionsById: { A: runtime },
+      },
+    });
+    store.mockIdeMessenger.responses["history/load"] = {
+      sessionId: "A",
+      title: "Chat",
+      workspaceDirectory: "/w",
+      history: disk,
+    } as any;
+    store.mockIdeMessenger.responses["conversation/compact"] = "summary text";
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    const { result } = renderHook(() => useCompactConversation(), {
+      wrapper: wrapperFor(store, "A"),
+    });
+
+    await act(async () => {
+      await result.current({ index: 2 });
+    });
+
+    // The carrier `t7` lives at disk index 7, not at the bubble's window index.
+    expect(request).toHaveBeenCalledWith("conversation/compact", {
+      index: 7,
+      sessionId: "A",
+    });
+
+    // The write-back addresses the same carrier from the other coordinate
+    // system: after hydration the bubble sits at index 4 of the window.
+    const after = selectSessionById(store.getState() as any, "A")!;
+    expect(after.history).toHaveLength(5);
+    expect(after.history[4].message.id).toBe("m5");
+    expect(after.history[4].conversationSummary).toBe("summary text");
+  });
+
+  it("aborts when the carrier has no matching disk id (legacy session)", async () => {
+    // A legacy session's window ids come from `ensureMessageIds`, so they are not
+    // persisted identities (方案.md §九.13). The merge-aware path must abort
+    // explicitly rather than fall back to an arithmetic index.
+    const runtime = initialSessionRuntime("A", "Chat", {
+      history: [
+        item("u4", "user", "q2"),
+        {
+          ...item("m5", "assistant", "merged"),
+          mergedReplyProvenance: {
+            sourceMessageIds: ["m5", "m6"],
+            firstSourceMessageId: "m5",
+            lastSourceMessageId: "m6",
+          },
+        },
+      ],
+      pagination: {
+        truncated: true,
+        loadedOffset: 0,
+        totalCount: 3,
+        loadedDiskCount: 1,
+        hasMore: true,
+        loading: false,
+        requestGeneration: 0,
+        persistPending: false,
+      },
+    });
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: "A",
+        tabOrder: ["A"],
+        tabDescriptors: {
+          A: { sessionId: "A", title: "Chat", loadState: "loaded" },
+        },
+        sessionsById: { A: runtime },
+      },
+    });
+    store.mockIdeMessenger.responses["history/load"] = {
+      sessionId: "A",
+      title: "Chat",
+      workspaceDirectory: "/w",
+      // No `message.id` anywhere — as written by an older host.
+      history: [
+        { message: { role: "user", content: "old" }, contextItems: [] },
+        { message: { role: "assistant", content: "old" }, contextItems: [] },
+        { message: { role: "user", content: "old" }, contextItems: [] },
+      ],
+    } as any;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    const { result } = renderHook(() => useCompactConversation(), {
+      wrapper: wrapperFor(store, "A"),
+    });
+
+    await act(async () => {
+      await result.current({ index: 1 });
+    });
+
+    expect(request).not.toHaveBeenCalledWith(
+      "conversation/compact",
+      expect.anything(),
+    );
+    const after = selectSessionById(store.getState() as any, "A")!;
+    expect(after.history[1].conversationSummary).toBeUndefined();
+    warn.mockRestore();
+  });
 });
 
 describe("useDeleteCompaction", () => {
   beforeEach(() => resetSessionSaveQueues());
 
-  it("deletes the compaction at the absolute index of the scope session", async () => {
+  it("deletes the compaction addressed by message id, in the scope session", async () => {
     const store = makeStore({
       scopeSessionId: "A",
       activeSessionId: "B",
@@ -325,7 +519,7 @@ describe("useDeleteCompaction", () => {
     });
 
     await act(async () => {
-      await result.current(2);
+      await result.current("m2");
     });
 
     const after = selectSessionById(store.getState() as any, "A")!;
@@ -338,18 +532,21 @@ describe("useDeleteCompaction", () => {
     expect(visible.history[0].message.content).toBe("visible");
   });
 
-  it("does not re-offset the absolute index a synthetic separator passes", async () => {
-    // The separator reports `sourceAbsoluteIndex`, which is already absolute, so
-    // it passes `{ absolute: true }` (SyntheticConversationSummary.tsx). Shifting
-    // it by the window offset again would target 2 + 4 = 6 — a different message
-    // (here: one past the end of the history), silently deleting nothing.
+  it("targets the id even when the recorded absolute index disagrees", async () => {
+    // Audit §5 / test 13: the runtime summary carries both an id and an index,
+    // and the index can be stale (an edit or a merge moved the carrier). The id
+    // is the authority — an index-based lookup would clear absolute index 0.
     const store = makeStore({
       scopeSessionId: "A",
       activeSessionId: "A",
       truncated: true,
     });
     const diskHistory = FULL_HISTORY.map((entry, i) =>
-      i === 2 ? { ...entry, conversationSummary: "old summary" } : entry,
+      i === 0
+        ? { ...entry, conversationSummary: "untouched" }
+        : i === 2
+          ? { ...entry, conversationSummary: "old summary" }
+          : entry,
     );
     store.mockIdeMessenger.responses["history/load"] = {
       sessionId: "A",
@@ -363,12 +560,16 @@ describe("useDeleteCompaction", () => {
     });
 
     await act(async () => {
-      await result.current(2, { absolute: true });
+      await result.current("m2");
     });
 
-    // The full load merged the frozen head back in, so the carrier is absolute 2.
+    // The full load merged the frozen head back in, so the carrier is at 2.
     const after = selectSessionById(store.getState() as any, "A")!;
     expect(after.history[2].message.id).toBe("m2");
     expect(after.history[2].conversationSummary).toBeUndefined();
+    // The carrier at absolute index 0 — what the stale index would have hit —
+    // is untouched.
+    expect(after.history[0].message.id).toBe("m0");
+    expect(after.history[0].conversationSummary).toBe("untouched");
   });
 });

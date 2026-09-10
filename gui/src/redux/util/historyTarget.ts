@@ -73,6 +73,40 @@ export function findGuiIndexContainingMessageId(
 }
 
 /**
+ * 设计 §5: the disk item a window item stands for.
+ *
+ * A bubble produced by `mergeSplitReplies` keeps its group's **first** assistant
+ * as `message.id`, while the disk item its content ends at is the group's **last**
+ * raw member. That member is only addressable through
+ * `mergedReplyProvenance.lastSourceMessageId`. An item without provenance is
+ * already its own disk identity.
+ */
+export function carrierMessageIdOf(item: ChatHistoryItemWithMessageId): string {
+  return item.mergedReplyProvenance?.lastSourceMessageId ?? item.message.id;
+}
+
+/**
+ * Does the window still hold a merged bubble that is **not** on disk yet?
+ *
+ * While the answer is yes, `loadedOffset + windowIndex` is **not** a readable
+ * disk index: the merged bubble stands for several disk items, so every later
+ * window item is shifted. Callers must resolve by identity instead
+ * (方案.md §十二 — the helpers only do the shift, they do not prove the mapping).
+ *
+ * Why "no provenance" is enough to make the arithmetic provable: a successful
+ * `history/save` rewrites the disk tail to exactly the wire window
+ * (`core/util/history.ts`), so once the merge is on disk the two arrays agree
+ * 1:1 again — and that is precisely when the provenance was cleared
+ * (§2.3). A trim keeps `loadedOffset` in step with the items it removed, so the
+ * identity also holds across trims.
+ */
+export function windowHasUnsavedMerge(
+  history: readonly ChatHistoryItemWithMessageId[],
+): boolean {
+  return history.some((item) => item.mergedReplyProvenance !== undefined);
+}
+
+/**
  * Resolve a target in both coordinate systems at once.
  *
  * Returns `undefined` when either side misses: the caller then **aborts

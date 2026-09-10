@@ -1,6 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { useCompactConversation } from "../../util/compactConversation";
+import { carrierMessageIdOf } from "../../redux/util/historyTarget";
 import { ToolTip } from "../gui/Tooltip";
 import {
   useSessionContextMetricsFields,
@@ -97,7 +98,18 @@ const ContextStatus = () => {
                 <div>
                   <span
                     className="hover:text-link inline-block cursor-pointer underline"
-                    onClick={() => compactConversation(history.length - 1)}
+                    onClick={() => {
+                      // 方案.md §十二: never hand over an arithmetic tail. Capture
+                      // the window's last item by identity — a merged bubble's disk
+                      // carrier is its group's last raw member, not its own id, and
+                      // `history.length - 1` is a window index anyway.
+                      const last = history.at(-1);
+                      if (last) {
+                        void compactConversation({
+                          messageId: carrierMessageIdOf(last),
+                        });
+                      }
+                    }}
                   >
                     Compact conversation
                   </span>

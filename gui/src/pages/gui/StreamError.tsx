@@ -120,7 +120,11 @@ const StreamErrorDialog = ({
               noContext: true,
               useCodebase: false,
             },
-            index: index === -1 ? 0 : index,
+            // A window with no `user`/`tool` item means the target is outside the
+            // loaded window, so resend as a new message: `undefined` appends.
+            // Falling back to `0` used to mean "the start of the conversation",
+            // but in a truncated window it means "the window's first item".
+            index: index === -1 ? undefined : index,
           }),
         );
         dispatch(setShowDialog(false));

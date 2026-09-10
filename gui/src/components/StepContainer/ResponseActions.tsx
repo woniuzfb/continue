@@ -121,7 +121,7 @@ export default function ResponseActions({
             : "Compact conversation"
         }
         tabIndex={-1}
-        onClick={() => compactConversation(index)}
+        onClick={() => compactConversation({ index })}
       >
         <div className="flex items-center space-x-1">
           <ArrowsPointingInIcon

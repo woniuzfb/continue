@@ -20,8 +20,6 @@ export function SyntheticConversationSummary() {
     return null;
   }
 
-  const absoluteIndex = summary.sourceAbsoluteIndex;
-
   return (
     <div data-testid="synthetic-summary-separator">
       <div className="mx-1.5 my-5">
@@ -37,11 +35,10 @@ export function SyntheticConversationSummary() {
         content={summary.content}
         itemIndex={0}
         onDelete={() => {
-          // The carrier is outside the window, so its position is already an
-          // absolute index; the hook loads the full history first.
-          if (absoluteIndex !== undefined) {
-            void deleteCompaction(absoluteIndex, { absolute: true });
-          }
+          // Identity, never the index: `sourceAbsoluteIndex` can be stale after
+          // an edit or a merge, and the hook hydrates the window before looking
+          // the id up (方案.md §十二).
+          void deleteCompaction(summary.sourceMessageId);
         }}
       />
     </div>

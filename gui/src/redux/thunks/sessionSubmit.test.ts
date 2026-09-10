@@ -246,6 +246,105 @@ describe("submitSessionInput", () => {
     expect(session(store).history[0].message.content).toBe("head user");
   });
 
+  it("replaces the clicked entry, not the merged bubble, in a merged window", async () => {
+    // Audit §5 / 设计 test 10. The window holds a bubble that merged a raw
+    // assistant run, so the two coordinate systems disagree: `u5` is window 1 but
+    // disk 5. The replacement must land on `u5` and leave the bubble intact.
+    const traced: ChatHistoryItemWithMessageId = {
+      ...item("m3", "assistant", "merged"),
+      mergedReplyProvenance: {
+        sourceMessageIds: ["m3", "m4"],
+        firstSourceMessageId: "m3",
+        lastSourceMessageId: "m4",
+      },
+    };
+    const disk = [
+      item("m0", "user", "q0"),
+      item("m1", "assistant", "a0"),
+      item("m3", "assistant", "a1 part 1"),
+      item("m4", "assistant", "a1 part 2"),
+      item("u5", "user", "q2"),
+      item("a6", "assistant", "a2"),
+    ];
+    const store = makeStore({
+      history: [
+        traced,
+        item("u5", "user", "q2"),
+        item("a6", "assistant", "a2"),
+      ],
+      truncated: true,
+      loadedOffset: 2,
+    });
+    store.mockIdeMessenger.responses["history/load"] = {
+      sessionId: "s1",
+      title: "Chat 1",
+      workspaceDirectory: "ws",
+      history: disk,
+    } as any;
+
+    expect(
+      await run(
+        store,
+        submitSessionInput({
+          sessionId: "s1",
+          editorState: EDITOR_STATE,
+          modifiers: MODIFIERS,
+          index: 1,
+        }),
+      ),
+    ).toBe(true);
+
+    const target = session(store);
+    // The 2-item frozen head + the merged bubble + the new user/assistant pair.
+    expect(target.history).toHaveLength(5);
+    expect(target.history[0].message.content).toBe("q0");
+    expect(target.history[1].message.content).toBe("a0");
+    // The merged bubble is untouched — same identity, same content. (Its
+    // runtime provenance may already be gone: the send is a save boundary, and a
+    // successful save legitimately clears it — 设计 §2.3.)
+    expect(target.history[2].message.id).toBe("m3");
+    expect(target.history[2].message.content).toBe("merged");
+    // The clicked user item and the tail it replaced are gone; the new pair is in.
+    expect(target.history[3].message.role).toBe("user");
+    expect(JSON.stringify(target.history[3].message.content)).toContain(
+      "hello world",
+    );
+    expect(target.history[4].message.role).toBe("assistant");
+    expect(target.history[4].message.content).toBe("This is a test");
+    expect(
+      target.history.some(
+        (h: ChatHistoryItemWithMessageId) => h.message.id === "a6",
+      ),
+    ).toBe(false);
+  });
+
+  it("aborts instead of appending when the click index is no longer loaded", async () => {
+    // 方案.md §十二: a miss aborts explicitly. The old behaviour appended a new
+    // turn, which silently turned a stale edit into a brand-new message.
+    const store = makeStore({
+      history: [item("u1", "user", "earlier"), item("a1", "assistant", "sure")],
+      truncated: true,
+      loadedOffset: 4,
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    expect(
+      await run(
+        store,
+        submitSessionInput({
+          sessionId: "s1",
+          editorState: EDITOR_STATE,
+          modifiers: MODIFIERS,
+          index: 9,
+        }),
+      ),
+    ).toBe(false);
+
+    // Nothing was loaded, nothing was written.
+    expect(session(store).history).toHaveLength(2);
+    expect(request).not.toHaveBeenCalledWith("history/load", expect.anything());
+  });
+
   it("is a no-op for an unknown session", async () => {
     const store = makeStore();
     const request = vi.spyOn(store.mockIdeMessenger, "request");

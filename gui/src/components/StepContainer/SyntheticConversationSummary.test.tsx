@@ -78,7 +78,7 @@ describe("SyntheticConversationSummary", () => {
     expect(screen.getByText("compacted")).toBeInTheDocument();
   });
 
-  it("deletes the compaction by its absolute index", async () => {
+  it("deletes the compaction by the carrier id, after hydrating the window", async () => {
     const store = makeStore();
     store.mockIdeMessenger.responses["history/load"] = {
       sessionId: "A",
@@ -100,7 +100,9 @@ describe("SyntheticConversationSummary", () => {
     });
     await waitFor(() => {
       const session = selectSessionById(store.getState() as any, "A")!;
-      // The carrier is found by absolute index after the full load.
+      // The separator passes `summary.sourceMessageId`; the hook hydrates the
+      // window first, so the carrier is found by id — never by a recomputed index.
+      expect(session.history[1].message.id).toBe("m1");
       expect(session.history[1].conversationSummary).toBeUndefined();
       expect(session.latestConversationSummary).toBeUndefined();
     });
