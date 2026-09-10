@@ -1,4 +1,5 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
+import { ChatHistoryItem } from "core";
 import { selectSessionById } from "../selectors/sessions";
 import {
   prependSessionHistory,
@@ -95,8 +96,19 @@ export const loadMoreHistory = createAsyncThunk<
   },
 );
 
+/**
+ * 设计 §4: returns the **raw** on-disk history for this response, as a temporary
+ * value for the caller — it is deliberately not stored in Redux (the hydrated
+ * `session.history` is not the disk array: it keeps the merged window and only
+ * prepends the frozen head).
+ *
+ * Typed `ChatHistoryItem[]` on purpose: `history/load` is a protocol boundary and
+ * legacy sessions may have no persisted `message.id`, so this must not claim
+ * `ChatHistoryItemWithMessageId[]`. Only real persisted ids are matchable here;
+ * a uuid minted by `ensureMessageIds` in this response is not a stable identity.
+ */
 export const loadFullHistory = createAsyncThunk<
-  void,
+  { diskHistory: ChatHistoryItem[] } | undefined,
   { sessionId: string },
   ThunkApiType
 >(
@@ -173,6 +185,10 @@ export const loadFullHistory = createAsyncThunk<
         },
       }),
     );
+
+    // Temporary return value only — callers use it to locate a target on disk
+    // (设计 §4) and must not put it into state.
+    return { diskHistory };
   },
 );
 
