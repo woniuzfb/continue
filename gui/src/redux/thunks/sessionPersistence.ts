@@ -2,6 +2,7 @@ import { createAsyncThunk } from "@reduxjs/toolkit";
 import { Session } from "core";
 import { selectSessionById } from "../selectors/sessions";
 import { ensureMessageIds } from "../util/messageIds";
+import { upsertSessionMetadata } from "../slices/sessionCatalogSlice";
 import type {
   ChatHistoryItemWithMessageId,
   SavedMergedProvenance,
@@ -203,6 +204,31 @@ async function performSave(
     );
   } else if (responseIsCurrent) {
     dispatch(clearSessionConversationSummary({ sessionId }));
+  }
+
+  // 方案.md §五.6 / §七.8.1: the catalog mirrors the disk, and **this save is what
+  // writes the session into `sessions.json`** — Core already built that entry and
+  // handed it back. Without this, a brand-new session stays invisible in View
+  // History (the History page renders Redux only, and `sessionTitle` can only
+  // update an entry that already exists), until a reload re-runs `history/list`.
+  //
+  // No `history/list` here: one upsert per save, never a full catalog rebuild.
+  const savedMetadata = result.content?.sessionMetadata;
+  if (savedMetadata && savedMetadata.sessionId === sessionId) {
+    const known = getState().sessionCatalog.allSessionMetadata.some(
+      (entry: { sessionId: string }) => entry.sessionId === sessionId,
+    );
+    // Insert whenever the entry is missing — the save just proved it exists on
+    // disk, and that fact is independent of the revision gate (like the
+    // provenance clear above). Refresh the mutable fields (title /
+    // messageCount / workspace) only from a response that still describes the
+    // current revision: a stale response describes older content, and letting it
+    // win would roll the catalog back. Saves for one session are serialized by
+    // the per-session save loop, so a newer response can never be overtaken by
+    // an older one.
+    if (!known || responseIsCurrent) {
+      dispatch(upsertSessionMetadata({ metadata: savedMetadata }));
+    }
   }
 
   dispatch(

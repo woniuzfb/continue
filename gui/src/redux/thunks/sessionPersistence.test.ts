@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
 import { selectSessionById } from "../selectors/sessions";
 import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
+import { upsertSessionMetadata } from "../slices/sessionCatalogSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
   deleteCompactionByMessageId,
@@ -1024,5 +1025,170 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     // …while the session-wide authority fields stay protected by the gate.
     expect(after.pagination.totalCount).toBe(totalCountBefore);
     expect(after.persistence?.revision).toBe(revisionBefore);
+  });
+});
+
+describe("sessionPersistence session catalog sync", () => {
+  beforeEach(() => resetSessionSaveQueues());
+
+  const savedMetadata = {
+    sessionId: "s1",
+    title: "Chat 1",
+    dateCreated: "2026-01-01T00:00:00.000Z",
+    workspaceDirectory: "/w",
+    messageCount: 3,
+  };
+
+  const catalog = (store: ReturnType<typeof makeStore>) =>
+    (store.getState() as any).sessionCatalog.allSessionMetadata as {
+      sessionId: string;
+      title: string;
+      messageCount?: number;
+    }[];
+
+  it("inserts the catalog entry on the first successful save", async () => {
+    // 方案.md §五.6 / §七.8.1: this save is what writes the session into
+    // `sessions.json`, so the catalog entry must land with it. Without this a
+    // brand-new session stays invisible in View History — the page renders Redux
+    // only, and `sessionTitle` can only *update* an entry that already exists —
+    // until a reload re-runs `history/list`.
+    const store = makeStore();
+    store.mockIdeMessenger.responses["history/save"] = {
+      firstTurnItems: [],
+      totalHistoryCount: 2,
+      sessionMetadata: savedMetadata,
+    };
+
+    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+
+    // The metadata is Core's, verbatim: no `Date.now()` substitute for
+    // `dateCreated`, no messageCount estimated from the lazy window.
+    expect(catalog(store)).toEqual([savedMetadata]);
+  });
+
+  it("refreshes the entry on a later save without a full catalog list", async () => {
+    const store = makeStore({
+      persistence: {
+        state: "pending",
+        revision: 2,
+        persistedRevision: 2,
+        hasPersistedBaseline: true,
+      },
+    });
+    store.dispatch(
+      upsertSessionMetadata({
+        metadata: { ...savedMetadata, title: "Stale", messageCount: 1 },
+      }),
+    );
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    store.mockIdeMessenger.responses["history/save"] = {
+      firstTurnItems: [],
+      totalHistoryCount: 2,
+      sessionMetadata: { ...savedMetadata, title: "Fresh", messageCount: 9 },
+    };
+
+    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+
+    expect(request).toHaveBeenCalledWith("history/save", expect.anything());
+    // One upsert, never a rebuild: high-frequency saves must not rescan the whole
+    // list (方案.md §七).
+    expect(request).not.toHaveBeenCalledWith("history/list", expect.anything());
+    expect(catalog(store)).toEqual([
+      { ...savedMetadata, title: "Fresh", messageCount: 9 },
+    ]);
+  });
+
+  it("does not let a stale save response roll the catalog back", async () => {
+    // The response describes the content sent at revision 2; by the time it lands
+    // the runtime is at revision 3, so its title/count are older than what the
+    // catalog already holds. Only a response that still describes the current
+    // revision may refresh the mutable fields.
+    const store = makeStore({
+      persistence: {
+        state: "pending",
+        revision: 2,
+        persistedRevision: 2,
+        hasPersistedBaseline: true,
+      },
+    });
+    store.dispatch(
+      upsertSessionMetadata({
+        metadata: { ...savedMetadata, title: "Newer", messageCount: 5 },
+      }),
+    );
+
+    let resolveSave: ((value: any) => void) | undefined;
+    store.mockIdeMessenger.request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    ) as any;
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await vi.waitFor(() => {
+      expect(resolveSave).toBeDefined();
+    });
+
+    // Content arrives while the save is in flight.
+    store.dispatch(markSessionDirty({ sessionId: "s1" }));
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.persistence?.revision,
+    ).toBe(3);
+
+    resolveSave!({
+      status: "success",
+      content: {
+        firstTurnItems: [],
+        totalHistoryCount: 2,
+        sessionMetadata: { ...savedMetadata, title: "Older", messageCount: 1 },
+      },
+      done: true,
+    });
+    await save;
+
+    expect(catalog(store)).toEqual([
+      { ...savedMetadata, title: "Newer", messageCount: 5 },
+    ]);
+  });
+
+  it("keeps the catalog entry after the saved runtime is released", async () => {
+    // The measured regression: new session -> first save -> close the tab -> the
+    // runtime is released, and View History must still list the session.
+    const runtime = initialSessionRuntime("s1", "Chat 1", {
+      history: [item("u1", "user", "hi"), item("a1", "assistant", "yo")],
+      dirty: true,
+      lifecycle: { closing: true },
+      persistence: {
+        state: "pending",
+        revision: 2,
+        persistedRevision: 0,
+        hasPersistedBaseline: false,
+      },
+    });
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: undefined,
+        tabOrder: [],
+        tabDescriptors: {},
+        sessionsById: { s1: runtime },
+      },
+      config: {
+        ...INITIAL_CONFIG_SLICE,
+        config: INITIAL_CONFIG_SLICE.config,
+      } as any,
+    });
+    store.mockIdeMessenger.responses["history/save"] = {
+      firstTurnItems: [],
+      totalHistoryCount: 2,
+      sessionMetadata: savedMetadata,
+    };
+
+    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+
+    // The closed, now-clean owner is released …
+    expect(selectSessionById(store.getState() as any, "s1")).toBeUndefined();
+    // … and the catalog entry — written by this very save — survives it.
+    expect(catalog(store)).toEqual([savedMetadata]);
   });
 });

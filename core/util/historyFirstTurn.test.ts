@@ -60,6 +60,46 @@ describe("history first turn boundary", () => {
     expect(response.totalHistoryCount).toBe(5);
   });
 
+  test("save returns the metadata it just wrote into sessions.json", async () => {
+    // 方案.md §五.6: the GUI upserts this into the session catalog so a brand-new
+    // session is visible without a full `history/list`. It must therefore be the
+    // very entry that landed on disk — `dateCreated` included, and computed from
+    // the COMPLETE history rather than a lazy window.
+    const first = await historyManager.save(session);
+    expect(first.sessionMetadata).toMatchObject({
+      sessionId,
+      title: "first turn boundary",
+      workspaceDirectory: "workspaceDir",
+      // a1 + a2 (the `thinking` item is not an assistant message).
+      messageCount: 2,
+    });
+    expect(typeof first.sessionMetadata?.dateCreated).toBe("string");
+
+    // An update refreshes the mutable fields and keeps the creation time.
+    const renamed: Session = {
+      ...session,
+      title: "renamed",
+      workspaceDirectory: "otherDir",
+    };
+    const second = await historyManager.save(renamed);
+    expect(second.sessionMetadata).toMatchObject({
+      sessionId,
+      title: "renamed",
+      workspaceDirectory: "otherDir",
+      messageCount: 2,
+    });
+    expect(second.sessionMetadata?.dateCreated).toBe(
+      first.sessionMetadata?.dateCreated,
+    );
+
+    // …and it agrees with what a catalog read-back lists.
+    const listed = historyManager
+      .list({})
+      .find((m) => m.sessionId === sessionId);
+    expect(listed?.title).toBe("renamed");
+    expect(listed?.dateCreated).toBe(first.sessionMetadata?.dateCreated);
+  });
+
   test("loadPage returns the same first turn byte-for-byte", async () => {
     const saved = await historyManager.save(session);
     const page = historyManager.loadPage(sessionId, 0, 2);

@@ -577,6 +577,12 @@ export class HistoryManager {
     // 【不同】session 时对共享 sessions.json 的读改写互相覆盖元数据）。
     const sessionsListFilePath = getSessionsListPath();
     const listLock = await acquireSessionsListLock();
+    // The object that actually lands in sessions.json — and the one returned to
+    // the GUI, so a brand-new session becomes visible in the catalog as soon as
+    // this save succeeds, without waiting for a full `history/list`
+    // (方案.md §五.6/§七.8.1). Both `dateCreated` and `messageCount` are disk
+    // authority: the GUI must never recompute them from a lazy window.
+    let savedMetadata: BaseSessionMetadata | undefined;
     try {
       const rawSessionsList = fs.readFileSync(sessionsListFilePath, "utf-8");
 
@@ -597,25 +603,27 @@ export class HistoryManager {
       const messageCount = finalHistory.filter(
         (item) => item.message.role === "assistant",
       ).length;
-      for (const sessionMetadata of sessionsList) {
-        if (sessionMetadata.sessionId === session.sessionId) {
-          sessionMetadata.title = session.title;
-          sessionMetadata.workspaceDirectory = session.workspaceDirectory;
-          sessionMetadata.messageCount = messageCount;
+      for (const entry of sessionsList) {
+        if (entry.sessionId === session.sessionId) {
+          // dateCreated is the creation time: an update never rewrites it.
+          entry.title = session.title;
+          entry.workspaceDirectory = session.workspaceDirectory;
+          entry.messageCount = messageCount;
+          savedMetadata = entry;
           found = true;
           break;
         }
       }
 
       if (!found) {
-        const sessionMetadata: BaseSessionMetadata = {
+        savedMetadata = {
           sessionId: session.sessionId,
           title: session.title,
           dateCreated: String(Date.now()),
           workspaceDirectory: session.workspaceDirectory,
           messageCount,
         };
-        sessionsList.push(sessionMetadata);
+        sessionsList.push(savedMetadata);
       }
 
       fs.writeFileSync(
@@ -635,11 +643,13 @@ export class HistoryManager {
       await releaseSessionsListLock(listLock);
     }
 
-    // 方案.md §七.8.1: 返回权威首轮 / 最新摘要 / 完整条数。
+    // 方案.md §七.8.1: 返回权威首轮 / 最新摘要 / 完整条数 / 该 session 刚写进
+    // sessions.json 的权威元数据（GUI 用它增量 upsert catalog，见 protocol 注释）。
     return {
       firstTurnItems: extractFirstTurnItems(finalHistory),
       latestConversationSummary: this.latestSummaryOf(finalHistory),
       totalHistoryCount: finalHistory.length,
+      sessionMetadata: savedMetadata,
     };
   }
 
