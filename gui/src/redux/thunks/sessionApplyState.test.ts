@@ -127,7 +127,7 @@ describe("sessionApplyState", () => {
     ]);
     expect(request).toHaveBeenCalledWith(
       "applyToFile",
-      expect.objectContaining({ streamId: "stream-1" }),
+      expect.objectContaining({ streamId: "stream-1", sessionId: "s1" }),
     );
     // The active session is untouched.
     expect(session(store, "s2").codeBlockApplyStates.states).toEqual([]);
@@ -256,6 +256,8 @@ describe("sessionApplyState", () => {
     expect(post).toHaveBeenCalledWith("acceptDiff", {
       streamId: "stream-1",
       filepath: "file:///x.ts",
+      // The IDE's `closed` answer has to name this session (P3).
+      sessionId: "s1",
     });
   });
 
@@ -480,6 +482,137 @@ describe("apply state routing", () => {
 
     expect(session(store, "s1").isInEdit).toBe(false);
     expect(session(store, "s2").isInEdit).toBe(true);
+  });
+
+  /**
+   * 方案.md §五.21 P3: a new host names the session in the payload, which is
+   * what makes two sessions' edit streams distinguishable — they share the
+   * fixed `EDIT_MODE_STREAM_ID`, so the registry has a single slot for both.
+   */
+  it("routes by the payload sessionId without needing a registration", async () => {
+    const store = makeStore();
+
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: {
+          streamId: "codeblock-1",
+          status: "streaming",
+          sessionId: "s1",
+        },
+      }),
+    );
+
+    // The runtime slot is keyed by session, so it must not also carry one.
+    expect(session(store, "s1").codeBlockApplyStates.states).toEqual([
+      { streamId: "codeblock-1", status: "streaming" },
+    ]);
+    expect(session(store, "s2").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+  });
+
+  it("keeps two sessions' edit streams apart, and drops a stale one", async () => {
+    const store = makeStore();
+    setInEdit(store, "s1", true);
+    setInEdit(store, "s2", true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Both edits register into the same fixed-streamId slot; the last one wins.
+    registerEditApplyOrigin(EDIT_MODE_STREAM_ID, { sessionId: "s2" });
+
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: {
+          streamId: EDIT_MODE_STREAM_ID,
+          status: "done",
+          sessionId: "s2",
+        },
+      }),
+    );
+    expect(session(store, "s2").editState.applyState.status).toBe("done");
+    expect(editApplyState(store).status).toBe("not-started");
+
+    // S1's still-in-flight event names S1 while the slot says S2: the two
+    // identities disagree, so it is dropped — never written to S2.
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: {
+          streamId: EDIT_MODE_STREAM_ID,
+          status: "done",
+          sessionId: "s1",
+        },
+      }),
+    );
+
+    expect(session(store, "s2").editState.applyState.status).toBe("done");
+    expect(editApplyState(store).status).toBe("not-started");
+    expect(session(store, "s2").isInEdit).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toMatchObject({
+      reason: "session-id-mismatch",
+      payloadSessionId: "s1",
+    });
+    warn.mockRestore();
+  });
+
+  it("drops a payload sessionId that has no loaded runtime", async () => {
+    const store = makeStore();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: {
+          streamId: "stream-1",
+          status: "done",
+          sessionId: "ghost",
+        },
+      }),
+    );
+
+    expect(session(store, "s1").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+    expect(session(store, "s2").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+    expect(warn.mock.calls[0][1]).toMatchObject({ reason: "unknown-session" });
+    warn.mockRestore();
+  });
+
+  it("drops a payload session that contradicts the registered origin", async () => {
+    const store = makeStore();
+    registerCodeBlockApplyOrigin("codeblock-1", { sessionId: "s1" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: {
+          streamId: "codeblock-1",
+          status: "done",
+          sessionId: "s2",
+        },
+      }),
+    );
+
+    expect(session(store, "s1").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+    expect(session(store, "s2").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+    expect(warn.mock.calls[0][1]).toMatchObject({
+      reason: "session-id-mismatch",
+    });
+    warn.mockRestore();
   });
 
   it("drops events after the registry is cleared, then routes them again", async () => {

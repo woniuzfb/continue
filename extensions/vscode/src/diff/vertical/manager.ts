@@ -79,6 +79,21 @@ export class VerticalDiffManager {
     return this.fileUriToHandler.get(fileUri)?.streamId;
   }
 
+  /**
+   * 方案.md §五.21 P3: the session recorded with the diff handler for this
+   * file, so an accept/reject that arrives without a request in hand (code
+   * lens, command palette, `continue.acceptDiff`) still names a session.
+   *
+   * Deliberately per-file state, not "the currently visible session": guessing
+   * from visibility is exactly the cross-session write this routing removes.
+   * The value comes from the `applyToFile` / `edit/sendPrompt` request that
+   * started the apply, and stays undefined when that request did not name one
+   * (old GUI, IDE-native quick edit) — never invented here.
+   */
+  getSessionIdForFile(fileUri: string): string | undefined {
+    return this.fileUriToHandler.get(fileUri)?.sessionId;
+  }
+
   // Creates a listener for document changes by user.
   private enableDocumentChangeListener(): vscode.Disposable | undefined {
     if (this.userChangeListener) {
@@ -210,6 +225,7 @@ export class VerticalDiffManager {
     instant: boolean,
     streamId: string,
     toolCallId?: string,
+    sessionId?: string,
   ) {
     vscode.commands.executeCommand("setContext", "continue.diffVisible", true);
 
@@ -247,8 +263,10 @@ export class VerticalDiffManager {
             fileContent,
             filepath: fileUri,
             toolCallId,
+            sessionId,
           }),
         streamId,
+        sessionId,
       },
     );
 
@@ -300,6 +318,7 @@ export class VerticalDiffManager {
     newContent: string,
     streamId: string,
     toolCallId?: string,
+    sessionId?: string,
   ) {
     vscode.commands.executeCommand("setContext", "continue.diffVisible", true);
 
@@ -326,8 +345,10 @@ export class VerticalDiffManager {
             fileContent,
             filepath: fileUri,
             toolCallId,
+            sessionId,
           }),
         streamId,
+        sessionId,
       },
     );
 
@@ -351,6 +372,7 @@ export class VerticalDiffManager {
       fileContent: editor.document.getText(),
       filepath: fileUri,
       toolCallId,
+      sessionId,
     });
   }
 
@@ -362,6 +384,7 @@ export class VerticalDiffManager {
     range,
     newCode,
     toolCallId,
+    sessionId,
     rulesToInclude,
     isApply,
   }: {
@@ -372,6 +395,7 @@ export class VerticalDiffManager {
     range?: vscode.Range;
     newCode?: string;
     toolCallId?: string;
+    sessionId?: string;
     rulesToInclude: undefined | RuleWithSource[];
     isApply: boolean;
   }): Promise<string | undefined> {
@@ -455,8 +479,10 @@ export class VerticalDiffManager {
             fileContent,
             filepath: fileUri,
             toolCallId,
+            sessionId,
           }),
         streamId,
+        sessionId,
       },
     );
 

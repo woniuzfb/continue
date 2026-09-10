@@ -30,14 +30,16 @@ describe("StepContainerPreToolbar apply", () => {
 
   /**
    * 方案.md §五.21. The IDE echoes the `streamId` we post on every
-   * `updateApplyState` it sends back, and those events carry no sessionId. If
-   * the Apply button does not record the owning session first, the events are
-   * dropped by the fail-safe router and the toolbar never leaves
-   * "applying…".
+   * `updateApplyState` it sends back, and those events carry no sessionId of
+   * their own. If the Apply button does not record the owning session first,
+   * the events are dropped by the fail-safe router and the toolbar never leaves
+   * "applying…"; P3 additionally sends the session so the events can name it.
    */
   it("records the code-block apply origin for its own session", async () => {
-    const { store, getByTestId } = await renderWithProviders(toolbar());
+    const { store, ideMessenger, getByTestId } =
+      await renderWithProviders(toolbar());
     const sessionId = (store.getState() as any).sessions.activeSessionId;
+    const post = vi.spyOn(ideMessenger, "post");
 
     await act(async () => {
       getByTestId("codeblock-toolbar-apply").click();
@@ -47,5 +49,9 @@ describe("StepContainerPreToolbar apply", () => {
       kind: "code-block",
       sessionId,
     });
+    expect(post).toHaveBeenCalledWith(
+      "applyToFile",
+      expect.objectContaining({ streamId: STREAM_ID, sessionId }),
+    );
   });
 });

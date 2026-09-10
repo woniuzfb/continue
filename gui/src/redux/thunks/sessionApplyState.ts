@@ -1,5 +1,10 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
-import { ApplyState, ApplyToFilePayload, ContextItem } from "core";
+import {
+  ApplyState,
+  ApplyToFilePayload,
+  ContextItem,
+  UpdateApplyStatePayload,
+} from "core";
 import { logAgentModeEditOutcome } from "../../util/editOutcomeLogger";
 import { EDIT_MODE_STREAM_ID } from "core/edit/constants";
 import { selectSessionById } from "../selectors/sessions";
@@ -15,6 +20,7 @@ import {
   findSessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
 import {
+  lookupApplyOrigin,
   registerToolApplyOrigin,
   resolveApplyRoute,
 } from "../util/applyOrigins";
@@ -84,42 +90,57 @@ function applyErrorItem(): ContextItem {
 /**
  * Entry point for the IDE's `updateApplyState` event (方案.md §五.21).
  *
- * The payload carries no sessionId, so the origin registry — written when the
- * apply request was issued — is the only authority for which session an apply
- * belongs to. Routing is never derived from the visible session: an
- * unregistered stream is **dropped** (with a warning), because falling back to
- * `activeSessionId` wrote apply state into a session that never started the
- * apply, and could advance *that* session's `codeBlockApplyStates.curIndex` or
+ * The event names its session either in the payload (P3, new hosts) or through
+ * the origin registry written when the apply request was issued (old hosts).
+ * Routing is never derived from the visible session: an event that names
+ * nothing, names a session with no runtime, contradicts the registry, or
+ * contradicts the registered tool call, is **dropped** with a warning —
+ * falling back to `activeSessionId` wrote apply state into a session that never
+ * started the apply, advanced *its* `codeBlockApplyStates.curIndex`, and could
  * close its edit mode.
  *
- * A drop is expected after a webview reload (the registry is in-memory) or for
- * a late event from a stream that already finished, so it is logged rather
- * than surfaced as UI noise.
+ * A drop is expected after a webview reload (the registry is in-memory), for a
+ * late event from a stream that already finished, or from a host that predates
+ * the payload field, so it is logged rather than surfaced as UI noise.
  */
 export const routeApplyStateUpdate = createAsyncThunk<
   void,
-  { applyState: ApplyState },
+  { applyState: UpdateApplyStatePayload },
   ThunkApiType
->("sessions/routeApplyStateUpdate", async ({ applyState }, { dispatch }) => {
-  const route = resolveApplyRoute(applyState);
-  if (route.kind === "drop") {
-    console.warn("Dropped updateApplyState for an unknown stream origin", {
-      streamId: applyState.streamId,
-      status: applyState.status,
-      editModeStream: applyState.streamId === EDIT_MODE_STREAM_ID,
-      reason: route.reason,
+>(
+  "sessions/routeApplyStateUpdate",
+  async ({ applyState }, { dispatch, getState }) => {
+    const route = resolveApplyRoute(applyState, {
+      sessionExists: (sessionId) => !!selectSessionById(getState(), sessionId),
     });
-    return;
-  }
-  // The origin — not the payload — owns the identity; the payload's toolCallId
-  // was only allowed to confirm it (see `resolveApplyRoute`).
-  await dispatch(
-    handleSessionApplyStateUpdate({
-      sessionId: route.sessionId,
-      applyState: { ...applyState, toolCallId: route.toolCallId },
-    }),
-  );
-});
+    if (route.kind === "drop") {
+      console.warn("Dropped updateApplyState", {
+        streamId: applyState.streamId,
+        status: applyState.status,
+        editModeStream: applyState.streamId === EDIT_MODE_STREAM_ID,
+        payloadSessionId: applyState.sessionId,
+        origin: lookupApplyOrigin(applyState.streamId),
+        reason: route.reason,
+      });
+      return;
+    }
+    // The runtime slot stays session-free: the session is the *key* of that
+    // state, not a field of it (see `UpdateApplyStatePayload`).
+    const { sessionId: _payloadSessionId, ...applyStateForRuntime } =
+      applyState;
+    // The routed identity — not the payload — owns the session; the payload's
+    // toolCallId was only allowed to confirm it (see `resolveApplyRoute`).
+    await dispatch(
+      handleSessionApplyStateUpdate({
+        sessionId: route.sessionId,
+        applyState: {
+          ...applyStateForRuntime,
+          toolCallId: route.toolCallId,
+        },
+      }),
+    );
+  },
+);
 
 /**
  * Session-scoped apply state update. Also the place where an accepted edit
@@ -177,6 +198,9 @@ export const handleSessionApplyStateUpdate = createAsyncThunk<
       extra.ideMessenger.post("acceptDiff", {
         streamId: applyState.streamId,
         filepath: applyState.filepath,
+        // 方案.md §五.21 P3: the IDE answers accept/reject with a `closed`
+        // event that must name this session.
+        sessionId,
       });
     }
 
@@ -258,14 +282,12 @@ export const applySessionForEditTool = createAsyncThunk<
     }),
   );
 
-  // The protocol payload must not carry the GUI-only sessionId.
-  const { sessionId: _guiSessionId, ...applyPayload } = payload;
+  // 方案.md §五.21 P3: `sessionId` now travels with the request so the IDE can
+  // name this session on every event it sends back — the registry stays as the
+  // old-host path, not as the only identity.
   let didError = false;
   try {
-    const response = await extra.ideMessenger.request(
-      "applyToFile",
-      applyPayload,
-    );
+    const response = await extra.ideMessenger.request("applyToFile", payload);
     if (response.status === "error") {
       didError = true;
     }

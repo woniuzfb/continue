@@ -4,13 +4,13 @@ import { ToWebviewFromIdeOrCoreProtocol } from "./webview";
 import {
   AcceptOrRejectDiffPayload,
   AddToChatPayload,
-  ApplyState,
   ApplyToFilePayload,
   HighlightedCodePayload,
   MessageContent,
   RangeInFileWithContents,
   SetCodeToEditPayload,
   ShowFilePayload,
+  UpdateApplyStatePayload,
 } from "../";
 
 export type ToIdeFromWebviewProtocol = ToIdeFromWebviewOrCoreProtocol & {
@@ -44,6 +44,12 @@ export type ToIdeFromWebviewProtocol = ToIdeFromWebviewOrCoreProtocol & {
     {
       prompt: MessageContent;
       range: RangeInFileWithContents;
+      /**
+       * 方案.md §五.21 P3: the GUI session running this edit. Edit mode uses
+       * the fixed `EDIT_MODE_STREAM_ID`, so without this the IDE cannot tell
+       * two sessions' edit applies apart.
+       */
+      sessionId?: string;
     },
     string | undefined,
   ];
@@ -75,7 +81,7 @@ export type ToWebviewFromIdeProtocol = ToWebviewFromIdeOrCoreProtocol & {
   incrementFtc: [undefined, void];
   openOnboardingCard: [undefined, void];
   applyCodeFromChat: [undefined, void];
-  updateApplyState: [ApplyState, void];
+  updateApplyState: [UpdateApplyStatePayload, void];
   exitEditMode: [undefined, void];
   focusEdit: [undefined, void];
   addToChat: [AddToChatPayload, void];

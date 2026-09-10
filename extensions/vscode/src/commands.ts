@@ -170,7 +170,11 @@ const getCommandsMap: (
   }
 
   return {
-    "continue.acceptDiff": async (newFileUri?: string, streamId?: string) => {
+    "continue.acceptDiff": async (
+      newFileUri?: string,
+      streamId?: string,
+      sessionId?: string,
+    ) => {
       void processDiff(
         "accept",
         sidebar,
@@ -179,10 +183,16 @@ const getCommandsMap: (
         verticalDiffManager,
         newFileUri,
         streamId,
+        undefined,
+        sessionId,
       );
     },
 
-    "continue.rejectDiff": async (newFileUri?: string, streamId?: string) => {
+    "continue.rejectDiff": async (
+      newFileUri?: string,
+      streamId?: string,
+      sessionId?: string,
+    ) => {
       void processDiff(
         "reject",
         sidebar,
@@ -191,6 +201,8 @@ const getCommandsMap: (
         verticalDiffManager,
         newFileUri,
         streamId,
+        undefined,
+        sessionId,
       );
     },
     "continue.acceptVerticalDiffBlock": (fileUri?: string, index?: number) => {

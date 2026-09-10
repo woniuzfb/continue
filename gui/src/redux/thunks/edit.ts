@@ -98,6 +98,10 @@ export const streamEditThunk = createAsyncThunk<
           const response = await extra.ideMessenger.request("edit/sendPrompt", {
             prompt,
             range: codeToEdit[0] as RangeInFileWithContents,
+            // 方案.md §五.21 P3: edit mode shares one fixed streamId across
+            // sessions, so the session has to travel with the request for the
+            // IDE to be able to name it on every diff event.
+            sessionId,
           });
 
           dispatch(
@@ -141,6 +145,8 @@ export const exitEdit = createAsyncThunk<
     ) {
       extra.ideMessenger.post("rejectDiff", {
         filepath: codeToEdit[0].filepath,
+        // 方案.md §五.21 P3: the IDE's `closed` answer must name this session.
+        sessionId,
       });
     }
 

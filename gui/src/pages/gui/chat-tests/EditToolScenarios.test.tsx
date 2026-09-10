@@ -134,6 +134,9 @@ test(
         filepath: EDIT_FILE_URI,
         text: EDIT_CHANGES,
         toolCallId: EDIT_TOOL_CALL_ID,
+        // 方案.md §五.21 P3: the request names the session owning the tool call,
+        // so the IDE can echo it on every diff event.
+        sessionId: expect.any(String),
       });
     });
 
@@ -172,6 +175,9 @@ test(
     // Accept the changes, which should trigger a response after the tool call
     await user.click(acceptButton);
 
+    // The chat-level accept button is shell UI with no session scope, so it
+    // sends no sessionId; the IDE fills it in from the session recorded with
+    // the file's diff handler when it answers with `closed` (方案.md §五.21 P3).
     expect(messengerPostSpy).toHaveBeenCalledWith("acceptDiff", {
       streamId,
       filepath: EDIT_FILE_URI,

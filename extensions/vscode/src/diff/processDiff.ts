@@ -17,6 +17,7 @@ export async function processDiff(
   newFileUri?: string,
   streamId?: string,
   toolCallId?: string,
+  sessionId?: string,
 ) {
   let newOrCurrentUri = newFileUri;
   if (!newOrCurrentUri) {
@@ -35,6 +36,13 @@ export async function processDiff(
   // If streamId is not provided, try to get it from the VerticalDiffManager
   if (!streamId) {
     streamId = verticalDiffManager.getStreamIdForFile(newOrCurrentUri);
+  }
+
+  // 方案.md §五.21 P3: an accept/reject from a code lens or a command has no
+  // request in hand, so take the session recorded with the file's diff handler
+  // — the one that started this apply. Never the session that is visible now.
+  if (!sessionId) {
+    sessionId = verticalDiffManager.getSessionIdForFile(newOrCurrentUri);
   }
 
   // Clear vertical diffs depending on action
@@ -90,6 +98,7 @@ export async function processDiff(
       status: "closed",
       numDiffs: 0,
       toolCallId,
+      sessionId,
       autoFormattingDiff, // Include autoformatting diff
     });
   } else {

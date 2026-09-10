@@ -1627,6 +1627,28 @@ export interface ApplyState {
   autoFormattingDiff?: string;
 }
 
+/**
+ * Payload of the IDE → GUI `updateApplyState` event (方案.md §五.21 P3).
+ *
+ * An extension of `ApplyState` rather than a wrapper envelope (`{sessionId,
+ * applyState}`) so that already-shipped hosts, which send a bare `ApplyState`,
+ * keep working byte-for-byte: `sessionId` is purely additive.
+ *
+ * - A new host always sends `sessionId`; it MUST be the session from the
+ *   request that started the apply, never the session that happens to be
+ *   visible when the event is emitted.
+ * - An old host omits it; the GUI then resolves the session from its
+ *   apply-origin registry (and drops the event if that misses too).
+ * - Neither side may fall back to `activeSessionId`.
+ *
+ * `ApplyState` itself stays session-free: it is also used as pure GUI runtime
+ * state (`codeBlockApplyStates`, `editState.applyState`), where a session
+ * field would be a second source of truth.
+ */
+export type UpdateApplyStatePayload = ApplyState & {
+  sessionId?: string;
+};
+
 export type StreamDiffLinesType = "edit" | "apply";
 interface StreamDiffLinesOptionsBase {
   type: StreamDiffLinesType;
@@ -1662,6 +1684,14 @@ export interface HighlightedCodePayload {
 export interface AcceptOrRejectDiffPayload {
   filepath?: string;
   streamId?: string;
+  /**
+   * The GUI session owning the diff (方案.md §五.21 P3), needed because the
+   * accept/reject path also closes the apply: the IDE answers with a
+   * `status: "closed"` event that has to name that same session. A caller that
+   * does not know it (an editor code lens, another host) leaves it unset and
+   * the IDE uses the session recorded with the diff handler for that file.
+   */
+  sessionId?: string;
 }
 
 export interface ShowFilePayload {
@@ -1674,6 +1704,18 @@ export interface ApplyToFilePayload {
   text: string;
   toolCallId?: string;
   isSearchAndReplace?: boolean;
+  /**
+   * The GUI session that started this apply (方案.md §五.21 P3). The IDE echoes
+   * it on every `updateApplyState` event for this apply, which is the only way
+   * an event can name its session: the diff-stream events carry no session of
+   * their own, and `streamId` is not unique per session (edit mode uses the
+   * fixed `EDIT_MODE_STREAM_ID`).
+   *
+   * Optional only for host compatibility — a host that does not know the
+   * session must omit it rather than guess the active one; the GUI then falls
+   * back to its apply-origin registry.
+   */
+  sessionId?: string;
 }
 
 export interface RangeInFileWithContents {

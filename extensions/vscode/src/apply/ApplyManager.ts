@@ -31,6 +31,7 @@ export class ApplyManager {
     text,
     toolCallId,
     isSearchAndReplace,
+    sessionId,
   }: ApplyToFilePayload) {
     if (filepath) {
       await this.ensureFileOpen(filepath);
@@ -51,6 +52,7 @@ export class ApplyManager {
       fileContent: text,
       originalFileContent,
       toolCallId,
+      sessionId,
     });
 
     const hasExistingDocument = !!activeTextEditor.document.getText().trim();
@@ -63,6 +65,7 @@ export class ApplyManager {
           text,
           streamId,
           toolCallId,
+          sessionId,
         );
       } else {
         await this.handleExistingDocument(
@@ -70,6 +73,7 @@ export class ApplyManager {
           text,
           streamId,
           toolCallId,
+          sessionId,
         );
       }
     } else {
@@ -78,6 +82,7 @@ export class ApplyManager {
         text,
         streamId,
         toolCallId,
+        sessionId,
       );
     }
   }
@@ -100,6 +105,7 @@ export class ApplyManager {
     text: string,
     streamId: string,
     toolCallId?: string,
+    sessionId?: string,
   ) {
     await editor.edit((builder) =>
       builder.insert(new vscode.Position(0, 0), text),
@@ -111,6 +117,7 @@ export class ApplyManager {
       numDiffs: 0,
       fileContent: text,
       toolCallId,
+      sessionId,
     });
   }
 
@@ -119,6 +126,7 @@ export class ApplyManager {
     text: string,
     streamId: string,
     toolCallId?: string,
+    sessionId?: string,
   ) {
     const { config } = await this.configHandler.loadConfig();
     if (!config) {
@@ -153,6 +161,7 @@ export class ApplyManager {
         isInstantApply,
         streamId,
         toolCallId,
+        sessionId,
       );
     } else {
       await this.handleNonInstantDiff(
@@ -163,6 +172,7 @@ export class ApplyManager {
         this.verticalDiffManager,
         toolCallId,
         !this.modelIsTooFastForStreaming(llm.model),
+        sessionId,
       );
     }
   }
@@ -213,6 +223,7 @@ export class ApplyManager {
     verticalDiffManager: VerticalDiffManager,
     toolCallId?: string,
     streaming: boolean = true,
+    sessionId?: string,
   ) {
     const { config } = await this.configHandler.loadConfig();
     if (!config) {
@@ -239,6 +250,7 @@ export class ApplyManager {
         range: rangeToApplyTo,
         newCode: text,
         toolCallId,
+        sessionId,
         rulesToInclude: undefined, // No rules for apply
         isApply: true,
       });
@@ -262,6 +274,7 @@ export class ApplyManager {
           true, // Apply instantly since we accumulated all content
           streamId,
           toolCallId,
+          sessionId,
         );
       }
     }

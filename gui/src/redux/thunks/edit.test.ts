@@ -61,16 +61,24 @@ describe("streamEditThunk", () => {
   });
 
   /**
-   * 方案.md §五.21: edit mode has no tool call, so the only way an incoming
-   * `updateApplyState` can know which session it belongs to is this record.
-   * Without it, edit applies fall back to guessing — which is exactly the
-   * cross-session write this routing fix removes.
+   * 方案.md §五.21: edit mode has no tool call, and every session's edit shares
+   * the fixed `EDIT_MODE_STREAM_ID`, so the session has to be attached to the
+   * request itself. The registry record (P1) is kept alongside it so an old IDE
+   * that does not echo the session still works.
    *
    * The edit is started in `s2` while `s1` is the visible tab, so a regression
-   * that recorded the *active* session would be visible here.
+   * that read the *active* session would be visible here.
    */
-  it("records the apply origin for the session that started the edit", async () => {
+  it("records the apply origin before the request that can start a diff stream", async () => {
     const store = makeStore();
+    let originWhenRequested: unknown;
+    store.mockIdeMessenger.request = vi.fn(async (type: string) => {
+      if (type === "edit/sendPrompt") {
+        originWhenRequested = lookupApplyOrigin(EDIT_MODE_STREAM_ID);
+      }
+      return { status: "success", content: undefined, done: true };
+    }) as any;
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
 
     await run(
       store,
@@ -81,6 +89,17 @@ describe("streamEditThunk", () => {
       }),
     );
 
+    // P1: the origin exists before the first diff event can arrive.
+    expect(originWhenRequested).toEqual({
+      kind: "edit",
+      sessionId: "s2",
+    });
+    // P3: and the request carries it, so a new IDE can name the session on
+    // every event instead of relying on the registry's single slot.
+    expect(request).toHaveBeenCalledWith(
+      "edit/sendPrompt",
+      expect.objectContaining({ sessionId: "s2" }),
+    );
     expect(lookupApplyOrigin(EDIT_MODE_STREAM_ID)).toEqual({
       kind: "edit",
       sessionId: "s2",

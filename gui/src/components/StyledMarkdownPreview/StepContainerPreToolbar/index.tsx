@@ -217,10 +217,10 @@ export function StepContainerPreToolbar({
     }
 
     // 方案.md §五.21: the IDE echoes this streamId on every `updateApplyState`
-    // it sends for this apply, and those events carry no sessionId. Record the
-    // owning session (the one this code block belongs to — not whichever tab
-    // is active) *before* posting, otherwise the events have no owner and are
-    // dropped.
+    // it sends for this apply. Record the owning session (the one this code
+    // block belongs to — not whichever tab is active) *before* posting, and
+    // also send it (P3), so the events name their session instead of relying
+    // on the registry alone.
     registerCodeBlockApplyOrigin(codeBlockStreamId, { sessionId });
 
     // applyToFile will create the file if it doesn't exist
@@ -228,6 +228,7 @@ export function StepContainerPreToolbar({
       streamId: codeBlockStreamId,
       filepath: fileUri,
       text: codeBlockContent,
+      sessionId,
     });
 
     setAppliedFileUri(fileUri);
@@ -253,6 +254,7 @@ export function StepContainerPreToolbar({
     ideMessenger.post(`${action}Diff`, {
       filepath,
       streamId: codeBlockStreamId,
+      sessionId,
     });
 
     setAppliedFileUri(undefined);

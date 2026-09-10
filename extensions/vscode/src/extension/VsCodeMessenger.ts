@@ -112,21 +112,29 @@ export class VsCodeMessenger {
       vscode.commands.executeCommand("continue.openInNewWindow");
     });
 
-    this.onWebview("acceptDiff", async ({ data: { filepath, streamId } }) => {
-      await vscode.commands.executeCommand(
-        "continue.acceptDiff",
-        filepath,
-        streamId,
-      );
-    });
+    this.onWebview(
+      "acceptDiff",
+      async ({ data: { filepath, streamId, sessionId } }) => {
+        await vscode.commands.executeCommand(
+          "continue.acceptDiff",
+          filepath,
+          streamId,
+          sessionId,
+        );
+      },
+    );
 
-    this.onWebview("rejectDiff", async ({ data: { filepath, streamId } }) => {
-      await vscode.commands.executeCommand(
-        "continue.rejectDiff",
-        filepath,
-        streamId,
-      );
-    });
+    this.onWebview(
+      "rejectDiff",
+      async ({ data: { filepath, streamId, sessionId } }) => {
+        await vscode.commands.executeCommand(
+          "continue.rejectDiff",
+          filepath,
+          streamId,
+          sessionId,
+        );
+      },
+    );
 
     this.onWebview("applyToFile", async ({ data }) => {
       const [verticalDiffManager, configHandler] = await Promise.all([
@@ -223,6 +231,9 @@ export class VsCodeMessenger {
         input: stripImages(prompt),
         llm: model,
         streamId: EDIT_MODE_STREAM_ID,
+        // 方案.md §五.21 P3: `EDIT_MODE_STREAM_ID` is shared by every session, so
+        // the edit stream is identified by this session, not by the streamId.
+        sessionId: msg.data.sessionId,
         range: new vscode.Range(
           new vscode.Position(start.line, start.character),
           new vscode.Position(end.line, end.character),

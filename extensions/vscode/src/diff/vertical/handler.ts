@@ -22,11 +22,19 @@ export interface VerticalDiffHandlerOptions {
     fileContent?: ApplyState["fileContent"],
   ) => void;
   streamId?: string;
+  /**
+   * 方案.md §五.21 P3: the GUI session this apply belongs to, carried down from
+   * the request that started it. It is stored here (next to `streamId`) so
+   * later events that no longer have a request in hand — an accept/reject code
+   * lens or command — still know whose apply they are closing.
+   */
+  sessionId?: string;
 }
 
 export class VerticalDiffHandler implements vscode.Disposable {
   public insertedInCurrentBlock = 0;
   public streamId?: string;
+  public sessionId?: string;
   disposables: vscode.Disposable[] = [];
   private currentLineIndex: number;
   private cancelled = false;
@@ -54,6 +62,7 @@ export class VerticalDiffHandler implements vscode.Disposable {
   ) {
     this.currentLineIndex = startLine;
     this.streamId = options.streamId;
+    this.sessionId = options.sessionId;
 
     this.removedLineDecorations = new RemovedLineDecorationManager(this.editor);
     this.addedLineDecorations = new AddedLineDecorationManager(this.editor);

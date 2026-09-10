@@ -1,4 +1,4 @@
-import type { ApplyState } from "core";
+import type { UpdateApplyStatePayload } from "core";
 
 /**
  * Where an apply event came from (方案.md §五.21).
@@ -74,46 +74,91 @@ export function resetApplyOrigins(): void {
   applyOrigins.clear();
 }
 
-/** Where an incoming `updateApplyState` event must be written. */
+/**
+ * Where an incoming `updateApplyState` event must be written.
+ *
+ * `sessionId` is the routed identity; `toolCallId` (when the apply is a tool
+ * call) is only a locator inside that session.
+ */
 export type ApplyRoutingDecision =
   | { kind: "route"; sessionId: string; toolCallId?: string }
-  | { kind: "drop"; reason: "unknown-origin" | "tool-call-id-mismatch" };
+  | { kind: "drop"; reason: ApplyDropReason };
+
+export type ApplyDropReason =
+  /** No payload sessionId and nothing registered for this stream. */
+  | "unknown-origin"
+  /** Payload and registry name different sessions: one identity is already wrong. */
+  | "session-id-mismatch"
+  /** Payload names a session that has no loaded runtime to write to. */
+  | "unknown-session"
+  /** Payload contradicts the registered tool call of a registered tool origin. */
+  | "tool-call-id-mismatch";
+
+export type ApplyRouteContext = {
+  /** Whether a session has a loaded runtime that apply state could be written to. */
+  sessionExists: (sessionId: string) => boolean;
+};
 
 /**
- * The single routing decision for `updateApplyState` (方案.md §五.21).
+ * The single routing decision for `updateApplyState` (方案.md §五.21 P1+P2+P3).
  *
- * The event payload carries no sessionId, so the origin registry is the only
- * authority for which session an apply belongs to. An unregistered stream is
- * **dropped** — never routed to the active session: `activeSessionId` is not
- * this event's identity, and guessing it wrote apply state into the wrong
- * session (and could advance that session's `codeBlockApplyStates.curIndex`).
+ * The apply-origin registry is written when the apply request is issued, and
+ * the event's payload may additionally name its session (P3). The decision is:
+ *
+ * ```text
+ * payload.sessionId present            → it is the authority
+ *   no runtime for it                  → drop (unknown-session)
+ *   registry names a different session → drop (session-id-mismatch)
+ * payload.sessionId absent             → old host: use the registry
+ *   registry miss                      → drop (unknown-origin)
+ * either way                           → never fall back to the visible session
+ * ```
+ *
+ * A payload/registry conflict is **dropped rather than resolved**: it proves
+ * one of the two links in the protocol is wrong, and silently preferring either
+ * side is how a cross-session write happens. Neither side may fall back to
+ * `activeSessionId`, which is not this event's identity.
  *
  * The payload's `toolCallId` may only *confirm* a tool origin, never override
- * it — accepting it would let a payload rewrite the registered identity. A
- * non-tool origin has no registered toolCallId to compare against, so the
- * payload's value is passed through unchanged (legacy parity: a code block
- * inside a tool call still reports the tool call it belongs to).
+ * it. A non-tool origin has no registered toolCallId to check against, so a
+ * payload value is passed through (legacy parity: a code block inside a tool
+ * call still reports the tool call it belongs to).
  */
 export function resolveApplyRoute(
-  applyState: ApplyState,
+  applyState: UpdateApplyStatePayload,
+  { sessionExists }: ApplyRouteContext,
 ): ApplyRoutingDecision {
   const origin = lookupApplyOrigin(applyState.streamId);
-  if (!origin) {
+  const payloadSessionId = applyState.sessionId;
+
+  if (payloadSessionId) {
+    if (!sessionExists(payloadSessionId)) {
+      return { kind: "drop", reason: "unknown-session" };
+    }
+    if (origin && origin.sessionId !== payloadSessionId) {
+      return { kind: "drop", reason: "session-id-mismatch" };
+    }
+  } else if (!origin) {
     return { kind: "drop", reason: "unknown-origin" };
   }
-  if (origin.kind === "tool") {
+
+  // One of the two is present: the payload wins when it exists, the registry
+  // covers hosts that do not send it yet.
+  const sessionId = payloadSessionId ?? origin!.sessionId;
+
+  if (origin?.kind === "tool") {
     if (applyState.toolCallId && applyState.toolCallId !== origin.toolCallId) {
       return { kind: "drop", reason: "tool-call-id-mismatch" };
     }
     return {
       kind: "route",
-      sessionId: origin.sessionId,
+      sessionId,
       toolCallId: origin.toolCallId,
     };
   }
   return {
     kind: "route",
-    sessionId: origin.sessionId,
+    sessionId,
     toolCallId: applyState.toolCallId,
   };
 }
