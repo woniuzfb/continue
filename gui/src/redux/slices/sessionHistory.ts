@@ -175,10 +175,52 @@ export function handleStreamingToolCallUpdates(
   }
 }
 
+/**
+ * 方案.md §十二 / LazyLoad_merge_provenance_设计.md §2.1:
+ * 一个由 `mergeSplitReplies` 合并出来的 GUI item，**尚未以合并后的形状成功落盘**
+ * 时，它在磁盘上仍对应多条 raw item。这里的 id 就是那批 raw item 的磁盘身份。
+ *
+ * 生命周期（设计 §2.2/§2.3）：只在 GUI runtime 存在；保存时从 wire payload 剥离；
+ * 保存成功且该 item 形状未变时由 `clearSavedMergedReplyProvenance` 清除。
+ * 清除后该 item 自身 `message.id` 就是磁盘 identity。
+ */
+export type MergedReplyProvenance = {
+  /**
+   * 参与该 bubble 的磁盘 source item id，按**磁盘顺序**递归展平。
+   *
+   * **不去重**：ID 唯一性属于 message identity 的不变量；在 provenance 层静默去重
+   * 会掩盖输入里重复 ID 这一更严重的数据问题，并可能改变 `lastSourceMessageId` 语义。
+   */
+  sourceMessageIds: string[];
+  firstSourceMessageId: string;
+  /** raw group 磁盘顺序的**最后一项**，不限定 role（可能是 thinking）。 */
+  lastSourceMessageId: string;
+};
+
+/**
+ * 保存快照里每一份 provenance 的指纹（设计 §2.3）。
+ *
+ * 保存成功之后据此清除 runtime provenance；比较**必须**同时看 id 与有序成员数组：
+ * 第二次 prepend+merge 可能沿用同一个输出 id（新页只含 `thinking` 时
+ * `firstAssistant = assistantItems[0] ?? group[0]` 仍取到已有 item）却吸收了更多成员，
+ * 那种形状从未落盘，不能清。
+ */
+export type SavedMergedProvenance = {
+  /** 保存时该 item 自身的 id（merge 输出 id = 组首 assistant）。 */
+  mergedItemMessageId: string;
+  /** 保存时该 provenance 的有序成员（调用方负责复制，作为冻结指纹）。 */
+  sourceMessageIds: string[];
+};
+
 // We need this to handle reorderings (e.g. a mid-array deletion) of the messages array.
 // The proper fix is adding a UUID to all chat messages, but this is the temp workaround.
 export type ChatHistoryItemWithMessageId = ChatHistoryItem & {
   message: ChatMessage & { id: string };
+  /**
+   * 只在 GUI runtime 存在（设计 §2）：该 item 由合并而来且尚未按该形状落盘。
+   * 不进入 `message`，不发给 Provider，保存前剥离。
+   */
+  mergedReplyProvenance?: MergedReplyProvenance;
 };
 
 /**
@@ -219,6 +261,18 @@ export type ContextMetricsSnapshot = {
  * group once the oldest page is loaded — intermediate groups get merged as
  * soon as an older page arrives, so everything converges.)
  */
+/**
+ * 该 item 在磁盘上的成员 id（设计 §2.1）。
+ *
+ * 已有 provenance 的 item 代表它**上一次**合并的全部原始成员，必须递归展平 ——
+ * `prependSessionHistory` 合并的是 `[...新页, ...现有 window]`，而现有 window 里可能
+ * 已经有上一轮 merge 出的 item。只取 `item.message.id` 会让第二次 merge 丢掉更早的
+ * 成员，`lastSourceMessageId` 随之指错。
+ */
+function sourceIdsOf(item: ChatHistoryItemWithMessageId): string[] {
+  return item.mergedReplyProvenance?.sourceMessageIds ?? [item.message.id];
+}
+
 export function mergeSplitReplies(
   history: ChatHistoryItemWithMessageId[],
 ): ChatHistoryItemWithMessageId[] {
@@ -278,6 +332,9 @@ export function mergeSplitReplies(
     const firstThinking = group.find((i) => i.message.role === "thinking")
       ?.message as any;
 
+    // 设计 §2.1: 按磁盘顺序递归展平组内成员的来源 id（不去重、不限定 role）。
+    const sourceMessageIds = group.flatMap(sourceIdsOf);
+
     result.push({
       ...firstAssistant,
       toolCallStates: allToolCallStates.length
@@ -310,6 +367,12 @@ export function mergeSplitReplies(
             active: false,
           }
         : firstAssistant.reasoning,
+      // 设计 §2.1/§2.2: 合并后的 item 与磁盘不再同构 ⇒ 记录它代表的 raw 成员。
+      mergedReplyProvenance: {
+        sourceMessageIds,
+        firstSourceMessageId: sourceMessageIds[0],
+        lastSourceMessageId: sourceMessageIds[sourceMessageIds.length - 1],
+      },
     } as ChatHistoryItemWithMessageId);
     group = [];
   };

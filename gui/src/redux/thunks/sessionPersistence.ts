@@ -2,10 +2,15 @@ import { createAsyncThunk } from "@reduxjs/toolkit";
 import { Session } from "core";
 import { selectSessionById } from "../selectors/sessions";
 import { ensureMessageIds } from "../util/messageIds";
+import type {
+  ChatHistoryItemWithMessageId,
+  SavedMergedProvenance,
+} from "../slices/sessionHistory";
 import {
   markSessionPersisted,
   markSessionSaveFailed,
   markSessionSaving,
+  clearSavedMergedReplyProvenance,
   clearSessionConversationSummary,
   setSessionConversationSummary,
   setSessionFirstTurn,
@@ -34,20 +39,57 @@ type PendingSave = {
 const pendingSaves = new Map<string, PendingSave>();
 const runningSaves = new Map<string, Promise<void>>();
 
+/**
+ * GUI runtime → wire (设计 §3.2): `Session.history` is a protocol field, while
+ * `mergedReplyProvenance` is runtime-only bookkeeping.
+ *
+ * Creates **new** item objects and never mutates the runtime ones — the runtime
+ * provenance must survive a failed save intact (设计 §2.3). It also freezes the
+ * fingerprints of everything it stripped, so a successful save can drop exactly
+ * the provenance that was written.
+ */
+function stripHistoryRuntimeFields(history: ChatHistoryItemWithMessageId[]): {
+  wireHistory: ChatHistoryItemWithMessageId[];
+  savedMergedProvenance: SavedMergedProvenance[];
+} {
+  const savedMergedProvenance: SavedMergedProvenance[] = [];
+  const wireHistory = history.map((item) => {
+    const { mergedReplyProvenance, ...wireItem } = item;
+    if (mergedReplyProvenance) {
+      savedMergedProvenance.push({
+        mergedItemMessageId: item.message.id,
+        // Copied on purpose: this is a frozen fingerprint, it must not share an
+        // array with the runtime provenance it describes.
+        sourceMessageIds: [...mergedReplyProvenance.sourceMessageIds],
+      });
+    }
+    return wireItem as ChatHistoryItemWithMessageId;
+  });
+  return { wireHistory, savedMergedProvenance };
+}
+
 function buildSessionPayload(
   sessionId: string,
   getState: () => any,
-): Session | undefined {
+):
+  | {
+      payload: Session;
+      savedMergedProvenance: SavedMergedProvenance[];
+    }
+  | undefined {
   const state = getState();
   const session = selectSessionById(state, sessionId);
   if (!session) {
     return undefined;
   }
-  return {
+  const { wireHistory, savedMergedProvenance } = stripHistoryRuntimeFields(
+    session.history,
+  );
+  const payload = {
     sessionId,
     title: session.title,
     workspaceDirectory: window.workspacePaths?.[0] || "",
-    history: session.history,
+    history: wireHistory,
     mode: session.mode,
     chatModelTitle: session.chatModelTitle ?? null,
     // 懒加载合并保存：把分页标记传给后端，save 时保留未加载的头部。
@@ -60,6 +102,7 @@ function buildSessionPayload(
     hasReasoningEnabled: session.hasReasoningEnabled,
     reasoningPreferenceSource: session.reasoningPreferenceSource,
   } as Session;
+  return { payload, savedMergedProvenance };
 }
 
 async function performSave(
@@ -67,10 +110,11 @@ async function performSave(
   request: PendingSave,
   { dispatch, getState, extra }: any,
 ): Promise<void> {
-  const payload = buildSessionPayload(sessionId, getState);
-  if (!payload) {
+  const built = buildSessionPayload(sessionId, getState);
+  if (!built) {
     return;
   }
+  const { payload, savedMergedProvenance } = built;
 
   // Incremental updates only: a snapshot taken here would roll back any
   // revision bumped by a chunk / tool result arriving during the request
@@ -93,11 +137,32 @@ async function performSave(
     throw new Error(result.error);
   }
 
+  // 设计 §2.3/§0.4: the save succeeded, so everything in `payload.history` is now
+  // on disk in exactly the shape it was sent — regardless of whether the response
+  // is still the current revision. Drop the provenance that was just persisted,
+  // so a merged item falls back to its own id as the disk identity.
+  //
+  // This must sit **before** the `responseIsCurrent` gate: a save in flight can
+  // see ordinary content changes (a new user message, a stream chunk) that bump
+  // `persistence.revision` while leaving this merged item untouched. Its
+  // provenance is still stale-on-disk and must be cleared. The reducer is the
+  // actual guard — it only drops items whose id *and* ordered members still
+  // match the saved fingerprint, so provenance produced by a concurrent
+  // prepend+merge (revision unchanged, members changed) survives.
+  if (savedMergedProvenance.length > 0) {
+    dispatch(
+      clearSavedMergedReplyProvenance({ sessionId, savedMergedProvenance }),
+    );
+  }
+
   // 方案.md §七.8.1: the response carries the authoritative post-merge data for
   // the snapshot that was sent. If the session changed while the save was in
   // flight (`persistence.revision` moved on), the response describes older
   // content: its disk-derived metadata must not overwrite the newer runtime
   // state. The save itself still counts as persisted at its own revision.
+  //
+  // Only these session-wide authority fields are revision-gated; the provenance
+  // clear above is deliberately not (设计 §0.4).
   const current = selectSessionById(getState(), sessionId);
   const responseIsCurrent =
     current !== undefined && current.persistence?.revision === request.revision;

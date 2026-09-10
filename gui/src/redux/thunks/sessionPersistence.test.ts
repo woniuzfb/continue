@@ -7,6 +7,7 @@ import {
   deleteCompactionByMessageId,
   initialSessionRuntime,
   markSessionDirty,
+  setSessionHistory,
 } from "../slices/sessionsSlice";
 import { loadMoreHistory } from "./sessionPaging";
 import {
@@ -776,5 +777,243 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     expect(
       (request.mock.calls[0][1] as any).history.map((i: any) => i.message.id),
     ).toEqual(["u2", "a2", "u3", "a3"]);
+  });
+});
+
+// ── merged provenance: lifecycle across a save (设计 §2.3 / §0.4) ──────────
+
+describe("sessionPersistence merged provenance lifecycle", () => {
+  beforeEach(() => resetSessionSaveQueues());
+
+  const M1_MEMBERS = ["a1", "a2"];
+
+  function merged(
+    id: string,
+    content: string,
+    sourceMessageIds: string[],
+  ): ChatHistoryItemWithMessageId {
+    return {
+      ...item(id, "assistant", content),
+      mergedReplyProvenance: {
+        sourceMessageIds,
+        firstSourceMessageId: sourceMessageIds[0],
+        lastSourceMessageId: sourceMessageIds[sourceMessageIds.length - 1],
+      },
+    };
+  }
+
+  /** s1 holds one user item and one merged bubble (id "a1", members M1). */
+  function provenanceStore(
+    overrides: Parameters<typeof initialSessionRuntime>[2] = {},
+  ) {
+    return makeStore({
+      history: [item("u1", "user", "hi"), merged("a1", "body", M1_MEMBERS)],
+      ...overrides,
+    });
+  }
+
+  function session(store: ReturnType<typeof provenanceStore>) {
+    return selectSessionById(store.getState() as any, "s1")!;
+  }
+
+  function deferredSave(store: ReturnType<typeof provenanceStore>) {
+    let resolveSave: ((value: any) => void) | undefined;
+    store.mockIdeMessenger.request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    ) as any;
+    return {
+      async started() {
+        await vi.waitFor(() => expect(resolveSave).toBeDefined());
+      },
+      succeed(totalHistoryCount = 2) {
+        resolveSave!({
+          status: "success",
+          content: { firstTurnItems: [], totalHistoryCount },
+          done: true,
+        });
+      },
+      fail() {
+        resolveSave!({
+          status: "error",
+          error: "disk full",
+          errorCode: "SESSION_SAVE_FAILED",
+          done: true,
+        });
+      },
+    };
+  }
+
+  it("strips provenance from the wire payload", async () => {
+    const store = provenanceStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+
+    const call = request.mock.calls.find((c) => c[0] === "history/save")!;
+    const wire = (call[1] as any).history as ChatHistoryItemWithMessageId[];
+    expect(wire[0].message.id).toBe("u1");
+    expect(wire[1].message.id).toBe("a1");
+    // `Session.history` is a protocol field: the runtime-only provenance must
+    // never reach disk (Core writes the payload's window verbatim).
+    expect("mergedReplyProvenance" in wire[1]).toBe(false);
+    expect(JSON.stringify(wire)).not.toContain("mergedReplyProvenance");
+  });
+
+  it("keeps runtime provenance — and the item itself — when the save fails", async () => {
+    const store = provenanceStore();
+    const before = session(store).history[1];
+    const request = deferredSave(store);
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await request.started();
+    request.fail();
+    await expect(save).rejects.toThrow("disk full");
+
+    // Stripping builds wire items; it must not mutate the runtime ones, and a
+    // failed save must leave the provenance that is still needed intact.
+    expect(session(store).history[1]).toBe(before);
+    expect(session(store).history[1].mergedReplyProvenance).toEqual({
+      sourceMessageIds: M1_MEMBERS,
+      firstSourceMessageId: "a1",
+      lastSourceMessageId: "a2",
+    });
+  });
+
+  it.each([true, false])(
+    "drops provenance after a save containing it succeeded (truncated: %s)",
+    async (truncated) => {
+      const store = provenanceStore({
+        pagination: {
+          truncated,
+          loadedOffset: truncated ? 4 : 0,
+          totalCount: 2,
+          loadedDiskCount: undefined,
+          hasMore: false,
+          loading: false,
+          requestGeneration: 0,
+          persistPending: true,
+        },
+      });
+      const userBefore = session(store).history[0];
+      const revisionBefore = session(store).persistence?.revision;
+
+      await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+
+      const after = session(store);
+      // The merged shape is now on disk, so the item's own id is the disk identity.
+      expect(after.history[1].mergedReplyProvenance).toBeUndefined();
+      expect(after.history[1].message.id).toBe("a1");
+      // Only the matched item is rebuilt; the rest keep their identity (a
+      // wholesale array rebuild would invalidate every memoised StepContainer).
+      expect(after.history[0]).toBe(userBefore);
+      // Dropping a runtime field is not a content mutation: the save must not
+      // look like one either (see the reducer's own purity test).
+      expect(after.persistence?.revision).toBe(revisionBefore);
+    },
+  );
+
+  it("matches the saved fingerprint by value, not by array identity", async () => {
+    const store = provenanceStore();
+    const request = deferredSave(store);
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await request.started();
+
+    // Equivalent shape, brand-new objects: the comparison must look at the ids.
+    store.dispatch(
+      setSessionHistory({
+        sessionId: "s1",
+        history: [
+          item("u1", "user", "hi"),
+          merged("a1", "re-shaped", [...M1_MEMBERS]),
+        ],
+      }),
+    );
+    request.succeed();
+    await save;
+
+    expect(session(store).history[1].mergedReplyProvenance).toBeUndefined();
+  });
+
+  it("keeps provenance when the same item absorbed more members in flight", async () => {
+    const store = provenanceStore();
+    const request = deferredSave(store);
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await request.started();
+
+    // A prepend+merge while the save was in flight: the output id is unchanged
+    // (the new page added only `thinking`), but the members grew. That shape was
+    // never written, so comparing ids alone would drop the provenance wrongly.
+    store.dispatch(
+      setSessionHistory({
+        sessionId: "s1",
+        history: [
+          item("u1", "user", "hi"),
+          merged("a1", "body", ["t0", "a1", "a2"]),
+        ],
+      }),
+    );
+    const historyBefore = session(store).history;
+    request.succeed();
+    await save;
+
+    expect(
+      session(store).history[1].mergedReplyProvenance?.sourceMessageIds,
+    ).toEqual(["t0", "a1", "a2"]);
+    // Nothing matched the saved fingerprint, so the array reference must survive.
+    expect(session(store).history).toBe(historyBefore);
+  });
+
+  it("keeps provenance when the item was replaced by another one in flight", async () => {
+    const store = provenanceStore();
+    const request = deferredSave(store);
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await request.started();
+
+    store.dispatch(
+      setSessionHistory({
+        sessionId: "s1",
+        history: [
+          item("u1", "user", "hi"),
+          merged("a9", "another bubble", ["a9", "a10"]),
+        ],
+      }),
+    );
+    request.succeed();
+    await save;
+
+    expect(session(store).history[1].message.id).toBe("a9");
+    expect(
+      session(store).history[1].mergedReplyProvenance?.sourceMessageIds,
+    ).toEqual(["a9", "a10"]);
+  });
+
+  it("still drops provenance when a newer revision arrived, while authority fields stay gated", async () => {
+    const store = provenanceStore();
+    const request = deferredSave(store);
+
+    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await request.started();
+
+    // A stream chunk / new user message bumps the revision without touching this
+    // merged item: the response is stale for session-wide authority, but the item
+    // itself is on disk in exactly its saved shape.
+    store.dispatch(markSessionDirty({ sessionId: "s1" }));
+    const totalCountBefore = session(store).pagination.totalCount;
+    const revisionBefore = session(store).persistence?.revision;
+
+    request.succeed(99);
+    await save;
+
+    const after = session(store);
+    expect(after.history[1].mergedReplyProvenance).toBeUndefined();
+    // …while the session-wide authority fields stay protected by the gate.
+    expect(after.pagination.totalCount).toBe(totalCountBefore);
+    expect(after.persistence?.revision).toBe(revisionBefore);
   });
 });

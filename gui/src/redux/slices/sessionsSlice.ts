@@ -16,6 +16,7 @@ import { type AttachedFile } from "../../components/mainInput/types";
 import {
   ChatHistoryItemWithMessageId,
   ContextMetricsSnapshot,
+  SavedMergedProvenance,
   applyStreamUpdatesToHistory,
   mergeSplitReplies,
 } from "./sessionHistory";
@@ -885,6 +886,72 @@ export const sessionsSlice = createSlice({
       pagination.requestGeneration++;
       pagination.persistPending = session.dirty;
     },
+    /**
+     * LazyLoad_merge_provenance_设计.md §2.3: provenance means "this merged item has
+     * not been written to disk in this shape yet", so it is dropped as soon as a
+     * save containing it succeeded.
+     *
+     * Deliberately **not** gated on `persistence.revision`, and the caller
+     * dispatches it after **any** successful save: the question here is per-item
+     * ("is the current item still exactly what was just written?") rather than
+     * session-wide ("is this response the current revision?"). A save in flight
+     * can see ordinary content changes — a new user message, a stream chunk —
+     * that bump the revision while leaving this merged item untouched; its
+     * provenance must still be cleared, otherwise a later compact/delete would
+     * resolve the carrier to a raw id that no longer exists on disk.
+     *
+     * Matching is by id **and** the ordered member list. A later prepend+merge can
+     * keep the same output id (when the new page adds only `thinking` items,
+     * `firstAssistant = assistantItems[0] ?? group[0]` still picks the existing
+     * merged item) while absorbing more members — that shape was never persisted,
+     * so comparing ids alone would clear it wrongly.
+     *
+     * Pure: never marks dirty, never advances `historyRevision` or
+     * `persistence.revision`, and leaves the `history` array reference untouched
+     * when no fingerprint matches.
+     */
+    clearSavedMergedReplyProvenance: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        savedMergedProvenance: SavedMergedProvenance[];
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      const saved = action.payload.savedMergedProvenance;
+      if (!session || saved.length === 0) {
+        return;
+      }
+
+      let changed = false;
+      const nextHistory = session.history.map((item) => {
+        const provenance = item.mergedReplyProvenance;
+        if (!provenance) {
+          return item;
+        }
+        const isStillTheSavedShape = saved.some(
+          (fingerprint) =>
+            fingerprint.mergedItemMessageId === item.message.id &&
+            fingerprint.sourceMessageIds.length ===
+              provenance.sourceMessageIds.length &&
+            fingerprint.sourceMessageIds.every(
+              (id, index) => id === provenance.sourceMessageIds[index],
+            ),
+        );
+        if (!isStillTheSavedShape) {
+          return item;
+        }
+        changed = true;
+        const { mergedReplyProvenance: _dropped, ...rest } = item;
+        return rest as ChatHistoryItemWithMessageId;
+      });
+
+      // Only replace the array when something was actually dropped: an
+      // unconditional assignment would invalidate every memoised StepContainer.
+      if (changed) {
+        session.history = nextHistory;
+      }
+    },
 
     // ── Persistence ───────────────────────────────────────────────────────
     setSessionPersistenceState: (
@@ -1396,6 +1463,7 @@ export const {
   prependSessionHistory,
   setSessionHistoryLoading,
   trimSessionHistoryWindow,
+  clearSavedMergedReplyProvenance,
   markSessionSaveFailed,
   markSessionSaving,
   setSessionPersistenceState,

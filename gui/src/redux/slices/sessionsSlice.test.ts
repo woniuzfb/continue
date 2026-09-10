@@ -3,6 +3,7 @@ import type { ChatHistoryItemWithMessageId } from "./sessionHistory";
 import {
   applySessionStreamUpdate,
   beginSessionStream,
+  clearSavedMergedReplyProvenance,
   closeSessionTabTransaction,
   createSessionRuntime,
   deleteCompactionByMessageId,
@@ -497,5 +498,95 @@ describe("sessionCatalogSlice", () => {
     );
     expect(state.allSessionMetadata).toHaveLength(0);
     expect(state.lastSessionId).toBeUndefined();
+  });
+});
+
+describe("clearSavedMergedReplyProvenance", () => {
+  function merged(
+    id: string,
+    sourceMessageIds: string[],
+  ): ChatHistoryItemWithMessageId {
+    return {
+      ...item(id, "assistant", "body"),
+      mergedReplyProvenance: {
+        sourceMessageIds,
+        firstSourceMessageId: sourceMessageIds[0],
+        lastSourceMessageId: sourceMessageIds[sourceMessageIds.length - 1],
+      },
+    };
+  }
+
+  function provenanceState() {
+    const session = initialSessionRuntime("s1", "Chat 1", {
+      history: [item("u1", "user", "hi"), merged("a1", ["a1", "a2"])],
+      dirty: true,
+      persistence: {
+        state: "pending",
+        revision: 5,
+        persistedRevision: 4,
+        hasPersistedBaseline: true,
+      },
+    });
+    return {
+      session,
+      state: {
+        ...initialSessionsState,
+        activeSessionId: "s1",
+        tabOrder: ["s1"],
+        sessionsById: { s1: session },
+      } as any,
+    };
+  }
+
+  const fingerprint = {
+    mergedItemMessageId: "a1",
+    sourceMessageIds: ["a1", "a2"],
+  };
+
+  it("drops the provenance without looking like a mutation", () => {
+    const { state } = provenanceState();
+    const before = state.sessionsById.s1.history;
+
+    const next = sessionsSlice.reducer(
+      state,
+      clearSavedMergedReplyProvenance({
+        sessionId: "s1",
+        savedMergedProvenance: [fingerprint],
+      }),
+    );
+    const session = next.sessionsById.s1;
+
+    expect(session.history[1].mergedReplyProvenance).toBeUndefined();
+    expect(session.history[1].message.id).toBe("a1");
+    // A new array is only justified because something was actually dropped.
+    expect(session.history).not.toBe(before);
+    // Pure: no dirty, no revision, no historyRevision — otherwise a save would
+    // schedule another save (or invalidate the request-history cache) for free.
+    expect(session.dirty).toBe(true);
+    expect(session.persistence).toMatchObject({
+      state: "pending",
+      revision: 5,
+    });
+    expect(session.historyRevision).toBe(state.sessionsById.s1.historyRevision);
+  });
+
+  it("keeps the array reference when no fingerprint matches", () => {
+    const { state } = provenanceState();
+    const before = state.sessionsById.s1.history;
+
+    const next = sessionsSlice.reducer(
+      state,
+      clearSavedMergedReplyProvenance({
+        sessionId: "s1",
+        savedMergedProvenance: [
+          { mergedItemMessageId: "a1", sourceMessageIds: ["a1"] },
+        ],
+      }),
+    );
+
+    expect(next.sessionsById.s1.history).toBe(before);
+    expect(
+      next.sessionsById.s1.history[1].mergedReplyProvenance?.sourceMessageIds,
+    ).toEqual(["a1", "a2"]);
   });
 });
