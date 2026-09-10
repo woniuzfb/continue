@@ -80,7 +80,14 @@ export interface LoadPageHistoryRequest {
  * GUI 只在 success 后更新，绝不从 truncated window 重算。
  */
 export interface SaveHistoryResponse {
-  /** 磁盘首轮原始条目（未经 GUI bubble merge）。 */
+  /**
+   * 磁盘首轮原始条目（未经 GUI bubble merge）。
+   *
+   * **必填，且是权威结果**：完整保存之后磁盘上是否有可提取的首轮是一个确定的
+   * 事实，Core 每次都计算，因此这里没有省略的余地。`[]` 是合法权威值，表示保存
+   * 后的 history 中确实没有首轮（例如首条不是 user 消息）。不要把它改成 optional
+   * 来掩盖协议未同步 —— GUI 在 success 之后正是用它整体覆盖本地值（含清空）。
+   */
   firstTurnItems: ChatHistoryItem[];
   latestConversationSummary?: {
     sourceMessageId: string;
@@ -93,8 +100,19 @@ export interface SaveHistoryResponse {
 
 export interface LoadPageHistoryResponse {
   items: ChatHistoryItem[];
-  /** 磁盘首轮原始条目（方案.md §五.5/§十三.4）。仅 offset === 0 时返回。 */
-  firstTurnItems: ChatHistoryItem[];
+  /**
+   * 磁盘首轮原始条目（方案.md §五.5/§十三.4）。仅 offset === 0 时返回。
+   *
+   * **可选，仅为兼容旧宿主**（与 `SaveHistoryResponse.firstTurnItems` 的必填语义
+   * 刻意不同，不要统一）：
+   * - `undefined` = 该宿主尚未实现这个字段。GUI 必须按"首轮不可用"处理，
+   *   归一化为 `[]` 后让请求历史走全量加载回退，**不得**据此推断"这是新会话"。
+   * - `[]` = 宿主明确返回了空首轮。它与 `undefined` 在实现上走同一条安全回退
+   *   （全量加载），因此不需要额外的状态枚举来区分二者。
+   * - GUI 也不得仅凭数组长度判断会话状态或"可靠首轮"：可靠性的另外两个条件是
+   *   `persistence.hasPersistedBaseline` 与 `persistence.state !== "failed"`。
+   */
+  firstTurnItems?: ChatHistoryItem[];
   /**
    * 权威摘要（方案.md §七.8.1/§十一）：懒加载激活时用它恢复
    * `latestConversationSummary`，否则 Local Provider 的

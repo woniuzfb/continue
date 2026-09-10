@@ -5,6 +5,8 @@ import { EMPTY_CONFIG } from "../slices/configSlice";
 import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
+import { buildRequestHistoryForSession } from "../util/requestHistory";
+import { getSessionPage } from "./session";
 import {
   activateSessionTab,
   closeSessionTab,
@@ -111,6 +113,48 @@ describe("loadSessionRuntime", () => {
     expect((store.getState() as any).sessions.tabDescriptors.s1.loadState).toBe(
       "loaded",
     );
+  });
+
+  it("treats a legacy page response without firstTurnItems as unavailable, not as an empty first turn", async () => {
+    const store = makeStore(
+      {
+        ...emptySessions(),
+        tabOrder: ["s1"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Chat 1", loadState: "unloaded" },
+        },
+      },
+      { lazy: true },
+    );
+    // A host older than this field omits it entirely. No cast is needed here:
+    // the protocol types it as optional precisely for that case.
+    store.mockIdeMessenger.responses["history/loadPage"] = {
+      items: [item("u2", "user", "hi"), item("a2", "assistant", "yo")],
+      hasMore: true,
+      total: 6,
+      session: { title: "Chat 1", mode: "chat", workspaceDirectory: "ws" },
+    };
+
+    // The normalisation itself, asserted at its own layer: with two redundant
+    // `?? []` guards in the pipeline, an end-to-end assertion alone would still
+    // pass if either one were dropped.
+    expect(
+      (await getSessionPage(store.mockIdeMessenger, "s1", 4)).firstTurnItems,
+    ).toEqual([]);
+
+    await run(store, loadSessionRuntime({ sessionId: "s1" }));
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    // Normalised to an empty array: never left `undefined` (the fast path reads
+    // `.length` off it), and never read as "this session has no first turn".
+    expect(session.firstTurnItems).toEqual([]);
+
+    // The observable consequence: the send path must not build a reduced Local
+    // Provider request from a window whose first turn was never delivered. It
+    // falls back to a full load instead of guessing a new session.
+    expect(
+      buildRequestHistoryForSession(session, { localConversation: true }).kind,
+    ).toBe("needs-full-history");
   });
 
   it("restores reasoning preference and the authoritative summary", async () => {

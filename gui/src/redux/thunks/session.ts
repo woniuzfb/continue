@@ -88,6 +88,9 @@ export async function getSessionPage(
   };
   return {
     session,
+    // 旧宿主可能完全不返回该字段（协议里它是 optional）；这里统一归一化为 `[]`，
+    // 让下游只需处理"首轮不可用"，而不必各自区分 undefined 与空数组。空数组既可能
+    // 是宿主的权威结果，也可能是"宿主未实现"，二者在实现上走同一条全量加载回退。
     firstTurnItems: firstTurnItems ?? [],
     latestConversationSummary,
     hasMore,
