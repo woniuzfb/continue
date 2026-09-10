@@ -178,7 +178,10 @@ export function handleStreamingToolCallUpdates(
 /**
  * 方案.md §十二 / LazyLoad_merge_provenance_设计.md §2.1:
  * 一个由 `mergeSplitReplies` 合并出来的 GUI item，**尚未以合并后的形状成功落盘**
- * 时，它在磁盘上仍对应多条 raw item。这里的 id 就是那批 raw item 的磁盘身份。
+ * 时，它在磁盘上仍对应多条 raw item。
+ *
+ * `sourceMessageIds` 是该 merged item 在当前磁盘形状中对应的 raw item
+ * identities，按磁盘顺序记录（不是单个 id）。
  *
  * 生命周期（设计 §2.2/§2.3）：只在 GUI runtime 存在；保存时从 wire payload 剥离；
  * 保存成功且该 item 形状未变时由 `clearSavedMergedReplyProvenance` 清除。
@@ -200,10 +203,9 @@ export type MergedReplyProvenance = {
 /**
  * 保存快照里每一份 provenance 的指纹（设计 §2.3）。
  *
- * 保存成功之后据此清除 runtime provenance；比较**必须**同时看 id 与有序成员数组：
- * 第二次 prepend+merge 可能沿用同一个输出 id（新页只含 `thinking` 时
- * `firstAssistant = assistantItems[0] ?? group[0]` 仍取到已有 item）却吸收了更多成员，
- * 那种形状从未落盘，不能清。
+ * 保存成功之后据此清除 runtime provenance。比较**必须**同时看 id 与有序成员数组 ——
+ * id 本身不是"已保存形状"的完整指纹，只比 id 会把任何复用了该 id 的 runtime 状态
+ * 当成已落盘。成员不同即视为"不是这次写下去的那条"，保留 provenance（保守方向）。
  */
 export type SavedMergedProvenance = {
   /** 保存时该 item 自身的 id（merge 输出 id = 组首 assistant）。 */

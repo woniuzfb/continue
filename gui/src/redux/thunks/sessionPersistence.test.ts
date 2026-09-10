@@ -938,16 +938,21 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     expect(session(store).history[1].mergedReplyProvenance).toBeUndefined();
   });
 
-  it("keeps provenance when the same item absorbed more members in flight", async () => {
+  it("keeps provenance when an item with the same id has a different member fingerprint", async () => {
     const store = provenanceStore();
     const request = deferredSave(store);
 
     const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
     await request.started();
 
-    // A prepend+merge while the save was in flight: the output id is unchanged
-    // (the new page added only `thinking`), but the members grew. That shape was
-    // never written, so comparing ids alone would drop the provenance wrongly.
+    // The id alone is not a complete saved-shape fingerprint. If the current
+    // provenance has different ordered members, that shape was not the one
+    // recorded in this save snapshot and must be preserved.
+    //
+    // (The state is set directly rather than reproduced through
+    // `prependSessionHistory`: this freezes the reducer's fingerprint rule, not a
+    // particular merge output. A real prepend that re-merges the bubble changes
+    // the output id — see `mergeSplitReplies … flattens the members`.)
     store.dispatch(
       setSessionHistory({
         sessionId: "s1",
@@ -968,13 +973,17 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     expect(session(store).history).toBe(historyBefore);
   });
 
-  it("keeps provenance when the item was replaced by another one in flight", async () => {
+  it("keeps provenance when the bubble was rebuilt under a new id in flight", async () => {
     const store = provenanceStore();
     const request = deferredSave(store);
 
     const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
     await request.started();
 
+    // A prepend+merge during the flight rebuilds the bubble: the new page's first
+    // assistant becomes the output id (see the `mergeSplitReplies` flattening
+    // test, where a2 → b1), so the saved fingerprint no longer describes anything
+    // in the window.
     store.dispatch(
       setSessionHistory({
         sessionId: "s1",

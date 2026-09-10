@@ -900,11 +900,12 @@ export const sessionsSlice = createSlice({
      * provenance must still be cleared, otherwise a later compact/delete would
      * resolve the carrier to a raw id that no longer exists on disk.
      *
-     * Matching is by id **and** the ordered member list. A later prepend+merge can
-     * keep the same output id (when the new page adds only `thinking` items,
-     * `firstAssistant = assistantItems[0] ?? group[0]` still picks the existing
-     * merged item) while absorbing more members — that shape was never persisted,
-     * so comparing ids alone would clear it wrongly.
+     * Matching is by id **and** the ordered member list: the id alone is not a
+     * complete fingerprint of the saved shape. Comparing ids only would treat any
+     * runtime state that reuses the id as "already written", so the comparison is
+     * deliberately the conservative superset — a mismatch keeps the provenance,
+     * which is always the safe direction (the fallback is an explicit abort, never
+     * a wrong write).
      *
      * Pure: never marks dirty, never advances `historyRevision` or
      * `persistence.revision`, and leaves the `history` array reference untouched

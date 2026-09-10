@@ -93,10 +93,10 @@ describe("mergeSplitReplies provenance", () => {
     expect(bubble.mergedReplyProvenance?.lastSourceMessageId).toBe("t3");
   });
 
-  it("treats an already-persisted merged item as a single disk source", () => {
-    // After a successful save the provenance is cleared (see
-    // `clearSavedMergedReplyProvenance`), because the merged shape is what the
-    // disk now holds — so the item contributes only its own id to a later merge.
+  it("treats an item without provenance as a single disk source", () => {
+    // A successful save clears provenance in the separate persistence lifecycle
+    // tests; `mergeSplitReplies` only needs to honour the resulting runtime shape.
+    // Such an item contributes just its own id to a later merge.
     const persisted = merged("a2", "merged body", ["a2", "t2", "a3", "t3"]);
     delete persisted.mergedReplyProvenance;
     const history = [
