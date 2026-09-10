@@ -8,6 +8,7 @@ import {
   MAX_INLINE_FILE_BYTES,
   packBinaryToChunks,
   pad3,
+  sha256Hex,
   shouldPackAttachment,
 } from "./binaryAttachments";
 
@@ -175,6 +176,51 @@ describe("binaryAttachments", () => {
       expect(b64ShaLine).toMatch(
         /^b64_total_sha256 : (([0-9a-f]{64})|unavailable)$/,
       );
+    });
+
+    it("hashes every part in the base64 space, so parts chain to b64_total", async () => {
+      // Regression: the part lines used to hash each part's DECODED bytes, which
+      // lives in payload space — the manifest has no total there to check them
+      // against. `b64_total_sha256` is the base64 text, so the parts must be too.
+      const original = new Uint8Array(1024);
+      for (let i = 0; i < original.length; i++) {
+        original[i] = (i * 7) % 256;
+      }
+      const result = await packBinaryToChunks(
+        {
+          name: "bundle.tar.gz",
+          path: "/x/bundle.tar.gz",
+          rawBase64: bytesToBase64(original),
+        },
+        256, // 1368 base64 chars => several parts
+      );
+      expect(result.chunks.length).toBeGreaterThan(1);
+
+      const utf8 = (s: string) => new TextEncoder().encode(s);
+      const joined = result.chunks.join("");
+      const lines = result.manifest.split("\n");
+
+      // payload_sha256 is the DECODED payload …
+      expect(lines).toContain(`payload_sha256 : ${await sha256Hex(original)}`);
+      // … while b64_total_sha256 and every part line hash the base64 TEXT.
+      expect(lines).toContain(
+        `b64_total_sha256 : ${await sha256Hex(utf8(joined))}`,
+      );
+
+      let partChars = 0;
+      for (let i = 0; i < result.chunks.length; i++) {
+        const chunk = result.chunks[i];
+        partChars += chunk.length;
+        expect(lines).toContain(
+          `bundle.tar.gz.b64.${pad3(i)}  ${await sha256Hex(
+            utf8(chunk),
+          )}  ${chunk.length} bytes`,
+        );
+      }
+      // The parts partition the base64 text, and rejoin to the original bytes.
+      expect(partChars).toBe(joined.length);
+      expect(lines).toContain(`b64_total_bytes : ${joined.length}`);
+      expect(base64ToBytes(joined)).toEqual(original);
     });
 
     it("default chunk size matches the script's 9,000,000", () => {

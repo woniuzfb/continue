@@ -14,8 +14,18 @@
  * The ORIGINAL file format is never changed: no tar, no re-compression. The
  * payload is simply the raw bytes of the file, base64-transported. The
  * receiver rejoins the chunks, base64-decodes, and gets the exact original
- * file (verified against payload_sha256). The manifest also lists the sha256
- * of the full base64 and of every part.
+ * file (verified against payload_sha256).
+ *
+ * Two hash spaces, and they must not be mixed up:
+ *
+ *   payload space  `payload_sha256`      — the DECODED payload: the original
+ *                                          file (a .tar.gz stays a .tar.gz)
+ *   base64 space   `b64_total_sha256`    — the whole base64 text
+ *                  per-part line hash    — that part's base64 TEXT, so the
+ *                                          parts chain up to the total
+ *
+ * Hashing a part's decoded bytes instead would put the part lines in payload
+ * space, where the manifest offers no total to check them against.
  *
  * All helpers are pure / browser-API based so the whole pipeline runs in the
  * webview (no IDE-side packing needed — the IDE only provides raw bytes via
@@ -188,6 +198,16 @@ export function pad3(n: number): string {
   return String(n).padStart(3, "0");
 }
 
+/**
+ * The bytes `b64_total_sha256` and every per-part hash are computed over: the
+ * base64 **text**. For the base64 alphabet that is its char codes, so the part
+ * hashes and the total are directly comparable — that is the whole point of
+ * this helper existing instead of hashing decoded bytes at the call sites.
+ */
+function b64HashInput(b64: string): Uint8Array {
+  return new TextEncoder().encode(b64);
+}
+
 export interface PackedBinaryResult {
   /** Base64 chunks, in order. */
   chunks: string[];
@@ -216,11 +236,13 @@ export async function packBinaryToChunks(
   }
 
   const [payloadSha, b64Sha] = await Promise.all([
+    // Decoded payload (the original file / archive).
     sha256Hex(payload),
-    sha256Hex(new TextEncoder().encode(fullB64)),
+    // The whole base64 text — the same space as the part lines below.
+    sha256Hex(b64HashInput(fullB64)),
   ]);
   const partHashes = await Promise.all(
-    chunks.map((c) => sha256Hex(base64ToBytes(c))),
+    chunks.map((c) => sha256Hex(b64HashInput(c))),
   );
 
   const partCount = chunks.length;
@@ -238,6 +260,9 @@ export async function packBinaryToChunks(
     "# --- parts (concatenate in this exact order) ---",
   ];
   for (let i = 0; i < partCount; i++) {
+    // <name>.b64.NNN  <sha256 of this part's base64 text>  <base64 chars>
+    // The trailing count is base64 characters (their sum is `b64_total_bytes`),
+    // not decoded bytes — decoded size is only meaningful for the whole payload.
     lines.push(
       `${file.name}.b64.${pad3(i)}  ${partHashes[i]}  ${chunks[i].length} bytes`,
     );
