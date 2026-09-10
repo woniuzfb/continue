@@ -48,7 +48,17 @@ export const generateSessionTitle = createAsyncThunk<
         try {
           const result = await extra.ideMessenger.request(
             "chatDescriber/describe",
-            { text: assistantResponse, messages },
+            {
+              // 方案.md §七.10: the request carries the target session's
+              // identity and its own model title. Core resolves the model from
+              // `modelTitle` and never falls back to the global selection, so a
+              // background session (A) is described with A's model even while
+              // another tab (B) is active.
+              sessionId,
+              modelTitle: selectedChatModel.title,
+              text: assistantResponse,
+              messages,
+            },
           );
           if (result.status === "success" && result.content) {
             title = result.content;

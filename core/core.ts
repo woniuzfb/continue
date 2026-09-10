@@ -639,15 +639,35 @@ export class Core {
     });
 
     on("chatDescriber/describe", async (msg) => {
-      const currentModel = (await this.configHandler.loadConfig()).config
-        ?.selectedModelByRole.chat;
+      const { config } = await this.configHandler.loadConfig();
 
-      if (!currentModel) {
-        throw new Error("No chat model selected");
+      // 方案.md §七.10: resolve the *target session's* model from the request.
+      //
+      // Deliberately no fallback to `selectedModelByRole.chat`: that is the
+      // profile-level (global) selection, and it may belong to a different tab.
+      // Falling back to it is exactly the cross-session leak this contract
+      // removes — the GUI already sends its own resolved model title, and it
+      // only calls this at all when it resolved one, so a miss here means the
+      // request is unsatisfiable. Failing lets the GUI's existing title
+      // fallback take over instead of describing with the wrong model.
+      //
+      // Matching uses `title ?? model` because that is the exact projection
+      // `llmToSerializedModelDescription` applies (`core/config/load.ts`), and
+      // the GUI only ever sees the serialized titles. `ILLM.title` itself is
+      // optional, so comparing `model.title` alone would never match a
+      // title-less model.
+      const targetModel = config?.modelsByRole.chat.find(
+        (model) => (model.title ?? model.model) === msg.data.modelTitle,
+      );
+
+      if (!targetModel) {
+        throw new Error(
+          `Chat describer model not found for session ${msg.data.sessionId}: ${msg.data.modelTitle}`,
+        );
       }
 
       return await ChatDescriber.describe(
-        currentModel,
+        targetModel,
         {},
         msg.data.text,
         msg.data.messages,

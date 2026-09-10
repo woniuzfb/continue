@@ -28,6 +28,12 @@ type StoreOptions = {
   disableSessionTitles?: boolean;
   model?: boolean;
   catalogTitle?: string;
+  /** Overrides the serialized `modelsByRole.chat` list. */
+  chatModels?: any[];
+  /** Overrides the profile-level (global) `selectedModelByRole.chat`. */
+  globalChatModelTitle?: string;
+  /** Overrides the target session's own model choice. */
+  sessionChatModelTitle?: string;
 };
 
 function makeStore(options: StoreOptions = {}) {
@@ -40,11 +46,14 @@ function makeStore(options: StoreOptions = {}) {
     disableSessionTitles = false,
     model = true,
     catalogTitle,
+    chatModels,
+    globalChatModelTitle,
+    sessionChatModelTitle = "gpt-4o",
   } = options;
 
   const s1 = initialSessionRuntime("s1", title, {
     history,
-    chatModelTitle: "gpt-4o",
+    chatModelTitle: sessionChatModelTitle,
     mode: "agent",
   });
 
@@ -84,15 +93,27 @@ function makeStore(options: StoreOptions = {}) {
         disableSessionTitles,
         modelsByRole: {
           ...INITIAL_CONFIG_SLICE.config.modelsByRole,
-          chat: model
-            ? [
-                {
-                  title: "gpt-4o",
-                  provider: "openai",
-                  model: "gpt-4o",
-                } as any,
-              ]
-            : [],
+          chat:
+            chatModels ??
+            (model
+              ? [
+                  {
+                    title: "gpt-4o",
+                    provider: "openai",
+                    model: "gpt-4o",
+                  } as any,
+                ]
+              : []),
+        },
+        selectedModelByRole: {
+          ...INITIAL_CONFIG_SLICE.config.selectedModelByRole,
+          chat: globalChatModelTitle
+            ? ({
+                title: globalChatModelTitle,
+                provider: "openai",
+                model: globalChatModelTitle,
+              } as any)
+            : null,
         },
       },
     },
@@ -214,5 +235,63 @@ describe("generateSessionTitle", () => {
       await run(store, generateSessionTitle({ sessionId: "nope" })),
     ).toBeUndefined();
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("generateSessionTitle session isolation (方案.md §七.10)", () => {
+  beforeEach(() => resetSessionSaveQueues());
+
+  /**
+   * The bug this freezes: session A completes in the background while tab B is
+   * active. The describer must be told *which* session and *which* model, because
+   * Core cannot look either of them up — it has no sessionsById and the global
+   * `selectedModelByRole.chat` may belong to another tab.
+   */
+  it("binds the request to the target session and its own model", async () => {
+    const store = makeStore({
+      sessionChatModelTitle: "model-a",
+      chatModels: [
+        { title: "model-a", provider: "openai", model: "model-a" },
+        { title: "model-b", provider: "openai", model: "model-b" },
+      ],
+      // The profile-level selection belongs to the *other* tab.
+      globalChatModelTitle: "model-b",
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const otherBefore = JSON.stringify(session(store, "s2"));
+
+    expect((store.getState() as any).sessions.activeSessionId).toBe("s2");
+
+    const title = await run(store, generateSessionTitle({ sessionId: "s1" }));
+    expect(title).toBe("Session summary");
+
+    const describeCall = request.mock.calls.find(
+      (call) => call[0] === "chatDescriber/describe",
+    );
+    expect(describeCall).toBeDefined();
+    const payload = describeCall![1] as any;
+
+    // Identity and model are explicit, and the model is A's — not B's global one.
+    expect(payload.sessionId).toBe("s1");
+    expect(payload.modelTitle).toBe("model-a");
+
+    // Context comes from A's history (B's history holds a lone "x" message).
+    const rendered = payload.messages
+      .map((m: any) => JSON.stringify(m.content))
+      .join("\n");
+    expect(rendered).toContain("how do I parse JSON");
+    expect(rendered).toContain("use JSON.parse");
+    expect(rendered).not.toContain('"text":"x"');
+
+    // Only A is retitled…
+    expect(session(store, "s1").title).toBe("Session summary");
+    // …and B is byte-for-byte untouched: title, history, dirty flag and
+    // persistence state all survive the background title generation.
+    expect(session(store, "s2").title).toBe("Other");
+    expect(session(store, "s2").dirty).toBe(false);
+    expect(session(store, "s2").history.map((i: any) => i.message.id)).toEqual([
+      "u2",
+    ]);
+    expect(JSON.stringify(session(store, "s2"))).toBe(otherBefore);
   });
 });

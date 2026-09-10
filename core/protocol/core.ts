@@ -317,6 +317,12 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   ];
   "chatDescriber/describe": [
     {
+      // 请求归属与诊断身份（方案.md §七.10）。Core 没有 GUI 的 sessionsById
+      // 注册表，故 sessionId 不用于反查会话或模型，仅用于明确归属与错误归因。
+      sessionId: string;
+      // Core 的模型解析依据：必须在 config.modelsByRole.chat 中精确命中。
+      // 目标会话的模型由 GUI 决定，因此 Core 不设回退（见 core.ts handler）。
+      modelTitle: string;
       text: string;
       // 传完整会话历史，让服务端能识别这不是新会话（服务端按历史判断）
       messages?: ChatMessage[];
