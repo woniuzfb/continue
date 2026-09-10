@@ -112,6 +112,33 @@ describe("history first turn boundary", () => {
     expect(laterPage.firstTurnItems).toEqual([]);
   });
 
+  test("save reports the deepest summary when several items carry one", async () => {
+    // `latestSummaryOf` scans backwards, so the LAST summary wins. The GUI's
+    // `mergeSplitReplies` mirrors that rule when it carries a summary onto a
+    // merged bubble (LazyLoad_merge_provenance_设计.md §13.2) — merging must not
+    // change which summary is in effect.
+    const withSummaries: Session = {
+      ...session,
+      history: session.history.map((item, index) => {
+        if (index === 1) {
+          return { ...item, conversationSummary: "early" };
+        }
+        if (index === 4) {
+          return { ...item, conversationSummary: "late" };
+        }
+        return item;
+      }),
+    };
+
+    const saved = await historyManager.save(withSummaries);
+
+    expect(saved.latestConversationSummary).toEqual({
+      sourceMessageId: "a2",
+      sourceAbsoluteIndex: 4,
+      content: "late",
+    });
+  });
+
   test("reasoning preference round-trips through save and load", async () => {
     const withReasoning: Session = {
       ...session,

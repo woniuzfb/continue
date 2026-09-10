@@ -1,11 +1,16 @@
 import { Provider } from "react-redux";
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SessionScope } from "../../components/mainInput/TipTapEditor/SessionScope";
 import { createMockStore } from "../../util/test/mockStore";
+import { selectSessionById } from "./sessions";
 import { useSessionSyntheticSummary } from "./sessionView";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
+import {
+  resetSessionSaveQueues,
+  saveSession,
+} from "../thunks/sessionPersistence";
 
 /**
  * 方案.md §十一: the synthetic summary separator.
@@ -204,6 +209,76 @@ describe("useSessionSyntheticSummary", () => {
     });
 
     expect(result.current?.sourceMessageId).toBe("m1");
+  });
+
+  it("keeps exactly one summary visible after a merged window is saved", async () => {
+    // Closed loop (方案.md §十一 + LazyLoad_merge_provenance_设计.md §13): the
+    // window shows a bubble that merged the carrier's group, so the session-level
+    // summary still points at a raw member the merge removed. Before this work the
+    // separator rendered next to the real card; suppressing the separator alone
+    // would have hidden the summary entirely.
+    resetSessionSaveQueues();
+    const bubble: ChatHistoryItemWithMessageId = {
+      ...item("m0", "assistant", "0 and 1"),
+      conversationSummary: "summary body",
+      mergedReplyProvenance: {
+        sourceMessageIds: ["m0", "m1"],
+        firstSourceMessageId: "m0",
+        lastSourceMessageId: "m1",
+      },
+    };
+    const store = makeStore({
+      window: [item("u0", "user", "q"), bubble],
+      loadedOffset: 0,
+      // The runtime index is stale, as it is right after a merge (2 is gone).
+      summary: {
+        sourceMessageId: "m1",
+        sourceAbsoluteIndex: 2,
+        content: "summary body",
+      },
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    store.mockIdeMessenger.responses["history/save"] = {
+      firstTurnItems: [],
+      totalHistoryCount: 2,
+      // Core wrote this bubble, so it now reports the summary on the item that
+      // holds it — the bubble, whose id is the group's first assistant.
+      latestConversationSummary: {
+        sourceMessageId: "m0",
+        sourceAbsoluteIndex: 1,
+        content: "summary body",
+      },
+    } as any;
+
+    const { result } = renderHook(() => useSessionSyntheticSummary(), {
+      wrapper: wrapperFor(store, "A"),
+    });
+    expect(result.current).toBeUndefined();
+
+    await act(async () => {
+      // `as any` mirrors the other thunk-driven tests: the mock store's
+      // `dispatch` is typed for plain actions.
+      await (store.dispatch(
+        saveSession({ sessionId: "A", reason: "test" }) as any,
+      ) as any);
+    });
+
+    const wire = (
+      request.mock.calls.find((c) => c[0] === "history/save")![1] as any
+    ).history as ChatHistoryItemWithMessageId[];
+    // The summary travels to disk; the runtime-only provenance does not.
+    expect(wire[1].conversationSummary).toBe("summary body");
+    expect("mergedReplyProvenance" in wire[1]).toBe(false);
+
+    const saved = selectSessionById(store.getState() as any, "A")!;
+    expect(saved.history[1].message.id).toBe("m0");
+    // The card keeps rendering (it reads the item field)…
+    expect(saved.history[1].conversationSummary).toBe("summary body");
+    // …the bubble is now the disk shape, so its provenance is gone…
+    expect(saved.history[1].mergedReplyProvenance).toBeUndefined();
+    // …and the session-level summary no longer points at the removed raw tail.
+    expect(saved.latestConversationSummary?.sourceMessageId).toBe("m0");
+    expect(result.current).toBeUndefined();
   });
 
   it("falls back to an id scan for a legacy summary without an index", () => {
