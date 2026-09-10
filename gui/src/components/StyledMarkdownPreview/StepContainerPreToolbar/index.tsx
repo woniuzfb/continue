@@ -30,6 +30,8 @@ import {
   useSessionHistory,
   useSessionIsStreaming,
 } from "../../../redux/selectors/sessionView";
+import { useSessionId } from "../../mainInput/TipTapEditor/SessionScope";
+import { registerCodeBlockApplyOrigin } from "../../../redux/util/applyOrigins";
 
 export interface StepContainerPreToolbarProps {
   showToolCallStatusIcon?: boolean;
@@ -65,6 +67,10 @@ export function StepContainerPreToolbar({
   collapsible,
 }: StepContainerPreToolbarProps) {
   const ideMessenger = useContext(IdeMessengerContext);
+  // The session that owns this code block (方案.md §九.0). Applies initiated
+  // here are recorded against it, so a tab switch between the click and the
+  // IDE's first diff event cannot move them to another session.
+  const sessionId = useSessionId();
   // 只订阅长度而非整个 history 数组：旧实现让每个代码块（长会话
   // 400+ 个）都订阅 selectActiveHistory(state)，会话内任何 mutation
   // （流式 chunk、symbols 更新等）都会使全部代码块重跑选择器并
@@ -209,6 +215,13 @@ export function StepContainerPreToolbar({
       );
       return;
     }
+
+    // 方案.md §五.21: the IDE echoes this streamId on every `updateApplyState`
+    // it sends for this apply, and those events carry no sessionId. Record the
+    // owning session (the one this code block belongs to — not whichever tab
+    // is active) *before* posting, otherwise the events have no owner and are
+    // dropped.
+    registerCodeBlockApplyOrigin(codeBlockStreamId, { sessionId });
 
     // applyToFile will create the file if it doesn't exist
     ideMessenger.post("applyToFile", {

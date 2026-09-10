@@ -30,16 +30,17 @@ import {
 } from "../slices/sessionsSlice";
 import { EDIT_MODE_STREAM_ID } from "core/edit/constants";
 import { ThunkApiType } from "../store";
+import { registerEditApplyOrigin } from "../util/applyOrigins";
+import { bootstrapLastSession } from "./sessionLifecycle";
+import { flushSessionSave } from "./sessionPersistence";
+import { sessionStreamWrapper } from "./sessionStreamWrapper";
+import { v4 as uuidv4 } from "uuid";
 
 /** Default per-session edit apply state (方案.md §五.4). */
 const INITIAL_EDIT_APPLY_STATE = {
   streamId: EDIT_MODE_STREAM_ID,
   status: "not-started" as const,
 };
-import { bootstrapLastSession } from "./sessionLifecycle";
-import { flushSessionSave } from "./sessionPersistence";
-import { sessionStreamWrapper } from "./sessionStreamWrapper";
-import { v4 as uuidv4 } from "uuid";
 
 export const streamEditThunk = createAsyncThunk<
   boolean,
@@ -86,6 +87,13 @@ export const streamEditThunk = createAsyncThunk<
             ...selectedContextItems.map((item) => item.content),
             stripImages(content),
           ].join("\n\n");
+
+          // 方案.md §五.21: record which session this edit belongs to *before*
+          // the request that can start streaming diffs. Edit mode has no tool
+          // call, so the origin carries only the session — without it the apply
+          // events would have to guess a session (they used to fall back to
+          // whichever one was visible).
+          registerEditApplyOrigin(EDIT_MODE_STREAM_ID, { sessionId });
 
           const response = await extra.ideMessenger.request("edit/sendPrompt", {
             prompt,

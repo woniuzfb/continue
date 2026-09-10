@@ -20,10 +20,7 @@ import { setTTSActive } from "../redux/slices/uiSlice";
 
 import { modelSupportsReasoning } from "core/llm/autodetect";
 import { stopActiveSessionStream } from "../redux/thunks/sessionStreams";
-import {
-  handleSessionApplyStateUpdate,
-  lookupApplyOrigin,
-} from "../redux/thunks/sessionApplyState";
+import { routeApplyStateUpdate } from "../redux/thunks/sessionApplyState";
 
 import {
   ensureActiveSessionLoaded,
@@ -264,27 +261,12 @@ function ParallelListeners() {
   useWebviewListener(
     "updateApplyState",
     async (state) => {
-      // 方案.md §五.21: a target-session event must not resolve its session at
-      // callback time. The apply origin is recorded when the apply request is
-      // issued, so a session-scoped edit lands in the session that started it
-      // even after the user switched tabs. Unregistered streams keep the legacy
-      // active-session path.
-      const origin = lookupApplyOrigin(state.streamId);
-      // Without a recorded origin the event belongs to the visible session
-      // (global active UI entry point, 方案.md §五.21).
-      const targetSessionId = origin?.sessionId ?? sessionId;
-      if (!targetSessionId) {
-        return;
-      }
-      void dispatch(
-        handleSessionApplyStateUpdate({
-          sessionId: targetSessionId,
-          applyState: {
-            ...state,
-            toolCallId: state.toolCallId ?? origin?.toolCallId,
-          },
-        }),
-      );
+      // 方案.md §五.21: the event carries no sessionId, so its session is
+      // resolved from the apply-origin registry, never from the visible tab.
+      // Routing (and the drop-with-warning for an unknown stream) lives in
+      // `routeApplyStateUpdate` so that no active-session fallback can creep
+      // back in here.
+      void dispatch(routeApplyStateUpdate({ applyState: state }));
     },
     [],
   );

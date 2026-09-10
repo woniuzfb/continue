@@ -14,6 +14,10 @@ import {
   applySessionToolCallUpdate,
   findSessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
+import {
+  registerToolApplyOrigin,
+  resolveApplyRoute,
+} from "../util/applyOrigins";
 import { exitEdit } from "./edit";
 import { enqueueSessionSave } from "./sessionPersistence";
 import { continueToolLoop } from "./sessionTools";
@@ -29,29 +33,15 @@ import { continueToolLoop } from "./sessionTools";
  *
  * The IDE's applyState event does not carry a sessionId yet (protocol change
  * pending, 方案.md §五.21), so the origin session is recorded per `streamId`
- * when the apply request is issued. Reading the registry is still an explicit
- * lookup — never the active session.
+ * when the apply request is issued — by `applySessionForEditTool` (tool call),
+ * `thunks/edit.ts` (⌘I edit mode) and `StepContainerPreToolbar` (code-block
+ * Apply button). Reading the registry is an explicit lookup — never the active
+ * session; an unregistered stream is dropped outright.
  */
 
-type ApplyOrigin = { sessionId: string; toolCallId: string };
-
-const applyOrigins = new Map<string, ApplyOrigin>();
-
-export function registerApplyOrigin(
-  streamId: string,
-  origin: ApplyOrigin,
-): void {
-  applyOrigins.set(streamId, origin);
-}
-
-export function lookupApplyOrigin(streamId: string): ApplyOrigin | undefined {
-  return applyOrigins.get(streamId);
-}
-
-/** Test helper: drop recorded apply origins. */
-export function resetApplyOrigins(): void {
-  applyOrigins.clear();
-}
+// The apply-origin registry lives in `util/applyOrigins.ts` so that
+// `thunks/edit.ts` can register its edit origin without creating an
+// `edit ↔ sessionApplyState` import cycle (this module imports `exitEdit`).
 
 function editSuccessItem(filepath?: string): ContextItem {
   return {
@@ -90,6 +80,46 @@ function applyErrorItem(): ContextItem {
     hidden: false,
   };
 }
+
+/**
+ * Entry point for the IDE's `updateApplyState` event (方案.md §五.21).
+ *
+ * The payload carries no sessionId, so the origin registry — written when the
+ * apply request was issued — is the only authority for which session an apply
+ * belongs to. Routing is never derived from the visible session: an
+ * unregistered stream is **dropped** (with a warning), because falling back to
+ * `activeSessionId` wrote apply state into a session that never started the
+ * apply, and could advance *that* session's `codeBlockApplyStates.curIndex` or
+ * close its edit mode.
+ *
+ * A drop is expected after a webview reload (the registry is in-memory) or for
+ * a late event from a stream that already finished, so it is logged rather
+ * than surfaced as UI noise.
+ */
+export const routeApplyStateUpdate = createAsyncThunk<
+  void,
+  { applyState: ApplyState },
+  ThunkApiType
+>("sessions/routeApplyStateUpdate", async ({ applyState }, { dispatch }) => {
+  const route = resolveApplyRoute(applyState);
+  if (route.kind === "drop") {
+    console.warn("Dropped updateApplyState for an unknown stream origin", {
+      streamId: applyState.streamId,
+      status: applyState.status,
+      editModeStream: applyState.streamId === EDIT_MODE_STREAM_ID,
+      reason: route.reason,
+    });
+    return;
+  }
+  // The origin — not the payload — owns the identity; the payload's toolCallId
+  // was only allowed to confirm it (see `resolveApplyRoute`).
+  await dispatch(
+    handleSessionApplyStateUpdate({
+      sessionId: route.sessionId,
+      applyState: { ...applyState, toolCallId: route.toolCallId },
+    }),
+  );
+});
 
 /**
  * Session-scoped apply state update. Also the place where an accepted edit
@@ -220,7 +250,7 @@ export const applySessionForEditTool = createAsyncThunk<
   ThunkApiType
 >("sessions/applyEditTool", async (payload, { dispatch, getState, extra }) => {
   const { sessionId, toolCallId, streamId } = payload;
-  registerApplyOrigin(streamId, { sessionId, toolCallId });
+  registerToolApplyOrigin(streamId, { sessionId, toolCallId });
   dispatch(
     updateSessionApplyState({
       sessionId,

@@ -1,14 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolCallState } from "core";
+import { EDIT_MODE_STREAM_ID } from "core/edit/constants";
 import { createMockStore } from "../../util/test/mockStore";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
 import { resetSessionCodeBlockApplyIndex } from "../slices/sessionsSlice";
+import { setSessionIsInEdit } from "../slices/sessionsSlice";
+import {
+  lookupApplyOrigin,
+  registerCodeBlockApplyOrigin,
+  registerEditApplyOrigin,
+  registerToolApplyOrigin,
+  resetApplyOrigins,
+} from "../util/applyOrigins";
 import {
   applySessionForEditTool,
   handleSessionApplyStateUpdate,
-  lookupApplyOrigin,
-  resetApplyOrigins,
+  routeApplyStateUpdate,
 } from "./sessionApplyState";
 import {
   registerSessionStreamRunner,
@@ -110,6 +118,7 @@ describe("sessionApplyState", () => {
     );
 
     expect(lookupApplyOrigin("stream-1")).toEqual({
+      kind: "tool",
       sessionId: "s1",
       toolCallId: "t1",
     });
@@ -299,5 +308,215 @@ describe("sessionApplyState", () => {
     store.dispatch(resetSessionCodeBlockApplyIndex({ sessionId: "s1" }));
     expect(session(store).codeBlockApplyStates.curIndex).toBe(0);
     expect(session(store, "s2").codeBlockApplyStates.curIndex).toBe(0);
+  });
+});
+
+/**
+ * 方案.md §五.21. The IDE's `updateApplyState` event carries no sessionId, and
+ * the apply-origin registry is its only authority. Every case here has the
+ * *other* tab active, so any regression back to `origin?.sessionId ??
+ * activeSessionId` routes into the wrong session and fails.
+ */
+describe("apply state routing", () => {
+  beforeEach(() => {
+    resetApplyOrigins();
+    resetSessionStreamRunner();
+  });
+
+  function setInEdit(
+    store: ReturnType<typeof makeStore>,
+    sessionId: string,
+    isInEdit: boolean,
+  ) {
+    store.dispatch(setSessionIsInEdit({ sessionId, isInEdit }));
+  }
+
+  function editApplyState(store: ReturnType<typeof makeStore>) {
+    return session(store).editState.applyState;
+  }
+
+  it("drops an event whose stream has no recorded origin", async () => {
+    const store = makeStore();
+    setInEdit(store, "s1", true);
+    setInEdit(store, "s2", true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    // Edit-shaped but unregistered. The legacy fallback resolved this to the
+    // active session (s2) and closed s2's edit mode.
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: { streamId: EDIT_MODE_STREAM_ID, status: "closed" },
+      }),
+    );
+
+    expect(session(store, "s1").isInEdit).toBe(true);
+    expect(session(store, "s2").isInEdit).toBe(true);
+    expect(editApplyState(store).status).toBe("not-started");
+    expect(session(store, "s1").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+    expect(session(store, "s2").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+    expect(request).not.toHaveBeenCalledWith("history/save", expect.anything());
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toMatchObject({
+      streamId: EDIT_MODE_STREAM_ID,
+      status: "closed",
+      editModeStream: true,
+      reason: "unknown-origin",
+    });
+    warn.mockRestore();
+  });
+
+  it("routes a tool apply to the registered session, not the active one", async () => {
+    const store = makeStore();
+    registerToolApplyOrigin("stream-1", {
+      sessionId: "s1",
+      toolCallId: "t1",
+    });
+
+    // The payload omits toolCallId: the registered origin supplies it.
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: {
+          streamId: "stream-1",
+          status: "done",
+          filepath: "file:///x.ts",
+        },
+      }),
+    );
+
+    expect(session(store, "s1").codeBlockApplyStates.states).toEqual([
+      {
+        streamId: "stream-1",
+        toolCallId: "t1",
+        status: "done",
+        filepath: "file:///x.ts",
+      },
+    ]);
+    expect(session(store, "s1").codeBlockApplyStates.curIndex).toBe(1);
+    expect(session(store, "s2").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+  });
+
+  it("routes a chat code-block apply to its origin session", async () => {
+    const store = makeStore();
+    registerCodeBlockApplyOrigin("codeblock-1", { sessionId: "s1" });
+
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: { streamId: "codeblock-1", status: "streaming" },
+      }),
+    );
+
+    expect(session(store, "s1").codeBlockApplyStates.states).toEqual([
+      { streamId: "codeblock-1", status: "streaming" },
+    ]);
+    expect(session(store, "s2").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+  });
+
+  it("drops a payload toolCallId that contradicts the recorded origin", async () => {
+    const store = makeStore();
+    registerToolApplyOrigin("stream-1", {
+      sessionId: "s1",
+      toolCallId: "t1",
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: { streamId: "stream-1", toolCallId: "t9", status: "done" },
+      }),
+    );
+
+    expect(session(store, "s1").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toMatchObject({
+      reason: "tool-call-id-mismatch",
+    });
+    warn.mockRestore();
+  });
+
+  it("routes an edit apply to its origin session and closes only that edit", async () => {
+    const store = makeStore();
+    setInEdit(store, "s1", true);
+    setInEdit(store, "s2", true);
+    registerEditApplyOrigin(EDIT_MODE_STREAM_ID, { sessionId: "s1" });
+
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: { streamId: EDIT_MODE_STREAM_ID, status: "done" },
+      }),
+    );
+
+    expect(editApplyState(store).status).toBe("done");
+    expect(session(store, "s2").editState.applyState.status).toBe(
+      "not-started",
+    );
+
+    await run(
+      store,
+      routeApplyStateUpdate({
+        applyState: { streamId: EDIT_MODE_STREAM_ID, status: "closed" },
+      }),
+    );
+
+    expect(session(store, "s1").isInEdit).toBe(false);
+    expect(session(store, "s2").isInEdit).toBe(true);
+  });
+
+  it("drops events after the registry is cleared, then routes them again", async () => {
+    const store = makeStore();
+    registerToolApplyOrigin("stream-1", {
+      sessionId: "s1",
+      toolCallId: "t1",
+    });
+    // A webview reload empties the in-memory registry.
+    resetApplyOrigins();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const closed = {
+      applyState: {
+        streamId: "stream-1",
+        toolCallId: "t1",
+        status: "closed" as const,
+      },
+    };
+
+    await run(store, routeApplyStateUpdate(closed));
+
+    expect(toolState(store).status).toBe("calling");
+    expect(session(store, "s2").codeBlockApplyStates).toEqual({
+      states: [],
+      curIndex: 0,
+    });
+
+    // Same event, registered again: it is routed, so the earlier drop was the
+    // registry's doing and not a property of the payload.
+    registerToolApplyOrigin("stream-1", {
+      sessionId: "s1",
+      toolCallId: "t1",
+    });
+    await run(store, routeApplyStateUpdate(closed));
+
+    expect(toolState(store).status).toBe("done");
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });
