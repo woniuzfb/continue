@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Session } from "core";
 import { createMockStore } from "../../util/test/mockStore";
+import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
 import { resetSessionSaveQueues } from "./sessionPersistence";
@@ -56,6 +57,8 @@ type StoreOptions = {
   tabOrder?: string[];
   /** Rehydrated descriptors: present in tabOrder but with no runtime. */
   unloadedDescriptors?: string[];
+  /** `config.ui` — the authority for the per-session merge mirror (C3). */
+  ui?: Record<string, unknown>;
 };
 
 function makeStore(options: StoreOptions = {}) {
@@ -66,6 +69,7 @@ function makeStore(options: StoreOptions = {}) {
     activeSessionId,
     tabOrder = [],
     unloadedDescriptors = [],
+    ui,
   } = options;
 
   const tabDescriptors = Object.fromEntries([
@@ -93,6 +97,14 @@ function makeStore(options: StoreOptions = {}) {
       lastSessionId,
       isLoading: false,
     },
+    ...(ui
+      ? {
+          config: {
+            ...INITIAL_CONFIG_SLICE,
+            config: { ...INITIAL_CONFIG_SLICE.config, ui },
+          } as any,
+        }
+      : {}),
   });
 }
 
@@ -277,6 +289,33 @@ describe("sessionLifecycle", () => {
 
     expect(aborter.signal.aborted).toBe(true);
     expect(sessions(store).sessionsById["s1"]).toBeUndefined();
+  });
+
+  it("seeds the replacement empty runtime with the global merge settings", async () => {
+    // C3-I / D2 (方案.md §五.17/§五.19): deleting the last session creates a
+    // fresh empty runtime, and it must take the merge mirror from the same
+    // source as every other construction path — otherwise a global `false`
+    // silently degrades to the `?? true` fallback.
+    const store = makeStore({
+      catalog: [{ sessionId: "s1" }],
+      runtimes: { s1: initialSessionRuntime("s1", "Only") },
+      tabOrder: ["s1"],
+      activeSessionId: "s1",
+      ui: {
+        dontMergeReplyBubbles: false,
+        dontMergeHistoricalReplyBubbles: false,
+      },
+    });
+    store.mockIdeMessenger.responses["history/delete"] = undefined;
+
+    await run(store, deleteSessionRuntime({ sessionId: "s1" }));
+
+    const activeId = sessions(store).activeSessionId;
+    expect(activeId).toBeTruthy();
+    const replacement = sessions(store).sessionsById[activeId];
+    expect(replacement.history).toEqual([]);
+    expect(replacement.dontMergeReplyBubbles).toBe(false);
+    expect(replacement.dontMergeHistoricalReplyBubbles).toBe(false);
   });
 
   it("ensureSessionRuntime is a no-op when the runtime already exists", async () => {

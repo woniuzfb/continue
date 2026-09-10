@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createMockStore } from "../../util/test/mockStore";
 import type { ChatHistoryItemWithMessageId } from "./sessionHistory";
 import {
   applySessionStreamUpdate,
@@ -14,6 +15,7 @@ import {
   markSessionPersisted,
   markSessionSaveFailed,
   setActiveSessionId,
+  setAllSessionMergeSettings,
   setAppliedRulesByMessageId,
   setCompactionLoadingByMessageId,
   setSessionConversationSummary,
@@ -588,5 +590,114 @@ describe("clearSavedMergedReplyProvenance", () => {
     expect(
       next.sessionsById.s1.history[1].mergedReplyProvenance?.sourceMessageIds,
     ).toEqual(["a1", "a2"]);
+  });
+});
+
+// ── C3: merge settings projection (方案.md §五.17) ────────────────────────
+
+describe("sessionsSlice — merge settings projection", () => {
+  /** s1 active + dirty, s2 hidden + dirty, both carrying a stale `true` mirror. */
+  function twoRuntimes() {
+    let state = sessionsSlice.reducer(
+      initialSessionsState,
+      createSessionRuntime({
+        session: initialSessionRuntime("s1", "One", {
+          dontMergeReplyBubbles: true,
+          dontMergeHistoricalReplyBubbles: true,
+          dirty: true,
+          persistence: {
+            state: "pending",
+            revision: 3,
+            persistedRevision: 2,
+            hasPersistedBaseline: true,
+          },
+        }),
+      }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      createSessionRuntime({
+        session: initialSessionRuntime("s2", "Two", {
+          dontMergeReplyBubbles: true,
+          dontMergeHistoricalReplyBubbles: true,
+          dirty: true,
+          persistence: {
+            state: "pending",
+            revision: 5,
+            persistedRevision: 4,
+            hasPersistedBaseline: true,
+          },
+        }),
+      }),
+    );
+    return sessionsSlice.reducer(
+      state,
+      setActiveSessionId({ sessionId: "s1" }),
+    );
+  }
+
+  it("projects the new value onto every loaded runtime, not only the active one", () => {
+    // D1: the old shell effect only rewrote the runtime that happened to be
+    // active, so a hidden session kept the previous value — two truths for one
+    // global switch.
+    const state = twoRuntimes();
+
+    const next = sessionsSlice.reducer(
+      state,
+      setAllSessionMergeSettings({
+        dontMergeReplyBubbles: false,
+        dontMergeHistoricalReplyBubbles: false,
+      }),
+    );
+
+    expect(next.sessionsById.s1.dontMergeReplyBubbles).toBe(false);
+    expect(next.sessionsById.s1.dontMergeHistoricalReplyBubbles).toBe(false);
+    // The hidden runtime must not be skipped.
+    expect(next.sessionsById.s2.dontMergeReplyBubbles).toBe(false);
+    expect(next.sessionsById.s2.dontMergeHistoricalReplyBubbles).toBe(false);
+  });
+
+  it("is a pure runtime write: no dirty, no revision bump, no tab change", () => {
+    const state = twoRuntimes();
+
+    const next = sessionsSlice.reducer(
+      state,
+      setAllSessionMergeSettings({ dontMergeReplyBubbles: false }),
+    );
+
+    expect(next.activeSessionId).toBe("s1");
+    expect(next.tabOrder).toEqual(state.tabOrder);
+    expect(next.tabDescriptors).toEqual(state.tabDescriptors);
+    for (const id of ["s1", "s2"]) {
+      expect(next.sessionsById[id].dirty).toBe(true);
+      expect(next.sessionsById[id].historyRevision).toBe(
+        state.sessionsById[id].historyRevision,
+      );
+      expect(next.sessionsById[id].persistence).toEqual(
+        state.sessionsById[id].persistence,
+      );
+    }
+    // Only the field present in the payload is written.
+    expect(next.sessionsById.s1.dontMergeHistoricalReplyBubbles).toBe(true);
+    expect(next.sessionsById.s2.dontMergeHistoricalReplyBubbles).toBe(true);
+  });
+
+  it("never enqueues a save and leaves the visible tab untouched", () => {
+    // The projection is a config mirror, not a persistence boundary (方案.md
+    // §五.17): it must not look like a content mutation to any consumer.
+    const store = createMockStore({ sessions: twoRuntimes() as any });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    store.dispatch(
+      setAllSessionMergeSettings({
+        dontMergeReplyBubbles: false,
+        dontMergeHistoricalReplyBubbles: false,
+      }),
+    );
+
+    expect(request).not.toHaveBeenCalledWith("history/save", expect.anything());
+    const sessions = (store.getState() as any).sessions;
+    expect(sessions.activeSessionId).toBe("s1");
+    expect(sessions.sessionsById.s2.dontMergeReplyBubbles).toBe(false);
   });
 });

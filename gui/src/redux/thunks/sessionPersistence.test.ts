@@ -1031,10 +1031,13 @@ describe("sessionPersistence merged provenance lifecycle", () => {
 describe("sessionPersistence session catalog sync", () => {
   beforeEach(() => resetSessionSaveQueues());
 
+  // `dateCreated` is a plain string in the protocol; production Core stores
+  // `String(Date.now())` (a millisecond-timestamp string), so mirror that here
+  // rather than an ISO date — the catalog must never assume a date format.
   const savedMetadata = {
     sessionId: "s1",
     title: "Chat 1",
-    dateCreated: "2026-01-01T00:00:00.000Z",
+    dateCreated: "1767225600000",
     workspaceDirectory: "/w",
     messageCount: 3,
   };

@@ -1091,32 +1091,30 @@ export const sessionsSlice = createSlice({
       }
     },
     /**
-     * Per-session snapshot of the global `config.ui` merge settings
-     * (方案.md §十九.26).
+     * C3 (方案.md §五.17): project `config.ui`'s merge settings onto **every
+     * loaded runtime** in one transaction. `config.ui` is the authority; these
+     * two fields are only the reducer-readable mirror, so a config change must
+     * never leave a hidden session on a stale value.
      *
-     * Semantics: the global config is the default, the session runtime field is
-     * the effective value. It is seeded from config when the runtime is created
-     * and refreshed for whichever session is visible when the config values
-     * change (the shell's config effect). Never persisted.
+     * Pure runtime write: no dirty, no `historyRevision` /
+     * `persistence.revision` bump, no save, no IPC, no runtime creation, and no
+     * change to `activeSessionId` / descriptors.
      */
-    setSessionMergeSettings: (
+    setAllSessionMergeSettings: (
       state,
       action: PayloadAction<{
-        sessionId: string;
         dontMergeReplyBubbles?: boolean;
         dontMergeHistoricalReplyBubbles?: boolean;
       }>,
     ) => {
-      const session = findRuntime(state, action.payload.sessionId);
-      if (!session) {
-        return;
-      }
-      if (action.payload.dontMergeReplyBubbles !== undefined) {
-        session.dontMergeReplyBubbles = action.payload.dontMergeReplyBubbles;
-      }
-      if (action.payload.dontMergeHistoricalReplyBubbles !== undefined) {
-        session.dontMergeHistoricalReplyBubbles =
-          action.payload.dontMergeHistoricalReplyBubbles;
+      for (const session of Object.values(state.sessionsById)) {
+        if (action.payload.dontMergeReplyBubbles !== undefined) {
+          session.dontMergeReplyBubbles = action.payload.dontMergeReplyBubbles;
+        }
+        if (action.payload.dontMergeHistoricalReplyBubbles !== undefined) {
+          session.dontMergeHistoricalReplyBubbles =
+            action.payload.dontMergeHistoricalReplyBubbles;
+        }
       }
     },
     /**
@@ -1475,7 +1473,7 @@ export const {
   setSessionMainEditorAttachmentsRestore,
   setSessionInterrupted,
   setSessionLastNonEditSessionWasEmpty,
-  setSessionMergeSettings,
+  setAllSessionMergeSettings,
   setSessionGatheringContext,
   setSessionIsInEdit,
   setSessionCodeToEdit,

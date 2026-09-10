@@ -13,7 +13,8 @@ import {
   setSessionInterrupted,
   setTabLoadState,
 } from "../slices/sessionsSlice";
-import type { RootState, ThunkApiType } from "../store";
+import type { ThunkApiType } from "../store";
+import { mergeSettings } from "../util/mergeSettings";
 import { ensureMessageIds } from "../util/messageIds";
 import { extractFirstTurnItems } from "core/util/firstTurn";
 import { latestSummaryOf } from "../slices/sessionHistory";
@@ -32,15 +33,6 @@ import { hasUnresumableTurn } from "./sessionInterruption";
  * history, never touches another session's stream/paging state, and never
  * persists the model selection — that belongs to an explicit user change.
  */
-
-function mergeSettings(state: RootState) {
-  const ui = state.config.config?.ui;
-  return {
-    dontMergeReplyBubbles: ui?.dontMergeReplyBubbles ?? true,
-    dontMergeHistoricalReplyBubbles:
-      ui?.dontMergeHistoricalReplyBubbles ?? true,
-  };
-}
 
 export const projectSessionModelToActiveUi = createAsyncThunk<
   void,

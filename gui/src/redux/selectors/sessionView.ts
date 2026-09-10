@@ -119,13 +119,6 @@ export const selectActivePendingApprovalCount = (state: RootState): number =>
 export const selectActiveNewestToolbarPreviewForInput = (state: RootState) =>
   activeRuntime(state)?.newestToolbarPreviewForInput ?? EMPTY_PREVIEWS;
 
-export const selectActiveDontMergeReplyBubbles = (state: RootState): boolean =>
-  activeRuntime(state)?.dontMergeReplyBubbles ?? true;
-
-export const selectActiveDontMergeHistoricalReplyBubbles = (
-  state: RootState,
-): boolean => activeRuntime(state)?.dontMergeHistoricalReplyBubbles ?? true;
-
 export const selectActiveScrollState = (state: RootState) =>
   activeRuntime(state)?.scrollState;
 
@@ -472,21 +465,5 @@ export function useSessionScrollState() {
   const sessionId = useSessionId();
   return useAppSelector(
     (state) => activeRuntimeOf(state, sessionId)?.scrollState,
-  );
-}
-
-export function useSessionDontMergeReplyBubbles(): boolean {
-  const sessionId = useSessionId();
-  return useAppSelector(
-    (state) => activeRuntimeOf(state, sessionId)?.dontMergeReplyBubbles ?? true,
-  );
-}
-
-export function useSessionDontMergeHistoricalReplyBubbles(): boolean {
-  const sessionId = useSessionId();
-  return useAppSelector(
-    (state) =>
-      activeRuntimeOf(state, sessionId)?.dontMergeHistoricalReplyBubbles ??
-      true,
   );
 }

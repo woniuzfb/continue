@@ -15,6 +15,7 @@ import {
   setTabDescriptor,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
+import { mergeSettings } from "../util/mergeSettings";
 import { flushSessionSave } from "./sessionPersistence";
 import {
   activateSessionTab,
@@ -243,7 +244,12 @@ export const deleteSessionRuntime = createAsyncThunk<
         : undefined;
     const newEmptySession =
       index >= 0 && wasActive && replacementSessionId === undefined
-        ? initialSessionRuntime(uuidv4(), NEW_SESSION_TITLE)
+        ? initialSessionRuntime(uuidv4(), NEW_SESSION_TITLE, {
+            // C3 (方案.md §五.17/§五.19): the replacement empty runtime seeds the
+            // merge mirror through the same helper as every other construction
+            // path, so a global `false` never degrades to the `?? true` fallback.
+            ...mergeSettings(getState()),
+          })
         : undefined;
 
     if (index >= 0) {

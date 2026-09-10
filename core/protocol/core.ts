@@ -112,9 +112,11 @@ export interface SaveHistoryResponse {
    * `history/list`（这正是"新会话关闭后不可见、reload 后才出现"的根因）。
    *
    * **可选，仅为兼容旧宿主**（刻意与 `firstTurnItems` 的必填语义不同）：
-   * 旧 Core 不返回该字段。缺失是**安全的空操作** —— GUI 保持 catalog 不变、等下次
-   * 启动的 `history/list` 归一，不会留下过期权威值。但 GUI **不得**在缺失时自己
-   * 构造 metadata（猜 dateCreated / 用可见窗口估 messageCount）。
+   * 旧 Core 不返回该字段。缺失是**安全的空操作** —— GUI 不猜测、不覆盖 metadata，
+   * 保持现有 catalog entry，等待后续 `history/list` reconciliation；因此不会引入
+   * 伪造值，但现有 entry 可能在 reconciliation 之前**暂时陈旧**（不是"绝不会留下
+   * 过期值"）。GUI **不得**在缺失时自己构造 metadata（猜 dateCreated / 用可见窗口
+   * 估 messageCount）。
    */
   sessionMetadata?: BaseSessionMetadata;
 }

@@ -11,7 +11,7 @@ import { useWebviewListener } from "../hooks/useWebviewListener";
 import { useAppDispatch, useAppSelector } from "../redux/hooks";
 import { useStore } from "react-redux";
 import { selectActiveSessionId } from "../redux/selectors/sessionView";
-import { setSessionMergeSettings } from "../redux/slices/sessionsSlice";
+import { setAllSessionMergeSettings } from "../redux/slices/sessionsSlice";
 import type { RootState } from "../redux/store";
 import { setSessionCodeToEdit } from "../redux/slices/sessionsSlice";
 import { setShowDialog } from "../redux/slices/uiSlice";
@@ -53,7 +53,9 @@ const Layout = () => {
   const { mainEditor } = useMainEditor();
   const dialogMessage = useAppSelector((state) => state.ui.dialogMessage);
   // UI 设置镜像：流式不合并 + 历史会话不合并（均默认 true）。
-  // config 变化时同步到 session slice。
+  // config 变化时投影到**全部已加载 runtime**（C3，方案.md §五.17）：`config.ui`
+  // 是唯一权威源，隐藏 session 也必须同步，否则同一个全局开关会在不同已加载 tab
+  // 上表现不一致。投影是纯运行时写：不标 dirty、不保存、不发 IPC。
   const dontMergeReplyBubbles = useAppSelector(
     (state) => state.config.config?.ui?.dontMergeReplyBubbles ?? true,
   );
@@ -61,17 +63,13 @@ const Layout = () => {
     (state) => state.config.config?.ui?.dontMergeHistoricalReplyBubbles ?? true,
   );
   useEffect(() => {
-    const sessionId = selectActiveSessionId(store.getState());
-    if (sessionId) {
-      dispatch(
-        setSessionMergeSettings({
-          sessionId,
-          dontMergeReplyBubbles,
-          dontMergeHistoricalReplyBubbles,
-        }),
-      );
-    }
-  }, [dontMergeReplyBubbles, dontMergeHistoricalReplyBubbles, dispatch, store]);
+    dispatch(
+      setAllSessionMergeSettings({
+        dontMergeReplyBubbles,
+        dontMergeHistoricalReplyBubbles,
+      }),
+    );
+  }, [dontMergeReplyBubbles, dontMergeHistoricalReplyBubbles, dispatch]);
 
   const showDialog = useAppSelector((state) => state.ui.showDialog);
   const isInEdit = useAppSelector((store) => selectActiveIsInEdit(store));
