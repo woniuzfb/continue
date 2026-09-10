@@ -1,33 +1,46 @@
 /**
- * 方案.md §十二: the two history coordinate systems, and the single shift
- * between them.
+ * 方案.md §十二: the history coordinate systems, and the single shift between
+ * the two that the helpers below convert.
  *
- * - `absoluteHistoryIndex` — position in the **full on-disk history**. This is
- *   what Core speaks: `history/loadPage` offsets, `conversation/compact`, and
- *   `pagination.loadedOffset` are all absolute.
- * - `windowHistoryIndex` — position inside the **loaded window**
- *   (`session.history`). This is what rendered items and click handlers use.
+ * `absoluteHistoryIndex` is a zero-based position from the start of the full
+ * history. `conversation/compact.index` uses this coordinate.
  *
- * `pagination.loadedOffset` is the number of unloaded items *above* the window,
- * so the two systems differ by that one shift:
+ * `windowHistoryIndex` is a zero-based position inside the currently loaded
+ * `session.history` window.
  *
- *   absolute = window + loadedOffset
- *   window   = absolute - loadedOffset
+ * `pagination.loadedOffset` is the number of full-history items before the
+ * window and therefore acts as the window's absolute start coordinate.
  *
- * These helpers take the offset as a plain number instead of a whole session on
- * purpose. Two of the three call sites must use a **captured** offset rather than
- * the current one:
+ * `history/loadPage.offset` is different: it counts items skipped from the
+ * history tail and is not an absolute history index.
+ *
+ * MAPPING PRECONDITION — these helpers perform only the coordinate shift. They
+ * are valid only when the caller knows that each item in the relevant window
+ * maps 1:1 to an item in the full history.
+ *
+ * They do not prove that mapping. In particular, a GUI history window that has
+ * been bubble-merged may not be index-compatible with raw disk history:
+ * `sessionsSlice.prependSessionHistory` merges when
+ * `dontMergeHistoricalReplyBubbles` is false, so one GUI item can stand for
+ * several disk items. Callers must establish the mapping, or fully hydrate to a
+ * reliably addressable history, before using the converted index for an
+ * index-based disk operation. When the mapping cannot be established, prefer
+ * message identity — `messageId` is the first choice for mutations
+ * (方案.md §十二).
+ *
+ * The helpers take `loadedOffset` rather than a session on purpose. Two of the
+ * call sites must use a **captured** offset rather than the current one:
  *
  * - `sessionSubmit` converts before `loadFullHistory` resets the offset to 0;
- * - `compactConversation` converts with the render-time offset that matches the
- *   index the user actually clicked.
+ * - `compactConversation` pairs the offset captured by the same hook callback
+ *   that receives the window-relative index, and does not re-read `pagination`
+ *   after full hydration.
  *
- * A `session` parameter would invite passing the current runtime there, which is
- * precisely the wrong value. A number makes the capture explicit at each call
- * site, and keeps the helpers pure.
+ * A `session` parameter would invite passing the current runtime, which is the
+ * wrong value in exactly those places.
  *
- * Neither helper validates its result. Deciding what an out-of-window index means
- * (reject, or fall back to a full load) is the caller's business — see
+ * Neither helper validates its result: deciding whether an out-of-window index
+ * means "reject" or "fall back to a full load" belongs to the caller — see
  * `sessionView.useSessionSyntheticSummary`, which range-checks the window index
  * before indexing.
  */
