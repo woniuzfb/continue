@@ -84,9 +84,12 @@ export interface SaveHistoryResponse {
    * 磁盘首轮原始条目（未经 GUI bubble merge）。
    *
    * **必填，且是权威结果**：完整保存之后磁盘上是否有可提取的首轮是一个确定的
-   * 事实，Core 每次都计算，因此这里没有省略的余地。`[]` 是合法权威值，表示保存
-   * 后的 history 中确实没有首轮（例如首条不是 user 消息）。不要把它改成 optional
-   * 来掩盖协议未同步 —— GUI 在 success 之后正是用它整体覆盖本地值（含清空）。
+   * 事实，Core 每次都计算，因此这里没有省略的余地。`[]` 是合法权威值，表示保存后的
+   * 完整 history 中不存在可提取的 user 起始首轮 —— 即整段 history 里**没有任何 user
+   * 消息**。（不是"首条不是 user 消息"：提取器会在整段 history 中查找第一条 user，
+   * 因此 `[assistant, thinking, user, assistant]` 仍然能提取出首轮。）
+   * 不要把它改成 optional 来掩盖协议未同步 —— GUI 在 success 之后正是用它整体覆盖
+   * 本地值（含清空）。
    */
   firstTurnItems: ChatHistoryItem[];
   latestConversationSummary?: {
@@ -101,14 +104,19 @@ export interface SaveHistoryResponse {
 export interface LoadPageHistoryResponse {
   items: ChatHistoryItem[];
   /**
-   * 磁盘首轮原始条目（方案.md §五.5/§十三.4）。仅 offset === 0 时返回。
+   * 磁盘首轮原始条目（方案.md §五.5/§十三.4）。
+   *
+   * Core 在 `offset === 0` 时返回提取出的磁盘首轮；**非首屏返回 `[]`，而不是省略
+   * 该字段**（`latestConversationSummary` 才是非首屏直接 `undefined`）。旧宿主则
+   * 可能完全省略该字段 —— 协议层因此是 optional。
    *
    * **可选，仅为兼容旧宿主**（与 `SaveHistoryResponse.firstTurnItems` 的必填语义
    * 刻意不同，不要统一）：
    * - `undefined` = 该宿主尚未实现这个字段。GUI 必须按"首轮不可用"处理，
    *   归一化为 `[]` 后让请求历史走全量加载回退，**不得**据此推断"这是新会话"。
-   * - `[]` = 宿主明确返回了空首轮。它与 `undefined` 在实现上走同一条安全回退
-   *   （全量加载），因此不需要额外的状态枚举来区分二者。
+   * - `[]` = 无首轮：可能是宿主明确返回的空首轮，也可能是非首屏，也可能是旧宿主
+   *   省略后被归一化的结果。它与 `undefined` 共享同一条安全回退（全量加载），
+   *   当前实现因此不引入额外的状态枚举来区分它们。
    * - GUI 也不得仅凭数组长度判断会话状态或"可靠首轮"：可靠性的另外两个条件是
    *   `persistence.hasPersistedBaseline` 与 `persistence.state !== "failed"`。
    */

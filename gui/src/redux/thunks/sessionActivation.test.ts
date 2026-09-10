@@ -115,7 +115,7 @@ describe("loadSessionRuntime", () => {
     );
   });
 
-  it("treats a legacy page response without firstTurnItems as unavailable, not as an empty first turn", async () => {
+  it("normalizes a legacy page without firstTurnItems and falls back to full history", async () => {
     const store = makeStore(
       {
         ...emptySessions(),
@@ -135,9 +135,9 @@ describe("loadSessionRuntime", () => {
       session: { title: "Chat 1", mode: "chat", workspaceDirectory: "ws" },
     };
 
-    // The normalisation itself, asserted at its own layer: with two redundant
-    // `?? []` guards in the pipeline, an end-to-end assertion alone would still
-    // pass if either one were dropped.
+    // Asserted at its own layer too: `getSessionPage` is the protocol
+    // normalisation boundary — callers receive a required array even when an
+    // older host omitted the optional field.
     expect(
       (await getSessionPage(store.mockIdeMessenger, "s1", 4)).firstTurnItems,
     ).toEqual([]);
@@ -146,7 +146,7 @@ describe("loadSessionRuntime", () => {
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     // Normalised to an empty array: never left `undefined` (the fast path reads
-    // `.length` off it), and never read as "this session has no first turn".
+    // `.length` off it), and never treated as evidence of a new session.
     expect(session.firstTurnItems).toEqual([]);
 
     // The observable consequence: the send path must not build a reduced Local
