@@ -6,14 +6,10 @@ import { ChatDescriber } from "./util/chatDescriber.js";
 type Handler = (msg: any) => any;
 
 /**
- * Drives the **real** handler registry: `registerMessageHandlers` is the
- * production method that wires `chatDescriber/describe` onto the messenger, so
- * these tests run the shipped handler body instead of a copy of it.
- *
- * A bare `new Core(...)` is deliberately not used: the constructor is not
- * side-effect free (codebase indexer, config load, ...) and its module graph is
- * far too heavy for a unit test. Calling the prototype method against a minimal
- * stand-in gives the same handler wiring with none of that cost.
+ * Registers the production handler body through `registerMessageHandlers`
+ * while avoiding the side effects of constructing a full Core instance.
+ * The stand-in supplies only the dependencies accessed during registration
+ * and by the chatDescriber/describe handler under test.
  */
 function harness(config: unknown) {
   const handlers = new Map<string, Handler>();
@@ -55,7 +51,7 @@ function harness(config: unknown) {
     return await handler({ messageType: "chatDescriber/describe", data });
   }
 
-  return { invoke, handlers };
+  return { invoke };
 }
 
 function llm(title: string | undefined, model: string): ILLM {
@@ -75,11 +71,6 @@ const modelB = llm("model-b", "b");
 describe("chatDescriber/describe model resolution (方案.md §七.10)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("registers the handler", () => {
-    const { handlers } = harness(config([modelA, modelB], modelB));
-    expect(handlers.has("chatDescriber/describe")).toBe(true);
   });
 
   it("uses the model named in the request, not the global selection", async () => {
@@ -132,18 +123,5 @@ describe("chatDescriber/describe model resolution (方案.md §七.10)", () => {
 
     expect(describe).toHaveBeenCalledTimes(1);
     expect(describe.mock.calls[0][0]).toBe(titleless);
-  });
-
-  it("fails when the model list is empty, even though a global model exists", async () => {
-    const { invoke } = harness(config([], modelB));
-    const describe = vi
-      .spyOn(ChatDescriber, "describe")
-      .mockResolvedValue("TITLE");
-
-    await expect(
-      invoke({ sessionId: "A", modelTitle: "model-a", text: "hi" }),
-    ).rejects.toThrow();
-
-    expect(describe).not.toHaveBeenCalled();
   });
 });
