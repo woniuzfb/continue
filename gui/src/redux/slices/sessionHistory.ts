@@ -337,6 +337,22 @@ export function mergeSplitReplies(
     // 设计 §2.1: 按磁盘顺序递归展平组内成员的来源 id（不去重、不限定 role）。
     const sourceMessageIds = group.flatMap(sourceIdsOf);
 
+    // 方案.md §十一: 摘要由持有它的那一条 item 渲染（`ConversationSummary` 读
+    // `item.conversationSummary`），而它不一定落在组内第一条 assistant 上
+    // （compact 会写到用户点击的那一条）。只继承 `firstAssistant` 会**丢掉**摘要：
+    // 真实 SummaryCard 不再渲染，且保存后 Core 的 `latestSummaryOf` 也扫不到它
+    // （`core/util/history.ts:648-660`）⇒ 权威响应省略摘要 ⇒ GUI 清掉会话级摘要。
+    // 合并 bubble 代表整个组，因此必须携带组内持有的那份摘要。
+    //
+    // 取组内**最后**一条持有者：Core 的 `latestSummaryOf` 是从尾部倒扫（最后一条
+    // 胜出），合并后的 bubble 必须让同一份摘要存活，否则"哪份摘要生效"会变。
+    let summaryItem: ChatHistoryItemWithMessageId | undefined;
+    for (const member of group) {
+      if (member.conversationSummary) {
+        summaryItem = member;
+      }
+    }
+
     result.push({
       ...firstAssistant,
       toolCallStates: allToolCallStates.length
@@ -369,6 +385,11 @@ export function mergeSplitReplies(
             active: false,
           }
         : firstAssistant.reasoning,
+      // 摘要必须落到 bubble 上（见上）；唯一持有者时与 `...firstAssistant`
+      // 的结果相同，多条时按 Core 的"最后一条胜出"覆盖。
+      ...(summaryItem
+        ? { conversationSummary: summaryItem.conversationSummary }
+        : {}),
       // 设计 §2.1/§2.2: 合并后的 item 与磁盘不再同构 ⇒ 记录它代表的 raw 成员。
       mergedReplyProvenance: {
         sourceMessageIds,

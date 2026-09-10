@@ -3,6 +3,10 @@ import { useSessionId } from "../../components/mainInput/TipTapEditor/SessionSco
 import type { RootState } from "../store";
 import type { SessionRuntimeState } from "../slices/sessionsSlice";
 import { absoluteToWindowIndex } from "../util/historyIndex";
+import {
+  findGuiIndexContainingMessageId,
+  windowItemContainsMessageId,
+} from "../util/historyTarget";
 
 /**
  * Phase 4 component migration (方案.md §九).
@@ -319,22 +323,27 @@ export function useSessionSyntheticSummary():
         windowIndex >= 0 && windowIndex < session.history.length
           ? session.history[windowIndex]
           : undefined;
-      if (carrier?.message.id === summary.sourceMessageId) {
+      if (
+        carrier &&
+        windowItemContainsMessageId(carrier, summary.sourceMessageId)
+      ) {
         return undefined;
       }
       // The index may have drifted (bubble merge). Only treat the carrier as
       // trimmed when it really is absent, so a real carrier can never render
       // next to the synthetic separator.
-      return session.history.some(
-        (item) => item.message.id === summary.sourceMessageId,
-      )
+      return findGuiIndexContainingMessageId(
+        session.history,
+        summary.sourceMessageId,
+      ) >= 0
         ? undefined
         : summary;
     }
-    // Legacy snapshot without an index: fall back to an id scan.
-    return session.history.some(
-      (item) => item.message.id === summary.sourceMessageId,
-    )
+    // Legacy snapshot without an index: fall back to a scan.
+    return findGuiIndexContainingMessageId(
+      session.history,
+      summary.sourceMessageId,
+    ) >= 0
       ? undefined
       : summary;
   });

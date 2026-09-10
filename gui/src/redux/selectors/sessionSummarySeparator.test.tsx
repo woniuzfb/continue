@@ -155,6 +155,57 @@ describe("useSessionSyntheticSummary", () => {
     expect(result.current).toBeUndefined();
   });
 
+  it("returns nothing when the carrier lives inside a merged bubble", () => {
+    // Before the prepend the window was [u0, m0, m1] and the carrier m1 sat at
+    // absolute index 2. `prependSessionHistory` merged the group into one bubble
+    // whose own id is the group's FIRST assistant (m0), so now:
+    //   - the recorded index 2 is out of range, and
+    //   - an id scan can never find "m1" (no item carries that id any more).
+    // The membership scan is what keeps the separator from rendering at the head
+    // of the window, next to the real card the bubble now carries.
+    const bubble: ChatHistoryItemWithMessageId = {
+      ...item("m0", "assistant", "0 and 1"),
+      conversationSummary: "compacted",
+      mergedReplyProvenance: {
+        sourceMessageIds: ["m0", "m1"],
+        firstSourceMessageId: "m0",
+        lastSourceMessageId: "m1",
+      },
+    };
+    const store = makeStore({
+      window: [item("u0", "user", "q"), bubble],
+      loadedOffset: 0,
+      summary: { ...SUMMARY, sourceAbsoluteIndex: 2 },
+    });
+    const { result } = renderHook(() => useSessionSyntheticSummary(), {
+      wrapper: wrapperFor(store, "A"),
+    });
+
+    expect(result.current).toBeUndefined();
+  });
+
+  it("still separates when the merged bubble is not the carrier's bubble", () => {
+    // Provenance membership must be the discriminator — not "some bubble exists".
+    const otherBubble: ChatHistoryItemWithMessageId = {
+      ...item("n0", "assistant", "n0 and n1"),
+      mergedReplyProvenance: {
+        sourceMessageIds: ["n0", "n1"],
+        firstSourceMessageId: "n0",
+        lastSourceMessageId: "n1",
+      },
+    };
+    const store = makeStore({
+      window: [otherBubble],
+      loadedOffset: 0,
+      summary: { sourceMessageId: "m1", content: "compacted" },
+    });
+    const { result } = renderHook(() => useSessionSyntheticSummary(), {
+      wrapper: wrapperFor(store, "A"),
+    });
+
+    expect(result.current?.sourceMessageId).toBe("m1");
+  });
+
   it("falls back to an id scan for a legacy summary without an index", () => {
     const store = makeStore({
       summary: { sourceMessageId: "m1", content: "legacy" },

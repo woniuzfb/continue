@@ -35,6 +35,25 @@ export function findDiskIndexByMessageId(
 }
 
 /**
+ * Does this window item stand for `messageId`?
+ *
+ * Either its own id, or — when it is a bubble produced by `mergeSplitReplies` —
+ * membership in `mergedReplyProvenance.sourceMessageIds`. Exported so the read
+ * side (`useSessionSyntheticSummary`) and the lookup below share one definition
+ * of "the carrier is here"; two different predicates for the same question is
+ * what let a merged carrier be treated as absent.
+ */
+export function windowItemContainsMessageId(
+  item: ChatHistoryItemWithMessageId,
+  messageId: string,
+): boolean {
+  return (
+    item.message.id === messageId ||
+    item.mergedReplyProvenance?.sourceMessageIds.includes(messageId) === true
+  );
+}
+
+/**
  * GUI lookup: the item's own id **or** membership in its merge provenance.
  *
  * A merged bubble's own id is its group's first assistant (`mergeSplitReplies`
@@ -48,11 +67,8 @@ export function findGuiIndexContainingMessageId(
   guiHistory: ChatHistoryItemWithMessageId[],
   targetMessageId: string,
 ): number {
-  return guiHistory.findIndex(
-    (item) =>
-      item.message.id === targetMessageId ||
-      item.mergedReplyProvenance?.sourceMessageIds.includes(targetMessageId) ===
-        true,
+  return guiHistory.findIndex((item) =>
+    windowItemContainsMessageId(item, targetMessageId),
   );
 }
 

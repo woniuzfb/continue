@@ -17,9 +17,11 @@ function merged(
   id: string,
   content: string,
   sourceMessageIds: string[],
+  conversationSummary?: string,
 ): ChatHistoryItemWithMessageId {
   return {
     ...item(id, "assistant", content),
+    ...(conversationSummary ? { conversationSummary } : {}),
     mergedReplyProvenance: {
       sourceMessageIds,
       firstSourceMessageId: sourceMessageIds[0],
@@ -117,5 +119,53 @@ describe("mergeSplitReplies provenance", () => {
       "a2",
     ]);
     expect(bubble.mergedReplyProvenance?.lastSourceMessageId).toBe("a2");
+  });
+
+  it("carries a summary held by a non-first group member onto the bubble", () => {
+    // The compact carrier is whichever item the user compacted, so it can be a
+    // later fragment. Inheriting only `firstAssistant` would drop the summary:
+    // `ConversationSummary` renders from the item field, and Core's
+    // `latestSummaryOf` scans for the same field — a save would then erase it.
+    const history = [
+      item("u1", "user", "q1"),
+      item("a1", "assistant", "first group"),
+      item("u2", "user", "q2"),
+      item("a2", "assistant", "part one "),
+      item("t2", "thinking", "why"),
+      { ...item("a3", "assistant", "part two"), conversationSummary: "S" },
+    ];
+
+    const bubble = mergeSplitReplies(history)[3];
+
+    expect(bubble.message.id).toBe("a2");
+    expect(bubble.conversationSummary).toBe("S");
+  });
+
+  it("keeps the summary Core would have reported when several members have one", () => {
+    // Core scans the disk backwards and reports the LAST summary. The bubble
+    // stands for the whole group, so it must keep that same one.
+    const history = [
+      item("u1", "user", "q1"),
+      item("a1", "assistant", "first group"),
+      item("u2", "user", "q2"),
+      { ...item("a2", "assistant", "part one"), conversationSummary: "early" },
+      item("t2", "thinking", "why"),
+      { ...item("a3", "assistant", "part two"), conversationSummary: "late" },
+    ];
+
+    expect(mergeSplitReplies(history)[3].conversationSummary).toBe("late");
+  });
+
+  it("does not invent a summary when no member has one", () => {
+    const history = [
+      item("u1", "user", "q1"),
+      item("a1", "assistant", "first group"),
+      item("u2", "user", "q2"),
+      item("a2", "assistant", "part one "),
+      item("t2", "thinking", "why"),
+      item("a3", "assistant", "part two"),
+    ];
+
+    expect(mergeSplitReplies(history)[3].conversationSummary).toBeUndefined();
   });
 });
