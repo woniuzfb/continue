@@ -221,3 +221,42 @@ describe("Many sessions created", () => {
     expect(sessions.length).toBe(0);
   });
 });
+
+describe("Message ID survives the persistence path (Legacy ID P1)", () => {
+  const idSessionId = uuidv4();
+  const persistedMessageId = "persisted-message-id";
+
+  test("history/save keeps message.id on disk and load() returns it", async () => {
+    const session: Session = {
+      sessionId: idSessionId,
+      title: "message id session",
+      workspaceDirectory: "workspaceDir",
+      history: [
+        {
+          message: { role: "user", content: "hello", id: persistedMessageId },
+          contextItems: [],
+        },
+        {
+          message: { role: "assistant", content: "hi" },
+          contextItems: [],
+        },
+      ],
+    };
+
+    await historyManager.save(session);
+    const loaded = historyManager.load(idSessionId);
+
+    // Reverse assertion for P1: the Provider boundary strips `message.id`,
+    // but the persistence boundary must never do so.
+    expect((loaded.history[0].message as { id?: string }).id).toBe(
+      persistedMessageId,
+    );
+    // P1 itself never minted ids; P2 (`stabilizeWholeHistory`) now assigns one
+    // to the legacy item on load — a persisted id is still never rewritten.
+    const minted = (loaded.history[1].message as { id?: string }).id;
+    expect(typeof minted).toBe("string");
+    expect(minted).not.toBe(persistedMessageId);
+
+    await historyManager.delete(idSessionId);
+  });
+});

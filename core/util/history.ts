@@ -18,8 +18,14 @@ import {
   encodePromptLogDeltas,
 } from "./promptLogDelta.js";
 import { extractFirstTurnItems } from "./firstTurn.js";
+import {
+  invalidateMessageIdAllocations,
+  readMessageId,
+  stabilizeWholeHistory,
+} from "./messageIdStabilization.js";
 import { SessionPersistenceError } from "./sessionPersistenceError.js";
 import type { SaveHistoryResponse } from "../protocol/core";
+import type { MigrateMessageIdsResponse } from "../protocol/core";
 import type { ChatHistoryItem } from "../index";
 function safeParseArray<T>(
   value: string,
@@ -353,6 +359,11 @@ export class HistoryManager {
       // 重建差分编码的 promptLog（见 promptLogDelta.ts）：磁盘上的
       // promptDelta 在此恢复为完整 prompt，运行时下游无需感知磁盘格式。
       decodePromptLogDeltas(session.history);
+      // 老会话补 message.id（见 messageIdStabilization.ts）：在**完整数组**上
+      // 按下标分配，loadPage 的切片发生在这之后，因此页内各项天然一致，
+      // 且不需要任何 offset→绝对下标换算。只读：不写盘（写回是 P3 的
+      // 具名协议动作 history/migrateIds）。
+      stabilizeWholeHistory(sessionId, session.history);
       return session;
     } catch (e) {
       console.log(`Error loading session: ${e}`);
@@ -443,6 +454,37 @@ export class HistoryManager {
       return await this._saveUnlocked(session);
     } finally {
       await releaseSessionLock(lockDir);
+    }
+  }
+
+  /**
+   * Atomic session-file replacement: write a temp file in the same directory,
+   * then rename over the target (atomic on mainstream filesystems). Shared by
+   * `history/save` and `history/migrateIds`; the caller classifies the thrown
+   * error (SESSION_SAVE_FAILED vs MESSAGE_ID_MIGRATION_FAILED) so both paths
+   * keep their own structured error code.
+   */
+  private writeSessionFileAtomically(
+    sessionFilePath: string,
+    payload: unknown,
+  ): void {
+    const tmpSessionFilePath = `${sessionFilePath}.tmp-${process.pid}-${Date.now()}`;
+    try {
+      fs.writeFileSync(
+        tmpSessionFilePath,
+        JSON.stringify(payload, undefined, 2),
+      );
+      fs.renameSync(tmpSessionFilePath, sessionFilePath);
+    } catch (e) {
+      // 清理可能残留的临时文件，别把半截垃圾留在会话目录里。
+      try {
+        if (fs.existsSync(tmpSessionFilePath)) {
+          fs.unlinkSync(tmpSessionFilePath);
+        }
+      } catch {
+        // 忽略清理错误
+      }
+      throw e;
     }
   }
 
@@ -550,22 +592,9 @@ export class HistoryManager {
     // 把已存在的完整会话文件截断成半个 JSON（不可解析 = 整个会话丢失）。
     // 同一目录内的 rename 在主流文件系统上是原子操作。
     const sessionFilePath = getSessionFilePath(session.sessionId);
-    const tmpSessionFilePath = `${sessionFilePath}.tmp-${process.pid}-${Date.now()}`;
     try {
-      fs.writeFileSync(
-        tmpSessionFilePath,
-        JSON.stringify(orderedSession, undefined, 2),
-      );
-      fs.renameSync(tmpSessionFilePath, sessionFilePath);
+      this.writeSessionFileAtomically(sessionFilePath, orderedSession);
     } catch (e) {
-      // 清理可能残留的临时文件，别把半截垃圾留在会话目录里。
-      try {
-        if (fs.existsSync(tmpSessionFilePath)) {
-          fs.unlinkSync(tmpSessionFilePath);
-        }
-      } catch {
-        // 忽略清理错误
-      }
       throw new SessionPersistenceError(
         "SESSION_SAVE_FAILED",
         `[history] Failed to save session ${session.sessionId}: ${e}`,
@@ -651,6 +680,117 @@ export class HistoryManager {
       totalHistoryCount: finalHistory.length,
       sessionMetadata: savedMetadata,
     };
+  }
+
+  /**
+   * Legacy message ID migration (P3 of `bugs/Legacy_messageID_stabilization_设计.md`).
+   *
+   * Writes the ids this process already assigned (P2) into the session file —
+   * **only** into `message.id` slots that are still missing one. Deliberately
+   * does NOT go through `load()` + `save()`: those apply read-side normalization
+   * (attachment / image / promptLog-delta encoding) that would rewrite non-id
+   * fields, violating the "migration only adds ids" guarantee.
+   *
+   * Reuses the same per-session write lock as `history/save` (so the two can
+   * never interleave) and the same atomic tmp+rename replacement.
+   *
+   * Idempotent: when every item already has an id this is a **success no-op**
+   * that does not touch the file, so mtime / write counts stay put.
+   */
+  async migrateMessageIds(
+    sessionId: string,
+  ): Promise<MigrateMessageIdsResponse> {
+    const sessionFilePath = getSessionFilePath(sessionId);
+    const lockDir = await acquireSessionLock(sessionFilePath);
+    try {
+      // 1) Strict raw read — never load()'s "return an empty session" fallback,
+      //    which would silently turn a corrupt file into an empty migration.
+      if (!fs.existsSync(sessionFilePath)) {
+        throw new SessionPersistenceError(
+          "SESSION_FILE_INVALID",
+          `[history] Cannot migrate message IDs for ${sessionId}: session file does not exist.`,
+        );
+      }
+      let raw: Session;
+      try {
+        raw = JSON.parse(fs.readFileSync(sessionFilePath, "utf8"));
+      } catch (e) {
+        throw new SessionPersistenceError(
+          "SESSION_FILE_INVALID",
+          `[history] Cannot migrate message IDs for ${sessionId}: session file ` +
+            `is not valid JSON. Leaving it unchanged.`,
+          { cause: e },
+        );
+      }
+      if (!raw || typeof raw !== "object" || !Array.isArray(raw.history)) {
+        throw new SessionPersistenceError(
+          "SESSION_FILE_INVALID",
+          `[history] Cannot migrate message IDs for ${sessionId}: session file ` +
+            `has no history array. Leaving it unchanged.`,
+        );
+      }
+
+      // 2) Idempotency: nothing missing ⇒ success, and no write at all.
+      const missing = raw.history.filter((item) => !readMessageId(item)).length;
+      if (missing === 0) {
+        return { migrated: false, addedCount: 0 };
+      }
+
+      // 3) Stabilize a clone that has been normalized exactly like load() would,
+      //    so the fingerprint shape matches the table P2 built and we reuse the
+      //    ids already handed to the GUI instead of minting new ones.
+      const normalizedHistory: ChatHistoryItem[] = JSON.parse(
+        JSON.stringify(raw.history),
+      );
+      stripAttachedFileContent(normalizedHistory);
+      stripContentImageUrlParts(normalizedHistory);
+      decodePromptLogDeltas(normalizedHistory);
+      stabilizeWholeHistory(sessionId, normalizedHistory);
+
+      if (normalizedHistory.length !== raw.history.length) {
+        throw new SessionPersistenceError(
+          "MESSAGE_ID_MIGRATION_FAILED",
+          `[history] Refusing to migrate ${sessionId}: normalized history length ` +
+            `${normalizedHistory.length} != on-disk ${raw.history.length}.`,
+        );
+      }
+
+      // 4) Copy back ONLY the missing ids. Every other part of the raw object
+      //    (attachments, image urls, promptLog deltas, key order) stays byte-for-byte.
+      let addedCount = 0;
+      for (let i = 0; i < raw.history.length; i++) {
+        if (readMessageId(raw.history[i])) {
+          continue; // already persisted — never rewrite an existing id
+        }
+        const assigned = readMessageId(normalizedHistory[i]);
+        if (!assigned) {
+          throw new SessionPersistenceError(
+            "MESSAGE_ID_MIGRATION_FAILED",
+            `[history] Refusing to migrate ${sessionId}: index ${i} received no id.`,
+          );
+        }
+        (raw.history[i].message as { id?: string }).id = assigned;
+        addedCount++;
+      }
+
+      // 5) Atomic write of the raw object.
+      try {
+        this.writeSessionFileAtomically(sessionFilePath, raw);
+      } catch (e) {
+        throw new SessionPersistenceError(
+          "MESSAGE_ID_MIGRATION_FAILED",
+          `[history] Failed to write migrated message IDs for ${sessionId}: ${e}`,
+          { cause: e },
+        );
+      }
+
+      // 6) The whole file now carries ids ⇒ the process table is obsolete.
+      invalidateMessageIdAllocations(sessionId);
+
+      return { migrated: true, addedCount };
+    } finally {
+      await releaseSessionLock(lockDir);
+    }
   }
 
   /** 最近一次 compact 的摘要及其来源条目位置（方案.md §七.8.1）。 */

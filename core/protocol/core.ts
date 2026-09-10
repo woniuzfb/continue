@@ -75,6 +75,30 @@ export interface LoadPageHistoryRequest {
   limit: number;
 }
 
+export interface MigrateMessageIdsRequest {
+  id: string;
+}
+
+/**
+ * `history/migrateIds` (legacy message ID stabilization P3): write the ids the
+ * running process already assigned (P2) into the session file, **only** into
+ * `message.id` slots that are still missing one.
+ *
+ * Success covers both "wrote ids" and "nothing to migrate" — the latter is a
+ * no-op, not an error, and must not touch the file. Failures are thrown as
+ * `SessionPersistenceError` (→ the webview response's optional `errorCode`),
+ * consistent with `history/save`:
+ *
+ *   SESSION_FILE_INVALID          file missing / unreadable / unparsable
+ *   MESSAGE_ID_MIGRATION_FAILED   shape mismatch in-lock, or the write failed
+ */
+export interface MigrateMessageIdsResponse {
+  /** True when ids were written to disk; false when the file already had them all. */
+  migrated: boolean;
+  /** Number of `message.id` slots filled. 0 when `migrated` is false. */
+  addedCount: number;
+}
+
 /**
  * 方案.md §七.8.1: `history/save` returns the authoritative post-merge data.
  * GUI 只在 success 后更新，绝不从 truncated window 重算。
@@ -179,6 +203,7 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   "history/loadPage": [LoadPageHistoryRequest, LoadPageHistoryResponse];
   "history/searchContent": [{ query: string }, HistorySearchResult[]];
   "history/save": [Session, SaveHistoryResponse];
+  "history/migrateIds": [MigrateMessageIdsRequest, MigrateMessageIdsResponse];
   "history/share": [{ id: string; outputDir?: string }, void];
   "history/clear": [undefined, void];
   "devdata/log": [DevDataLogEvent, void];

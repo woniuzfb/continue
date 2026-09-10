@@ -1,4 +1,9 @@
-import { ChatMessage, LLMOptions } from "..";
+import {
+  AssistantChatMessage,
+  ChatMessage,
+  LLMOptions,
+  ToolResultChatMessage,
+} from "..";
 
 import { allModelProviders } from "@continuedev/llm-info";
 import { LlmInfo } from "@continuedev/llm-info/dist/types";
@@ -197,5 +202,73 @@ describe("BaseLLM", () => {
         });
       });
     });
+  });
+});
+
+describe("BaseLLM.streamChat provider boundary", () => {
+  it("hands _streamChat messages without the persisted message.id, keeping provider ids", async () => {
+    let captured: ChatMessage[] | undefined;
+
+    class CapturingLLM extends BaseLLM {
+      static providerName = "openai";
+      static defaultOptions: Partial<LLMOptions> = {
+        model: "dummy-model",
+        contextLength: 200_000,
+        completionOptions: {
+          model: "some-model",
+          maxTokens: 4096,
+        },
+        apiBase: "https://api.test-api-dummy.com/v1/",
+      };
+
+      protected async *_streamChat(
+        messages: ChatMessage[],
+      ): AsyncGenerator<ChatMessage> {
+        captured = messages;
+        yield { role: "assistant", content: "ok" };
+      }
+    }
+
+    const llm = new CapturingLLM({ model: "dummy-model" });
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "hi",
+        id: "persisted-assistant",
+        toolCalls: [
+          {
+            id: "call-1",
+            type: "function",
+            function: { name: "read_file", arguments: "{}" },
+          },
+        ],
+        metadata: { reasoning_id: "reasoning-1" },
+      },
+      {
+        role: "tool",
+        content: "file contents",
+        toolCallId: "call-1",
+        id: "persisted-tool",
+      },
+    ];
+
+    for await (const _chunk of llm.streamChat(
+      messages,
+      new AbortController().signal,
+      { log: false },
+      { precompiled: true },
+    )) {
+      // drain the stream
+    }
+
+    expect(captured).toBeDefined();
+    expect(captured!.every((m) => !("id" in m))).toBe(true);
+    const assistant = captured![0] as AssistantChatMessage;
+    expect(assistant.toolCalls?.[0].id).toBe("call-1");
+    expect(assistant.metadata?.reasoning_id).toBe("reasoning-1");
+    expect((captured![1] as ToolResultChatMessage).toolCallId).toBe("call-1");
+
+    // The caller's array is untouched: disk persistence still owns these ids.
+    expect((messages[0] as { id?: string }).id).toBe("persisted-assistant");
   });
 });

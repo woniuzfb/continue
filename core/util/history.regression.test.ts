@@ -721,7 +721,21 @@ describe("HistoryManager inline-image persistence slimming (regression)", () => 
     const reloaded = historyManager.load(sessionId);
     await historyManager.save(reloaded);
     const second = fs.readFileSync(getSessionFilePath(sessionId), "utf8");
-    expect(second).toBe(first);
+
+    // P2（legacy message ID 稳定化，见 util/messageIdStabilization.ts）会在
+    // load() 时给缺 id 的老 item 补 message.id，于是第一轮 save→load→save 会
+    // 多出这一个字段。除它之外**不得有任何膨胀或形态变化**。
+    const firstParsed = JSON.parse(first);
+    const secondParsed = JSON.parse(second);
+    expect(secondParsed.history[0].message.id).toEqual(expect.any(String));
+    delete secondParsed.history[0].message.id;
+    expect(secondParsed).toEqual(firstParsed);
+
+    // 从第二轮起必须**字节**幂等：磁盘已有 id，stabilize 走"已有 id 不变"分支。
+    const reloadedAgain = historyManager.load(sessionId);
+    await historyManager.save(reloadedAgain);
+    const third = fs.readFileSync(getSessionFilePath(sessionId), "utf8");
+    expect(third).toBe(second);
   });
 
   it("slims legacy fat files on load (migration path)", async () => {

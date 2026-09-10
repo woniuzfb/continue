@@ -35,7 +35,10 @@ import { isAbortError } from "../util/isAbortError.js";
 import { isLemonadeInstalled } from "../util/lemonadeHelper.js";
 import { Logger } from "../util/Logger.js";
 import mergeJson from "../util/merge.js";
-import { renderChatMessage } from "../util/messageContent.js";
+import {
+  renderChatMessage,
+  stripRuntimeMessageIdsForProvider,
+} from "../util/messageContent.js";
 import { isOllamaInstalled } from "../util/ollamaHelper.js";
 import { withExponentialBackoff } from "../util/withExponentialBackoff.js";
 
@@ -1213,13 +1216,21 @@ export abstract class BaseLLM implements ILLM {
 
     completionOptions = this._modifyCompletionOptions(completionOptions);
 
-    let messages = _messages;
+    // Provider request boundary: strip the persisted `message.id` (disk
+    // identity) before anything is compiled or converted into provider
+    // format. Disk persistence keeps IDs (see util/history.ts); every provider
+    // inherits this method, so this is the single shared strip point. The GUI
+    // strips again in constructMessages so metrics/title token accounting
+    // matches the real send (llm/compileChat does not pass through here).
+    const providerMessages = stripRuntimeMessageIdsForProvider(_messages);
+
+    let messages = providerMessages;
 
     // If not precompiled, compile the chat messages
     if (!messageOptions?.precompiled) {
       const { compiledChatMessages } = compileChatMessages({
         modelName: completionOptions.model,
-        msgs: _messages,
+        msgs: providerMessages,
         knownContextLength: this._contextLength,
         maxTokens: completionOptions.maxTokens ?? DEFAULT_MAX_TOKENS,
         supportsImages: this.supportsImages(),

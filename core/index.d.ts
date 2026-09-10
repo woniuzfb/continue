@@ -404,6 +404,12 @@ export interface ToolResultChatMessage {
   role: "tool";
   content: string;
   toolCallId: string;
+  /**
+   * Persisted message identity (disk identity). Optional: legacy sessions have
+   * no IDs until the Core stabilization migration writes them back. NOT the
+   * provider tool-call id — that is `toolCallId` above.
+   */
+  id?: string;
   /** Arbitrary per-message metadata (IDs, provider-specific info, etc.) */
   metadata?: Record<string, unknown>;
 }
@@ -411,6 +417,12 @@ export interface ToolResultChatMessage {
 export interface UserChatMessage {
   role: "user";
   content: MessageContent;
+  /**
+   * Persisted message identity (disk identity). Optional: legacy sessions have
+   * no IDs until the Core stabilization migration writes them back. Distinct
+   * from provider / tool-call / reasoning ids.
+   */
+  id?: string;
   /** Arbitrary per-message metadata (IDs, provider-specific info, etc.) */
   metadata?: Record<string, unknown>;
 }
@@ -425,6 +437,12 @@ export interface ThinkingChatMessage {
     signature?: string;
     [key: string]: any;
   }[];
+  /**
+   * Persisted message identity (disk identity). Optional: legacy sessions have
+   * no IDs until the Core stabilization migration writes them back. NOT the
+   * provider reasoning id — that lives in `metadata` / `reasoning_details`.
+   */
+  id?: string;
   /** Arbitrary per-message metadata (IDs, provider-specific info, etc.) */
   metadata?: Record<string, unknown>;
 }
@@ -455,6 +473,12 @@ export interface AssistantChatMessage {
   content: MessageContent;
   toolCalls?: ToolCallDelta[];
   usage?: Usage;
+  /**
+   * Persisted message identity (disk identity). Optional: legacy sessions have
+   * no IDs until the Core stabilization migration writes them back. NOT a
+   * provider id — `toolCalls[].id` / `usage` keep their own meaning.
+   */
+  id?: string;
   /** Arbitrary per-message metadata (IDs, provider-specific info, etc.) */
   metadata?: Record<string, unknown>;
 }
@@ -462,10 +486,26 @@ export interface AssistantChatMessage {
 export interface SystemChatMessage {
   role: "system";
   content: string;
+  /**
+   * Persisted message identity (disk identity). Optional: legacy sessions have
+   * no IDs until the Core stabilization migration writes them back. Distinct
+   * from provider / tool-call / reasoning ids.
+   */
+  id?: string;
   /** Arbitrary per-message metadata (IDs, provider-specific info, etc.) */
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Union of every message shape carried in `Session.history`.
+ *
+ * `id` (on each variant) is the **persisted** message identity and is the key
+ * that appliedRules / compactionLoading / history mutations resolve against.
+ * It is deliberately separate from every provider-level identifier
+ * (`toolCall.id`, reasoning ids, request ids, provider item ids) and must
+ * survive disk round-trips. It is stripped only at the Provider request
+ * boundary via `stripRuntimeMessageIdsForProvider`.
+ */
 export type ChatMessage =
   | UserChatMessage
   | AssistantChatMessage

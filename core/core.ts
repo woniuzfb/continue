@@ -333,6 +333,12 @@ export class Core {
       return historyManager.save(msg.data);
     });
 
+    on("history/migrateIds", async (msg) => {
+      // legacy message ID 具名迁移（P3）：只补缺失的 message.id，不改变其他字段。
+      // 失败以 SessionPersistenceError 抛出 → 宿主映射成 errorCode。
+      return historyManager.migrateMessageIds(msg.data.id);
+    });
+
     on("history/share", async (msg) => {
       const session = historyManager.load(msg.data.id);
       const outputDir = msg.data.outputDir;
