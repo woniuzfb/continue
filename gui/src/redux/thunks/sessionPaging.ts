@@ -317,11 +317,13 @@ export const reconcilePaginationAfterPersist = createAsyncThunk<
  * 设计 §4/§5: turn one stable message identity into the two coordinates a
  * mutation needs.
  *
- * This is the only place that reaches for the **raw disk array**, and it is
- * called only when the window holds a merge that is not on disk yet
- * (`windowHasUnsavedMerge`). When the window is still index-compatible with disk
- * the callers keep the provable `loadedOffset + windowIndex` arithmetic and
- * never get here — the default configuration therefore issues no extra read.
+ * This is the single mutation-resolution entry point that obtains the raw disk
+ * array — either through the existing `loadFullHistory` (which also hydrates the
+ * window) or through a read-only `history/load`. It is called only when the
+ * window holds a merge that is not on disk yet (`windowHasUnsavedMerge`); while
+ * the window is still index-compatible with disk the callers keep the provable
+ * `loadedOffset + windowIndex` arithmetic and never get here — the default
+ * configuration therefore issues no extra read.
  *
  * Two sources, one shape:
  *

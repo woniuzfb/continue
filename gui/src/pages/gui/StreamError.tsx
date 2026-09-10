@@ -104,13 +104,25 @@ const StreamErrorDialog = ({
           }
         }
 
+        // No `user`/`tool` item in the loaded window means the turn this dialog is
+        // about sits outside it (lazy history). Abort explicitly: resending a
+        // previous turn is **not** the same as sending a new one, so neither
+        // `index: 0` (in a window that no longer starts at the conversation's
+        // first item) nor `undefined` (append) may stand in for the real target.
+        // The dialog stays open so the user keeps seeing the error and can decide.
+        if (index === -1) {
+          console.warn(
+            "Cannot resend: the target message is no longer in the loaded history",
+          );
+          return;
+        }
+
         if (!mainEditor) {
           console.error("Main editor not found, cannot resubmit message.");
           return;
         }
 
-        const editorState =
-          index === -1 ? mainEditor.getJSON() : history[index].editorState;
+        const editorState = history[index].editorState;
 
         void dispatch(
           submitSessionInput({
@@ -120,11 +132,7 @@ const StreamErrorDialog = ({
               noContext: true,
               useCodebase: false,
             },
-            // A window with no `user`/`tool` item means the target is outside the
-            // loaded window, so resend as a new message: `undefined` appends.
-            // Falling back to `0` used to mean "the start of the conversation",
-            // but in a truncated window it means "the window's first item".
-            index: index === -1 ? undefined : index,
+            index,
           }),
         );
         dispatch(setShowDialog(false));
