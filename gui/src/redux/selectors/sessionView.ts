@@ -2,6 +2,7 @@ import { useAppSelector } from "../hooks";
 import { useSessionId } from "../../components/mainInput/TipTapEditor/SessionScope";
 import type { RootState } from "../store";
 import type { SessionRuntimeState } from "../slices/sessionsSlice";
+import { absoluteToWindowIndex } from "../util/historyIndex";
 
 /**
  * Phase 4 component migration (方案.md §九).
@@ -313,10 +314,10 @@ export function useSessionSyntheticSummary():
     if (absoluteIndex !== undefined) {
       // O(1) check at the carrier's expected position; the id comparison
       // guards against a stale index after an edit or a merge.
-      const relativeIndex = absoluteIndex - loadedOffset;
+      const windowIndex = absoluteToWindowIndex(loadedOffset, absoluteIndex);
       const carrier =
-        relativeIndex >= 0 && relativeIndex < session.history.length
-          ? session.history[relativeIndex]
+        windowIndex >= 0 && windowIndex < session.history.length
+          ? session.history[windowIndex]
           : undefined;
       if (carrier?.message.id === summary.sourceMessageId) {
         return undefined;

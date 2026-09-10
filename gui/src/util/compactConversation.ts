@@ -9,6 +9,7 @@ import {
 } from "../redux/slices/sessionsSlice";
 import { loadFullHistory } from "../redux/thunks/sessionPaging";
 import { enqueueSessionSave } from "../redux/thunks/sessionPersistence";
+import { windowToAbsoluteIndex } from "../redux/util/historyIndex";
 import {
   selectSessionHistory,
   useSessionHistoryLoadedOffset,
@@ -33,7 +34,7 @@ export const useCompactConversation = () => {
     // 把相对 index 偏移为完整 history 中的绝对 index。
     let absoluteIndex = index;
     if (historyTruncated) {
-      absoluteIndex = index + historyLoadedOffset;
+      absoluteIndex = windowToAbsoluteIndex(historyLoadedOffset, index);
       try {
         await dispatch(loadFullHistory({ sessionId })).unwrap();
       } catch (e) {
@@ -135,7 +136,11 @@ export const useDeleteCompaction = () => {
     // 懒加载兼容：前端 index 是基于部分 history 的相对位置，
     // deleteCompaction reducer 直接按 index 操作 state.history，
     // 需偏移为完整 history 中的绝对 index。先加载完整 history。
-    let absoluteIndex = options?.absolute ? index : index + historyLoadedOffset;
+    // `{ absolute: true }` comes from the synthetic separator, which already
+    // knows the carrier's absolute index — it must not be shifted again.
+    let absoluteIndex = options?.absolute
+      ? index
+      : windowToAbsoluteIndex(historyLoadedOffset, index);
     if (historyTruncated) {
       try {
         await dispatch(loadFullHistory({ sessionId })).unwrap();

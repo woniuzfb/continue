@@ -17,6 +17,7 @@ import {
   selectSessionById,
   selectSessionChatModel,
 } from "../selectors/sessions";
+import { windowToAbsoluteIndex } from "../util/historyIndex";
 import {
   markSessionDirty,
   resetSessionCodeBlockApplyIndex,
@@ -106,9 +107,12 @@ export const submitSessionInput = createAsyncThunk<
         if (!pre) {
           throw new Error("Session no longer exists");
         }
-        let indexOffset = 0;
+        // Captured from the pre-await snapshot on purpose: `loadFullHistory`
+        // resets `loadedOffset` to 0, but the caller's index is relative to the
+        // window that was visible when it was passed (方案.md §十二).
+        let loadedOffset = 0;
         if (pre.pagination.truncated) {
-          indexOffset = pre.pagination.loadedOffset ?? 0;
+          loadedOffset = pre.pagination.loadedOffset ?? 0;
           await dispatch(loadFullHistory({ sessionId })).unwrap();
         }
 
@@ -122,7 +126,9 @@ export const submitSessionInput = createAsyncThunk<
         }
 
         const inputIndex =
-          index !== undefined ? index + indexOffset : session.history.length;
+          index !== undefined
+            ? windowToAbsoluteIndex(loadedOffset, index)
+            : session.history.length;
         const existingMessage =
           inputIndex >= 0 && inputIndex < session.history.length
             ? session.history[inputIndex].message

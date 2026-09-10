@@ -337,4 +337,38 @@ describe("useDeleteCompaction", () => {
     const visible = selectSessionById(store.getState() as any, "B")!;
     expect(visible.history[0].message.content).toBe("visible");
   });
+
+  it("does not re-offset the absolute index a synthetic separator passes", async () => {
+    // The separator reports `sourceAbsoluteIndex`, which is already absolute, so
+    // it passes `{ absolute: true }` (SyntheticConversationSummary.tsx). Shifting
+    // it by the window offset again would target 2 + 4 = 6 — a different message
+    // (here: one past the end of the history), silently deleting nothing.
+    const store = makeStore({
+      scopeSessionId: "A",
+      activeSessionId: "A",
+      truncated: true,
+    });
+    const diskHistory = FULL_HISTORY.map((entry, i) =>
+      i === 2 ? { ...entry, conversationSummary: "old summary" } : entry,
+    );
+    store.mockIdeMessenger.responses["history/load"] = {
+      sessionId: "A",
+      title: "Chat",
+      workspaceDirectory: "/w",
+      history: diskHistory,
+    } as any;
+
+    const { result } = renderHook(() => useDeleteCompaction(), {
+      wrapper: wrapperFor(store, "A"),
+    });
+
+    await act(async () => {
+      await result.current(2, { absolute: true });
+    });
+
+    // The full load merged the frozen head back in, so the carrier is absolute 2.
+    const after = selectSessionById(store.getState() as any, "A")!;
+    expect(after.history[2].message.id).toBe("m2");
+    expect(after.history[2].conversationSummary).toBeUndefined();
+  });
 });
