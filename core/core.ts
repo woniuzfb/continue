@@ -346,7 +346,13 @@ export class Core {
       const targetModel = config?.modelsByRole.chat.find(
         (model) => (model.title ?? model.model) === modelTitle,
       );
-      return targetModel;
+      // The GUI's debug switch rides along: the same setting that enables `[submit-latency]`
+      // in the webview console also enables the save's phase breakdown here (扩展宿主
+      // DevTools). 方案.md §7.2.2.
+      return {
+        targetModel,
+        logTimings: config?.ui?.showSubmitLatencyLogs === true,
+      };
     };
 
     on("history/save", async (msg) => {
@@ -363,21 +369,24 @@ export class Core {
       //
       // 解析失败 / schema 不一致都**不阻断保存**：保存是数据完整性路径，计量只是派生值。
       // 此时不写 metrics、不回传 Result，GUI 保留 last-known 数值并等待下一次计量。
-      const targetModel = await resolveMeasurementModel(measurement.modelTitle);
+      const { targetModel, logTimings } = await resolveMeasurementModel(
+        measurement.modelTitle,
+      );
       if (!targetModel) {
         console.warn(
           `[history/save] full-conversation measurement skipped: model not found for title "${measurement.modelTitle}"`,
         );
-        return historyManager.save(msg.data);
+        return historyManager.save(msg.data, { logTimings });
       }
       if (!measurementSchemaMatches(measurement)) {
         console.warn(
           `[history/save] full-conversation measurement skipped: schema ${measurement.schemaVersion} !== ${FULL_CONVERSATION_METRICS_SCHEMA_VERSION}`,
         );
-        return historyManager.save(msg.data);
+        return historyManager.save(msg.data, { logTimings });
       }
 
       return historyManager.save(msg.data, {
+        logTimings,
         measureFullConversation: (finalHistory) =>
           measureFullConversation({
             history: finalHistory,
@@ -406,7 +415,9 @@ export class Core {
           `history/measureConversation: unsupported measurement schema ${measurement.schemaVersion}`,
         );
       }
-      const targetModel = await resolveMeasurementModel(measurement.modelTitle);
+      const { targetModel } = await resolveMeasurementModel(
+        measurement.modelTitle,
+      );
       if (!targetModel) {
         throw new Error(
           `history/measureConversation: model not found for title "${measurement.modelTitle}"`,

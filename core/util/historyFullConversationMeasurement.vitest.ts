@@ -571,3 +571,51 @@ describe("measureFullConversation — construction parity with the send path", (
     ).toBe(false);
   });
 });
+
+describe("history/save phase timings (§7.2.2)", () => {
+  it("logs the phase breakdown only when asked", async () => {
+    const sessionId = uuidv4();
+    const lines: string[] = [];
+    const spy = vi
+      .spyOn(console, "log")
+      .mockImplementation((...args: any[]) => {
+        const line = String(args[0] ?? "");
+        if (line.startsWith("[submit-latency] save")) {
+          lines.push(line);
+        }
+      });
+
+    // Default: silent. A save happens constantly; diagnostics must be opt-in.
+    await historyManager.save(sessionWith(uuidv4(), history()));
+    expect(lines).toEqual([]);
+
+    await historyManager.save(sessionWith(sessionId, history()), {
+      logTimings: true,
+      measureFullConversation: (finalHistory) =>
+        measureFullConversation({
+          history: finalHistory,
+          request: measurement(),
+          measure: realMeasure(),
+        }),
+    });
+    spy.mockRestore();
+
+    expect(lines).toHaveLength(1);
+    // Every phase a slow save could hide in is named, with the total last.
+    for (const phase of [
+      "lock=",
+      "strip=",
+      "delta=",
+      "measure=",
+      "write=",
+      "catalog=",
+      "response=",
+      "total=",
+    ]) {
+      expect(lines[0]).toContain(phase);
+    }
+    // No content, no paths: the line is a timing breakdown and nothing else.
+    expect(lines[0]).not.toContain("SYSTEM");
+    expect(lines[0]).not.toContain("/");
+  });
+});

@@ -269,6 +269,15 @@ export type SaveHistoryOptions = {
   measureFullConversation?: (
     finalHistory: ChatHistoryItem[],
   ) => FullConversationMetricsResult;
+  /**
+   * 方案.md §7.2.2：把这一次保存的分段耗时打到控制台（**扩展宿主** DevTools），前缀
+   * `[submit-latency] save …`：等锁 / 瘦身 / 差分编码 / 计量 / 写盘 / catalog / 响应。
+   * 由 GUI 的 debug 开关（`config.ui.showSubmitLatencyLogs`）决定，默认关闭。
+   *
+   * 起因：真实会话的一次终态保存被测到 3.3s，而载荷只有 4.3MB —— 只看总时长无法判断是
+   * 等锁（`acquireSessionLock` 以 25ms 重试、上限 10s）、读盘、变换、计量还是写盘。
+   */
+  logTimings?: boolean;
 };
 
 /**
@@ -488,13 +497,39 @@ export class HistoryManager {
     // 用跨进程锁串行化整个“读→合并→写”，使两个 IDE 窗口编辑同一 session 时不会
     // 互相覆盖。finally 保证任何退出路径（数据完整性守卫的 return、抛异常）都释放锁。
     // 异步版：等待锁期间不再阻塞事件循环（见 sleep/acquireSessionLock）。
+    //
+    // 分段时间（方案.md §7.2.2）：只在调用方要求时收集。真实会话里一次终态保存被测到
+    // 3.3s（载荷仅 4.3MB），单看总时长无法判断是等锁、读盘、变换、计量还是写盘 ——
+    // 而 `acquireSessionLock` 会以 25ms 间隔重试直到 10s，所以“等锁”完全可能是那个量级。
+    const timings: string[] = [];
+    const mark = (label: string, startedAt: number) => {
+      if (options?.logTimings) {
+        timings.push(
+          `${label}=${(performance.now() - startedAt).toFixed(0)}ms`,
+        );
+      }
+    };
+    const totalStartedAt = performance.now();
+    const lockStartedAt = performance.now();
     const lockDir = await acquireSessionLock(
       getSessionFilePath(session.sessionId),
     );
+    mark("lock", lockStartedAt);
+    if (options?.logTimings && !lockDir) {
+      timings.push("lockAcquired=false");
+    }
     try {
-      return await this._saveUnlocked(session, options);
+      return await this._saveUnlocked(session, options, mark);
     } finally {
       await releaseSessionLock(lockDir);
+      if (options?.logTimings) {
+        timings.push(
+          `total=${(performance.now() - totalStartedAt).toFixed(0)}ms`,
+        );
+        console.log(
+          `[submit-latency] save ${session.sessionId} ${timings.join(" ")}`,
+        );
+      }
     }
   }
 
@@ -532,6 +567,7 @@ export class HistoryManager {
   private async _saveUnlocked(
     session: Session,
     options?: SaveHistoryOptions,
+    mark: (label: string, startedAt: number) => void = () => {},
   ): Promise<SaveHistoryResponse> {
     // Save the main session json file
     // Explicitely rewriting here to influence the written key order in the file!
@@ -595,14 +631,18 @@ export class HistoryManager {
 
     // 写盘瘦身（见 stripAttachedFileContent 注释）：覆盖合并后的完整 history
     // （含从磁盘读回的冻结头部），块体不落盘。幂等，重复剥离无副作用。
+    const stripStartedAt = performance.now();
     stripAttachedFileContent(finalHistory);
     // 同上：content.imageUrl 与 editorState 重复存图，落盘只留 editorState
     // 那份（见 stripContentImageUrlParts 注释）。幂等。
     stripContentImageUrlParts(finalHistory);
+    mark("strip", stripStartedAt);
 
     // promptLog 增量落盘（见 promptLogDelta.ts）：对前一条 prompt 做前后缀
     // 差分，消除滚动上下文的平方级重复存储。加载时由 load() 重建。
+    const deltaStartedAt = performance.now();
     encodePromptLogDeltas(finalHistory);
+    mark("delta", deltaStartedAt);
 
     // 方案.md §五.16.4/§五.16.7：携带计量请求时，在**同一把锁内**用这份 finalHistory
     // 构造完整逻辑会话并 no-prune 计量；metrics 与 history 一起原子写盘。
@@ -612,7 +652,9 @@ export class HistoryManager {
     // 下一次保存/计量会收敛。
     let fullConversationMetrics: FullConversationMetricsResult | undefined;
     if (options?.measureFullConversation) {
+      const measureStartedAt = performance.now();
       const measured = options.measureFullConversation(finalHistory);
+      mark("measure", measureStartedAt);
       // 方案.md §7.1.4 的写入边界兜底：JSON 没有非有限数（`Infinity` ⇒ `null`），
       // 把一个读方必然判为 `unavailable` 的值写进磁盘没有意义 —— 保留磁盘原值即可。
       if (isJsonSafeMetricsSnapshot(measured.metrics)) {
@@ -666,7 +708,9 @@ export class HistoryManager {
     // 同一目录内的 rename 在主流文件系统上是原子操作。
     const sessionFilePath = getSessionFilePath(session.sessionId);
     try {
+      const writeStartedAt = performance.now();
       this.writeSessionFileAtomically(sessionFilePath, orderedSession);
+      mark("write", writeStartedAt);
     } catch (e) {
       throw new SessionPersistenceError(
         "SESSION_SAVE_FAILED",
@@ -677,6 +721,7 @@ export class HistoryManager {
 
     // Read and update the sessions list（全局锁串行化，防止两个进程并发保存
     // 【不同】session 时对共享 sessions.json 的读改写互相覆盖元数据）。
+    const catalogStartedAt = performance.now();
     const sessionsListFilePath = getSessionsListPath();
     const listLock = await acquireSessionsListLock();
     // The object that actually lands in sessions.json — and the one returned to
@@ -745,9 +790,12 @@ export class HistoryManager {
       await releaseSessionsListLock(listLock);
     }
 
+    mark("catalog", catalogStartedAt);
+
     // 方案.md §七.8.1: 返回权威首轮 / 最新摘要 / 完整条数 / 该 session 刚写进
     // sessions.json 的权威元数据（GUI 用它增量 upsert catalog，见 protocol 注释）。
-    return {
+    const responseStartedAt = performance.now();
+    const response = {
       firstTurnItems: extractFirstTurnItems(finalHistory),
       latestConversationSummary: this.latestSummaryOf(finalHistory),
       totalHistoryCount: finalHistory.length,
@@ -756,6 +804,8 @@ export class HistoryManager {
       // 未携带计量时保持 undefined —— GUI 据此保留 last-known 数值。
       ...(fullConversationMetrics ? { fullConversationMetrics } : {}),
     };
+    mark("response", responseStartedAt);
+    return response;
   }
 
   /**
