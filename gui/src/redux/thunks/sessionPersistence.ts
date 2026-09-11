@@ -18,8 +18,20 @@ import {
   setSessionPagination,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
+import {
+  deletePendingSave,
+  deleteRunningSave,
+  getPendingSave,
+  getRunningSave,
+  pendingSaveSessionIds,
+  runningSaveSessionIds,
+  setPendingSave,
+  setRunningSave,
+  type PendingSave,
+} from "../util/sessionSaveQueue";
 import { reconcilePaginationAfterPersist } from "./sessionPaging";
 import { releaseClosingSessionIfClean } from "./sessionLifecycle";
+import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 
 /**
  * Phase 1/2 save path (方案.md §五.10/§七.5).
@@ -28,17 +40,18 @@ import { releaseClosingSessionIfClean } from "./sessionLifecycle";
  * active session, the LRU cache or the current tab. One in-flight save per
  * session; newer requests coalesce into the latest snapshot while keeping the
  * "user submitted" and "stream terminal" boundaries as the last write.
+ *
+ * The queue itself lives in `util/sessionSaveQueue.ts`: it is scheduling state,
+ * and the legacy message-ID migration gate must read it without importing this
+ * thunk (which would be a module cycle, since this file kicks the migration).
  */
 
+export {
+  hasPendingSessionSave,
+  resetSessionSaveQueues,
+} from "../util/sessionSaveQueue";
+
 type SaveReason = string;
-
-type PendingSave = {
-  revision: number;
-  reason: SaveReason;
-};
-
-const pendingSaves = new Map<string, PendingSave>();
-const runningSaves = new Map<string, Promise<void>>();
 
 /**
  * GUI runtime → wire (设计 §3.2): `Session.history` is a protocol field, while
@@ -257,18 +270,41 @@ async function performSave(
 
 function startSaveLoop(sessionId: string, thunkApi: any): Promise<void> {
   const run = (async () => {
+    let saveFailed = false;
     try {
-      while (pendingSaves.has(sessionId)) {
-        const request = pendingSaves.get(sessionId)!;
-        pendingSaves.delete(sessionId);
-        await performSave(sessionId, request, thunkApi);
+      while (hasQueuedSave(sessionId)) {
+        const request = getPendingSave(sessionId)!;
+        deletePendingSave(sessionId);
+        try {
+          await performSave(sessionId, request, thunkApi);
+        } catch (error) {
+          saveFailed = true;
+          throw error;
+        }
       }
     } finally {
-      runningSaves.delete(sessionId);
+      deleteRunningSave(sessionId);
+      // Legacy message ID migration, "saved and clean" trigger (P4a).
+      //
+      // It has to sit here rather than inside `performSave`: the gate refuses to
+      // run while a save is queued or running, and `runningSaves` still holds
+      // this session until this `finally`.
+      //
+      // Only a successful save is announced. The gate would filter a failed one
+      // anyway (`persistence.state` is `failed`), but skipping it here is what
+      // keeps a repeatedly failing session from re-probing the host capability
+      // on every retry — the migration still runs after the retry that works.
+      if (!saveFailed) {
+        void thunkApi.dispatch(scheduleMessageIdMigrationIfSafe({ sessionId }));
+      }
     }
   })();
-  runningSaves.set(sessionId, run);
+  setRunningSave(sessionId, run);
   return run;
+}
+
+function hasQueuedSave(sessionId: string): boolean {
+  return getPendingSave(sessionId) !== undefined;
 }
 
 export const saveSession = createAsyncThunk<
@@ -280,11 +316,11 @@ export const saveSession = createAsyncThunk<
   if (!session) {
     return;
   }
-  pendingSaves.set(sessionId, {
+  setPendingSave(sessionId, {
     revision: session.persistence?.revision ?? 0,
     reason,
   });
-  const running = runningSaves.get(sessionId);
+  const running = getRunningSave(sessionId);
   await (running ?? startSaveLoop(sessionId, thunkApi));
 });
 
@@ -300,11 +336,11 @@ export const flushSessionSave = createAsyncThunk<
   if (!session) {
     return;
   }
-  pendingSaves.set(sessionId, {
+  setPendingSave(sessionId, {
     revision: session.persistence?.revision ?? 0,
     reason: "flush",
   });
-  const running = runningSaves.get(sessionId);
+  const running = getRunningSave(sessionId);
   await (running ?? startSaveLoop(sessionId, thunkApi));
 });
 
@@ -314,8 +350,8 @@ export const flushAllPendingSessions = createAsyncThunk<
   ThunkApiType
 >("sessions/flushAll", async (_, thunkApi) => {
   const ids = new Set([
-    ...runningSaves.keys(),
-    ...pendingSaves.keys(),
+    ...runningSaveSessionIds(),
+    ...pendingSaveSessionIds(),
     ...Object.keys(thunkApi.getState().sessions.sessionsById),
   ]);
   await Promise.all(
@@ -324,11 +360,11 @@ export const flushAllPendingSessions = createAsyncThunk<
       if (!session?.dirty) {
         return;
       }
-      pendingSaves.set(sessionId, {
+      setPendingSave(sessionId, {
         revision: session.persistence?.revision ?? 0,
         reason: "flush-all",
       });
-      await (runningSaves.get(sessionId) ?? startSaveLoop(sessionId, thunkApi));
+      await (getRunningSave(sessionId) ?? startSaveLoop(sessionId, thunkApi));
     }),
   );
 });
@@ -342,15 +378,9 @@ export const retrySessionSave = createAsyncThunk<
   if (!session) {
     return;
   }
-  pendingSaves.set(sessionId, {
+  setPendingSave(sessionId, {
     revision: session.persistence?.revision ?? 0,
     reason: "retry",
   });
-  await (runningSaves.get(sessionId) ?? startSaveLoop(sessionId, thunkApi));
+  await (getRunningSave(sessionId) ?? startSaveLoop(sessionId, thunkApi));
 });
-
-/** Test helper: drop module-level queue state between tests. */
-export function resetSessionSaveQueues(): void {
-  pendingSaves.clear();
-  runningSaves.clear();
-}

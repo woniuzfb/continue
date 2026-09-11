@@ -159,7 +159,11 @@ class IntelliJIDE(
             version = ideVersion,
             remoteName = remoteName,
             extensionVersion = extensionVersion,
-            isPrerelease = false // TODO: Implement prerelease detection for JetBrains
+            isPrerelease = false, // TODO: Implement prerelease detection for JetBrains
+            // Honest only because this plugin version forwards the type: see
+            // MessageTypes.PASS_THROUGH_TO_CORE. A host that drops it must not
+            // advertise it, or the webview sends a request that never answers.
+            capabilities = IdeInfoCapabilities(historyMigrateIds = true)
         )
     }
 

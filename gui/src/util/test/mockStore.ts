@@ -12,6 +12,9 @@ import {
   INITIAL_PROFILES_STATE,
   profilesReducer,
 } from "../../redux/slices/profilesSlice";
+import runtimeCapabilitiesReducer, {
+  initialRuntimeCapabilitiesState as INITIAL_RUNTIME_CAPABILITIES_STATE,
+} from "../../redux/slices/runtimeCapabilitiesSlice";
 import sessionCatalogReducer, {
   initialSessionCatalogState as INITIAL_SESSION_CATALOG_STATE,
 } from "../../redux/slices/sessionCatalogSlice";
@@ -30,6 +33,7 @@ export const getEmptyRootState: () => RootState = () => {
     ui: DEFAULT_UI_SLICE,
     indexing: INITIAL_INDEXING_STATE,
     profiles: INITIAL_PROFILES_STATE,
+    runtimeCapabilities: INITIAL_RUNTIME_CAPABILITIES_STATE,
   };
   const withoutSessionCopy = copyOf(withoutSession) as RootState;
   return withoutSessionCopy;
@@ -53,6 +57,7 @@ export const createMockStore = (
       config: configReducer,
       indexing: indexingReducer,
       profiles: profilesReducer,
+      runtimeCapabilities: runtimeCapabilitiesReducer,
     },
     preloadedState: {
       ...getEmptyRootState(),

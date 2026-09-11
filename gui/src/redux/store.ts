@@ -22,6 +22,7 @@ import { IdeMessenger, IIdeMessenger } from "../context/IdeMessenger";
 import configReducer from "./slices/configSlice";
 import indexingReducer from "./slices/indexingSlice";
 import { profilesReducer } from "./slices/profilesSlice";
+import runtimeCapabilitiesReducer from "./slices/runtimeCapabilitiesSlice";
 import sessionCatalogReducer from "./slices/sessionCatalogSlice";
 import sessionsReducer from "./slices/sessionsSlice";
 import uiReducer from "./slices/uiSlice";
@@ -36,6 +37,11 @@ const rootReducer = combineReducers({
   config: configReducer,
   indexing: indexingReducer,
   profiles: profilesReducer,
+  // Host-declared capabilities (P4a). Deliberately absent from
+  // `saveSubsetFilters`: it describes the host that is running right now, so a
+  // persisted value would be a lie after a plugin update. Reloading the webview
+  // resets it to "unknown" and the probe runs again.
+  runtimeCapabilities: runtimeCapabilitiesReducer,
 });
 
 const saveSubsetFilters = [

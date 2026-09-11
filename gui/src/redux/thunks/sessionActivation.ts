@@ -25,6 +25,7 @@ import {
 } from "./sessionMetrics";
 import { getSession, getSessionPage } from "./session";
 import { hasUnresumableTurn } from "./sessionInterruption";
+import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 
 /**
  * Phase 1 tab activation pipeline (方案.md §五.16/§五.17/§五.19).
@@ -150,6 +151,13 @@ export const loadSessionRuntime = createAsyncThunk<
         dispatch(setSessionInterrupted({ sessionId, interrupted: true }));
       }
       dispatch(setTabLoadState({ sessionId, loadState: "loaded" }));
+      // P4a: legacy message ID migration, first trigger. Deliberately fired
+      // *after* the runtime is usable and never awaited — the migration is a
+      // file-maintenance side effect and must not delay session display, editor
+      // restore, the model projection or the context metrics circle. Every
+      // trigger goes through the same schedule thunk, so none of them owns any
+      // part of the "is it safe" decision.
+      void dispatch(scheduleMessageIdMigrationIfSafe({ sessionId }));
     } catch (e) {
       // Keep the descriptor (retry UI) and never create a pseudo-empty
       // runtime (方案.md §五.23).

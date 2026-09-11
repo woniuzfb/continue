@@ -175,7 +175,12 @@ describe("sessionPersistence.saveSession", () => {
     release();
     await Promise.all([first, second]);
 
-    expect(request.mock.calls.length).toBeLessThanOrEqual(2);
+    // Count only the writes: the same messenger also carries the host
+    // capability probe (`getIdeInfo`, P4a), which is not a save.
+    const saveCalls = request.mock.calls.filter(
+      (call) => call[0] === "history/save",
+    );
+    expect(saveCalls.length).toBeLessThanOrEqual(2);
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.persistence?.state).toBe("clean");
   });

@@ -16,12 +16,26 @@ import {
 import { createContext } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { isJetBrains } from "../util";
+import { IdeRequestTimeoutError } from "./ideRequestTimeout";
 
 interface vscode {
   postMessage(message: any): vscode;
 }
 
 declare const vscode: any;
+
+/**
+ * Optional per-request controls. Kept as an options object (not a bare third
+ * positional) so more controls can be added without touching every call site.
+ *
+ * `timeoutMs` exists because a host that does not know a `messageType` never
+ * responds: without it the promise stays pending forever *and* its `window`
+ * "message" listener is never removed. Omit it to keep the historical
+ * never-timeout behaviour for every existing caller.
+ */
+export interface IdeRequestOptions {
+  timeoutMs?: number;
+}
 
 export interface IIdeMessenger {
   post<T extends keyof FromWebviewProtocol>(
@@ -40,6 +54,7 @@ export interface IIdeMessenger {
   request<T extends keyof FromWebviewProtocol>(
     messageType: T,
     data: FromWebviewProtocol[T][0],
+    options?: IdeRequestOptions,
   ): Promise<WebviewSingleProtocolMessage<T>>;
 
   streamRequest<T extends keyof FromWebviewProtocol>(
@@ -146,17 +161,52 @@ export class IdeMessenger implements IIdeMessenger {
   request<T extends keyof FromWebviewProtocol>(
     messageType: T,
     data: FromWebviewProtocol[T][0],
+    options?: IdeRequestOptions,
   ): Promise<WebviewSingleMessage<T>> {
     const messageId = uuidv4();
 
-    return new Promise((resolve) => {
-      const handler = (event: any) => {
-        if (event.data.messageId === messageId) {
-          window.removeEventListener("message", handler);
-          resolve(event.data.data as WebviewSingleMessage<T>);
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      // Response and timeout share ONE settle/cleanup path, so neither the
+      // `window` listener nor the timer can outlive the request. Cleanup must
+      // happen on the timeout path too: a host that never responds (unknown
+      // messageType) would otherwise leak one listener per attempt, and an
+      // outer `Promise.race` cannot remove it.
+      const cleanup = () => {
+        window.removeEventListener("message", handler);
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
         }
       };
+
+      const handler = (event: any) => {
+        if (event.data.messageId !== messageId) {
+          return;
+        }
+        if (settled) {
+          return; // a late response after the timeout must not settle twice
+        }
+        settled = true;
+        cleanup();
+        resolve(event.data.data as WebviewSingleMessage<T>);
+      };
+
       window.addEventListener("message", handler);
+
+      if (options?.timeoutMs !== undefined) {
+        const timeoutMs = options.timeoutMs;
+        timer = setTimeout(() => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          reject(new IdeRequestTimeoutError(messageType, timeoutMs));
+        }, timeoutMs);
+      }
 
       this.post(messageType, data, messageId);
     });

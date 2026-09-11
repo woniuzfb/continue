@@ -26,6 +26,7 @@ import {
   ensureActiveSessionLoaded,
   refreshSessionCatalog,
 } from "../redux/thunks/sessionLifecycle";
+import { probeHostCapabilities } from "../redux/thunks/sessionMessageIdMigration";
 import { updateSessionFileSymbolsFromHistory } from "../redux/thunks/updateFileSymbols";
 import {
   setDocumentStylesFromLocalStorage,
@@ -176,6 +177,15 @@ function ParallelListeners() {
   useEffect(() => {
     // Override persisted state
     void dispatch(stopActiveSessionStream());
+
+    // P4a: ask the host once — through `getIdeInfo`, an existing type that every
+    // host already answers — whether it forwards `history/migrateIds`. The
+    // capability has to come from the host: Core implementing the handler says
+    // nothing about whether the host routes the request (IntelliJ uses an
+    // explicit allow-list), and an unrecognised type is dropped *without any
+    // response*, which would leave the request pending forever and leak its
+    // window listener. A host that does not declare it is never asked.
+    void dispatch(probeHostCapabilities());
 
     const jetbrains = isJetBrains();
     setDocumentStylesFromLocalStorage(jetbrains);

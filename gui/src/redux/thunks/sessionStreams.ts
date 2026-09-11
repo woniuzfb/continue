@@ -52,6 +52,7 @@ import {
 import { evaluateSessionToolPolicies } from "./evaluateToolPolicies";
 import { preprocessSessionToolCalls } from "./preprocessToolCallArgs";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 import {
   buildRequestHistoryForSession,
   requestHistoryFromFullHistory,
@@ -168,6 +169,10 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
         reason: reason ?? `STREAM_${status.toUpperCase()}`,
       }),
     );
+    // P4a: legacy message ID migration, "stream terminal" trigger. The save
+    // above also kicks it, but no trigger is load-bearing on its own — each one
+    // just says "this session may now be safe" and the schedule thunk decides.
+    void dispatch(scheduleMessageIdMigrationIfSafe({ sessionId }));
     return true;
   },
 );

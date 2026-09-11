@@ -15,6 +15,7 @@ import {
   type HistoryTargetOnDisk,
 } from "../util/historyTarget";
 import { ensureMessageIds } from "../util/messageIds";
+import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 
 /**
  * Phase 1 paging (方案.md §五.12). Every request captures sessionId +
@@ -93,6 +94,10 @@ export const loadMoreHistory = createAsyncThunk<
           totalCount: total,
         }),
       );
+      // P4a: legacy message ID migration, "paging finished" trigger. Migrating
+      // is still correct while the head is unloaded — the migration rewrites the
+      // whole disk file, including the frozen head the window never sees.
+      void dispatch(scheduleMessageIdMigrationIfSafe({ sessionId }));
     } catch (e) {
       console.warn("loadMoreHistory error:", e);
       dispatch(setSessionHistoryLoading({ sessionId, loading: false }));

@@ -249,7 +249,9 @@ describe("delete / truncate content mutations", () => {
     await vi.waitFor(() => {
       expect(session(store).persistence?.state).toBe("clean");
     });
-    const lastCall = request.mock.calls.at(-1)![1] as any;
+    const lastCall = request.mock.calls
+      .filter((call) => call[0] === "history/save")
+      .at(-1)![1] as any;
     expect(lastCall.history.map((i: any) => i.message.id)).toEqual([
       "u1",
       "a1",

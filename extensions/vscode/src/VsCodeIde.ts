@@ -206,6 +206,11 @@ class VsCodeIde implements IDE {
       remoteName: vscode.env.remoteName || "local",
       extensionVersion: getExtensionVersion(),
       isPrerelease: isExtensionPrerelease(),
+      // The extension bundles Core, so `WEBVIEW_TO_CORE_PASS_THROUGH` (which
+      // contains history/migrateIds) always matches the Core that handles it.
+      capabilities: {
+        historyMigrateIds: true,
+      },
     });
   }
 

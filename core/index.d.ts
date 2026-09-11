@@ -911,6 +911,24 @@ export interface IdeInfo {
   remoteName: string;
   extensionVersion: string;
   isPrerelease: boolean;
+  /**
+   * Host-declared capabilities.
+   *
+   * The webview must never send a `messageType` the host cannot route: an
+   * unrecognised type produces NO response at all (VS Code has no registered
+   * handler, IntelliJ only logs), so the request promise stays pending and its
+   * `window` "message" listener is never removed. The host owns the
+   * webview→core pass-through, so it declares here what it forwards; older
+   * hosts simply omit this field and the webview must not send the request.
+   *
+   * Declaring a capability in Core is NOT sufficient — a stale IntelliJ
+   * `PASS_THROUGH_TO_CORE` allow-list would drop the request even though Core
+   * implements the handler.
+   */
+  capabilities?: {
+    /** The host forwards `history/migrateIds` through to Core. */
+    historyMigrateIds?: true;
+  };
 }
 
 export interface BranchAndDir {

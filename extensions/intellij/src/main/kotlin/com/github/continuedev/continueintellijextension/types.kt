@@ -20,13 +20,32 @@ data class Position(val line: Int, val character: Int)
 
 data class Range(val start: Position, val end: Position)
 
+/**
+ * Host-declared capabilities, mirrored from `IdeInfo.capabilities` in
+ * `core/index.d.ts`.
+ *
+ * The webview must never send a `messageType` this host cannot route: an
+ * unlisted type is dropped by ContinueBrowser without any response, which
+ * leaves the webview request pending forever and leaks its window listener.
+ * So the host declares here only what it actually forwards, and an older
+ * plugin simply omits the field — the webview then treats the capability as
+ * absent and never sends the request.
+ *
+ * NOTE: `historyMigrateIds` must stay in sync with
+ * `MessageTypes.PASS_THROUGH_TO_CORE`.
+ */
+data class IdeInfoCapabilities(
+    val historyMigrateIds: Boolean? = null
+)
+
 data class IdeInfo(
     val ideType: String,
     val name: String,
     val version: String,
     val remoteName: String,
     val extensionVersion: String,
-    val isPrerelease: Boolean
+    val isPrerelease: Boolean,
+    val capabilities: IdeInfoCapabilities? = null
 )
 
 data class Problem(

@@ -11,7 +11,7 @@ import {
   GeneratorYieldType,
   WebviewSingleProtocolMessage,
 } from "core/protocol/util";
-import { IIdeMessenger } from "./IdeMessenger";
+import { IIdeMessenger, IdeRequestOptions } from "./IdeMessenger";
 
 type MockResponses = Partial<{
   [K in keyof FromWebviewProtocol]: FromWebviewProtocol[K][1];
@@ -38,6 +38,21 @@ const DEFAULT_MOCK_CORE_RESPONSES: MockResponses = {
   ],
   "history/list": [],
   "docs/getIndexedPages": [],
+  /**
+   * Default = an *old* host: it answers `getIdeInfo` (every host always has) but
+   * declares no capabilities, so the legacy message-ID migration stays
+   * `unsupported` and the mock never sends `history/migrateIds`. Tests that
+   * exercise the migration override this entry with
+   * `capabilities: { historyMigrateIds: true }`.
+   */
+  getIdeInfo: {
+    ideType: "vscode",
+    name: "Visual Studio Code",
+    version: "1.0.0",
+    remoteName: "local",
+    extensionVersion: "0.0.0",
+    isPrerelease: false,
+  },
   "history/save": {
     firstTurnItems: [],
     totalHistoryCount: 0,
@@ -223,6 +238,7 @@ export class MockIdeMessenger implements IIdeMessenger {
   async request<T extends keyof FromWebviewProtocol>(
     messageType: T,
     data: FromWebviewProtocol[T][0],
+    _options?: IdeRequestOptions,
   ): Promise<WebviewSingleProtocolMessage<T>> {
     if (this.responseHandlers[messageType]) {
       const content = await this.responseHandlers[messageType](data);

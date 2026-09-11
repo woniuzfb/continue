@@ -76,6 +76,12 @@ class MessageTypes {
             "history/delete",
             "history/load",
             "history/save",
+            // Legacy message ID migration (P4a). This host only advertises
+            // `capabilities.historyMigrateIds` in `getIdeInfo` because this
+            // allow-list contains the type: an unlisted type is silently
+            // dropped here (no response at all), so a host that does not list
+            // it must NOT advertise the capability.
+            "history/migrateIds",
             "history/loadRemote",
             "history/clear",
             "devdata/log",

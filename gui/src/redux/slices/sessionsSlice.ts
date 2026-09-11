@@ -115,6 +115,42 @@ function initialPersistenceState(): SessionPersistenceState {
   };
 }
 
+/**
+ * Per-session state of the legacy message-ID migration (P4a, 方案.md §九.13).
+ *
+ * Runtime-only: this describes a maintenance side effect on the **disk** file,
+ * never the conversation. Writing it must not touch `dirty`, `historyRevision`,
+ * `persistence.revision`, `history` or `contextMetrics` — a migration changes
+ * nothing about the request history, so it must not invalidate the metrics
+ * snapshot or make the session look modified.
+ *
+ * `unsupported` and `failed/REQUEST_TIMEOUT` are different facts and are kept
+ * apart on purpose:
+ *   unsupported          → the host never declared the capability, so nothing
+ *                          was ever sent (no request, no leaked listener).
+ *   failed/REQUEST_TIMEOUT → the host declared it but did not answer in time.
+ * Folding the second into the first would report a transient host stall as a
+ * permanent property of the host.
+ */
+export type MessageIdMigrationState =
+  | { state: "not-requested" }
+  | { state: "pending" }
+  | {
+      state: "succeeded";
+      /** False when the file already had every id: a success no-op. */
+      migrated: boolean;
+      addedCount: number;
+    }
+  | {
+      state: "failed";
+      code:
+        | "SESSION_FILE_INVALID"
+        | "MESSAGE_ID_MIGRATION_FAILED"
+        | "REQUEST_TIMEOUT";
+      message: string;
+    }
+  | { state: "unsupported" };
+
 export type SessionRuntimeState = {
   id: string;
   title: string;
@@ -166,6 +202,8 @@ export type SessionRuntimeState = {
   editState: SessionEditRuntimeState;
   scrollState: SessionScrollState;
   persistence?: SessionPersistenceState;
+  /** Legacy message-ID migration progress on the disk file (P4a). */
+  messageIdMigration: MessageIdMigrationState;
 
   pendingApprovalCount: number;
   /**
@@ -247,6 +285,7 @@ export function initialSessionRuntime(
     pendingApprovalCount: 0,
     dirty: false,
     lifecycle: { closing: false },
+    messageIdMigration: { state: "not-requested" },
     ...overrides,
   };
 }
@@ -1059,6 +1098,29 @@ export const sessionsSlice = createSlice({
       }
     },
 
+    /**
+     * P4a: record the legacy message-ID migration state for one session.
+     *
+     * This reducer touches exactly one field. It must never mark the session
+     * dirty, advance `historyRevision`, move `persistence.revision` or clear
+     * `contextMetrics` / `contextMetricsMeta`: the migration rewrites
+     * `message.id` on disk only — content, order, roles, first turn, summary and
+     * the request history are unchanged, so the metrics snapshot is still
+     * valid and its circle must neither flash nor recompute.
+     */
+    setMessageIdMigrationState: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        migration: MessageIdMigrationState;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.messageIdMigration = action.payload.migration;
+      }
+    },
+
     // ── Editor / Edit / Apply ─────────────────────────────────────────────
     setSessionMainEditorDraft: (
       state,
@@ -1468,6 +1530,7 @@ export const {
   setSessionPersistenceState,
   markSessionDirty,
   markSessionPersisted,
+  setMessageIdMigrationState,
   setSessionMainEditorDraft,
   setSessionMainEditorContentTrigger,
   setSessionMainEditorAttachmentsRestore,
