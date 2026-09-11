@@ -237,6 +237,17 @@ async function performSave(
   const sentAt = Date.now();
   const requestStartedAt = performance.now();
   if (isSubmitLatencyLoggingEnabled()) {
+    // One line per save the loop actually runs: a single `enqueueSessionSave` await can cover
+    // several queued saves (the loop drains the queue), so a phase span around it is not the
+    // cost of one save. This is the number that is.
+    recordSubmitLatency({
+      phase: "save-attempt",
+      sessionId,
+      reason: request.reason,
+      at: sentAt,
+    });
+  }
+  if (isSubmitLatencyLoggingEnabled()) {
     recordSubmitLatency({
       phase: "save-request-sent",
       sessionId,
@@ -248,6 +259,7 @@ async function performSave(
     recordSubmitLatency({
       phase: "save-response-received",
       sessionId,
+      reason: request.reason,
       at: Date.now(),
       durationMs: performance.now() - requestStartedAt,
     });

@@ -360,8 +360,14 @@ export class Core {
       const { fullConversationMeasurement: measurement } = msg.data;
 
       // 不带计量 = 只保存：不量化、也不改动磁盘上已有的 metrics。
+      //
+      // 即使不计量也要知道 debug 开关：真实 trace 里一次「不计量」的保存等了 4.3s，而带计量的
+      // 那次只用了 770ms —— 只给计量路径记时会让最大的那个数字没有 Core 侧对照。
       if (!measurement) {
-        return historyManager.save(msg.data);
+        const { config } = await this.configHandler.loadConfig();
+        return historyManager.save(msg.data, {
+          logTimings: config?.ui?.showSubmitLatencyLogs === true,
+        });
       }
 
       // 方案.md §五.16.7 / §7.1.2: 计量输入里 GUI 不可见的那部分（tokenizer 键、解析后的

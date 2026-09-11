@@ -264,6 +264,9 @@ describe("submit diagnostics — latency events", () => {
     // …and the terminal side, which runs in the terminal commit's own task.
     expect(phases.has("terminal-commit")).toBe(true);
     expect(phases.has("terminal-save")).toBe(true);
+    // One line per save the loop runs, so a span that covers several queued saves can be
+    // decomposed (and the reason says which boundary it was).
+    expect(phases.has("save-attempt")).toBe(true);
     // The partition of the pre-bubble wait: these three should add up to `submit-to-commit`.
     expect(phases.has("submit-pre-editor")).toBe(true);
     expect(phases.has("resolve-editor-content")).toBe(true);

@@ -36,6 +36,7 @@ export type SubmitLatencyPhase =
   | "commit-turn"
   | "save-enqueue"
   | "save-payload"
+  | "save-attempt"
   | "save-request-sent"
   | "save-response-received"
   | "stream-start"
@@ -50,6 +51,11 @@ export type SubmitLatencyEvent = {
   durationMs?: number;
   /** Context provider name (`currentFile`, `codebase`, a mention provider, …). */
   provider?: string;
+  /**
+   * Code-level save reason (`USER_SUBMITTED`, `STREAM_CHECKPOINT:regular`, `retry`, …).
+   * Never user content: it is the string the save queue already carries for diagnostics.
+   */
+  reason?: string;
   /** How many IPC requests the phase issued, when that is the point of the phase. */
   requests?: number;
   /**
@@ -123,6 +129,9 @@ export function recordSubmitLatency(event: SubmitLatencyEvent): void {
     }
     if (event.provider !== undefined) {
       details.push(`provider=${event.provider}`);
+    }
+    if (event.reason !== undefined) {
+      details.push(`reason=${event.reason}`);
     }
     if (event.requests !== undefined) {
       details.push(`requests=${event.requests}`);
