@@ -15,6 +15,7 @@ import {
   type HistoryTargetOnDisk,
 } from "../util/historyTarget";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
+import { recordSubmitLatency } from "../../util/submitLatency";
 import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
 import { emitLegacyFallbackMintedEvent } from "../util/legacyMessageIdObservability";
 import {
@@ -154,8 +155,17 @@ export const loadFullHistory = createAsyncThunk<
     const generation = session.pagination.requestGeneration;
     const headCount = session.pagination.loadedOffset ?? 0;
 
+    // Measured in two parts on purpose: the round trip (Core reads the file and decodes it)
+    // versus the GUI merge/dispatch. The first real trace showed 1.36s for the whole thing
+    // on every send of a lazy-loaded session, and which half owns it decides the fix.
+    const loadStartedAt = performance.now();
     const result = await extra.ideMessenger.request("history/load", {
       id: sessionId,
+    });
+    recordSubmitLatency({
+      phase: "history-load",
+      sessionId,
+      durationMs: performance.now() - loadStartedAt,
     });
     if (result.status === "error") {
       // Never silently continue on a partial history: the caller unwraps and
@@ -191,6 +201,7 @@ export const loadFullHistory = createAsyncThunk<
       );
     }
 
+    const mergeStartedAt = performance.now();
     const safeHeadCount = Math.min(headCount, diskHistory.length);
     const mergedHistory = [
       ...diskHistory.slice(0, safeHeadCount),
@@ -218,6 +229,11 @@ export const loadFullHistory = createAsyncThunk<
         origin: "hydration",
       }),
     );
+    recordSubmitLatency({
+      phase: "history-merge",
+      sessionId,
+      durationMs: performance.now() - mergeStartedAt,
+    });
     dispatch(
       setSessionPagination({
         sessionId,

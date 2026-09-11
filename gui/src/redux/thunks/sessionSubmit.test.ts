@@ -268,6 +268,73 @@ describe("submitSessionInput", () => {
     });
   });
 
+  it("commits the turn before hydrating a lazy-loaded window", async () => {
+    // A lazy-loaded window is hydrated from disk before the request goes out — but that is
+    // a full `history/load` round trip plus the merge (measured: 1361.8ms on a real
+    // session). The **commit** must not wait for it: the user's turn is a content version
+    // the moment it is submitted, and the request plan hydrates afterwards.
+    const store = makeStore({ truncated: true, loadedOffset: 4 });
+    let releaseLoad: (() => void) | undefined;
+    const original = store.mockIdeMessenger.request.bind(
+      store.mockIdeMessenger,
+    );
+    (store.mockIdeMessenger as any).request = vi.fn(
+      async (type: string, data: any) => {
+        if (type === "history/load") {
+          await new Promise<void>((resolve) => {
+            releaseLoad = resolve;
+          });
+          return {
+            status: "success",
+            content: {
+              history: [
+                item("h1", "user", "head user"),
+                item("h2", "assistant", "head answer"),
+                item("h3", "user", "head user 2"),
+                item("h4", "assistant", "head answer 2"),
+                item("u1", "user", "earlier"),
+                item("a1", "assistant", "sure"),
+              ],
+            },
+            done: true,
+          };
+        }
+        return original(type as any, data as any);
+      },
+    ) as any;
+
+    const before = session(store).conversationRevision;
+    const pending = run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+    await vi.waitFor(() => expect(releaseLoad).toBeDefined());
+
+    // The turn is committed while the hydration is still in flight: bubble first, disk
+    // read second — and the pending draft is already gone, so what the user sees is the
+    // real bubble and not a "preparing" placeholder held back by the read.
+    expect(session(store).conversationRevision).toBe(before + 1);
+    expect(session(store).history.at(-2).message.role).toBe("user");
+    expect(session(store).history.at(-1).message.role).toBe("assistant");
+    expect(session(store).history).toHaveLength(4);
+    expect(session(store).pendingSubmission).toBeUndefined();
+
+    releaseLoad!();
+    await pending;
+
+    // …and the merge that follows is tail-preserving: the committed turn is still the end
+    // of the window, on top of the frozen head.
+    const history = session(store).history;
+    expect(history[0].message.content).toBe("head user");
+    expect(history.at(-2).message.role).toBe("user");
+    expect(history.at(-1).message.content).toBe("This is a test");
+    expect(history).toHaveLength(8);
+  });
+
   it("replaces the message at index and truncates the tail on resend", async () => {
     const store = makeStore({
       history: [

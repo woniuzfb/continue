@@ -260,15 +260,20 @@ export const submitSessionInput = createAsyncThunk<
     // resets `loadedOffset` to 0, but the caller's index is relative to the
     // window that was visible when it was passed (方案.md §十二).
     const capturedOffset = pre.pagination.loadedOffset ?? 0;
+    // Captured before any await: the commit runs against the window we are looking at, and
+    // the hydration below is decided from the same snapshot.
+    const wasTruncated = pre.pagination.truncated;
 
-    // 2. Lazy-loaded history must be complete before sending, otherwise the
-    // model only sees the tail of the conversation.
+    // 2. A window holding an unsaved merged bubble is not 1:1 with disk, so its index
+    // cannot be converted arithmetically: resolve the captured identity in both arrays —
+    // which hydrates the window in the same round trip — and address the **window**
+    // coordinate, because the replacement below writes to `session.history`. A miss aborts
+    // instead of editing another message.
     //
-    // A window holding an unsaved merged bubble is not 1:1 with disk, so its
-    // index cannot be converted arithmetically: resolve the captured identity
-    // in both arrays — which hydrates the window in the same round trip — and
-    // address the **window** coordinate, because the replacement below writes
-    // to `session.history`. A miss aborts instead of editing another message.
+    // This branch is about *locating the target*, not about completing the request history:
+    // a target that was trimmed away cannot be found without reading disk, and the commit
+    // needs its position. Completing the window for the request is a separate concern, and
+    // it happens after the commit (see the hydration below).
     let resolvedIndex: number | undefined;
     if (
       targetMessageId !== undefined &&
@@ -292,17 +297,13 @@ export const submitSessionInput = createAsyncThunk<
         );
       }
       resolvedIndex = resolved.guiIndex;
-    } else if (pre.pagination.truncated) {
-      // A lazy-loaded window is hydrated from disk before sending: for a long session that
-      // is a full `history/load` round trip plus the merge, on the send path.
-      const hydrationStartedAt = performance.now();
-      await dispatch(loadFullHistory({ sessionId })).unwrap();
-      recordSubmitLatency({
-        phase: "history-hydration",
-        sessionId,
-        durationMs: performance.now() - hydrationStartedAt,
-      });
     }
+    // NOTE: a lazy-loaded window is **not** hydrated here any more. That hydration is a
+    // full `history/load` round trip plus the GUI merge, measured at 1361.8ms on a real
+    // session, and doing it before the commit meant the bubble waited for it. It now runs
+    // right after the commit (below) and before the save is enqueued. The *request* still
+    // needs the complete history — see `buildRequestHistoryForSession`, which the stream
+    // step consults — so this is a reordering, not a removal.
 
     const state = getState();
     const session = selectSessionById(state, sessionId);
@@ -496,6 +497,11 @@ export const submitSessionInput = createAsyncThunk<
           : "Cannot resend: the target message is no longer in the loaded history",
       );
     }
+    // The committed turn is on screen now, so the draft has served its purpose: clear it
+    // here rather than in the preparation block's `finally`, which runs after the hydration
+    // below — waiting for that would keep the placeholder on screen for the whole disk read
+    // (measured: 1361.8ms).
+    dispatch(clearPendingSubmission({ sessionId, submissionId }));
     dispatch(
       setSessionMainEditorAttachmentsRestore({
         sessionId,
@@ -503,6 +509,19 @@ export const submitSessionInput = createAsyncThunk<
       }),
     );
     dispatch(resetSessionCodeBlockApplyIndex({ sessionId }));
+
+    // Hydrate the lazy-loaded window **after** the turn is committed, so the bubble does
+    // not wait for `history/load` + merge, and **before** the save is enqueued, so no
+    // in-flight save response can trim the window underneath the hydration (the merge is
+    // tail-preserving: it re-reads the current window, which now holds the committed turn).
+    //
+    // The window was truncated when we got here; the commit appended to that tail, which is
+    // exactly what `loadFullHistory` merges onto the frozen head. If the hydration bails
+    // (its own post-await guards), the stream step's request plan hydrates again before
+    // building the request — a bail is recoverable, a truncated request is not.
+    if (wasTruncated) {
+      await dispatch(loadFullHistory({ sessionId })).unwrap();
+    }
 
     // 4. Immediate save boundary (方案.md §七.2/§七.3).
     const beforeSaveEnqueue = performance.now();
