@@ -26,13 +26,18 @@ export type SubmitLatencyPhase =
   | "editor-processing"
   | "slash-rendering"
   | "context-resolution"
+  | "resolve-editor-content"
+  | "target-resolution"
+  | "history-hydration"
+  | "submit-pre-editor"
+  | "submit-post-editor"
   | "submit-to-commit"
   | "commit-turn"
   | "save-enqueue"
   | "stream-start"
   | "terminal-commit"
   | "terminal-identity"
-  | "terminal-save-enqueue";
+  | "terminal-save";
 
 export type SubmitLatencyEvent = {
   phase: SubmitLatencyPhase;
@@ -56,9 +61,17 @@ export type SubmitLatencyEvent = {
  * be able to break a send.
  *
  * The line is deliberately a single, greppable string: filter the webview console by
- * `submit-latency` and read the phases in order. `submit-to-commit` is the one that answers
- * "how long after Enter did the bubble appear"; the `context-resolution` lines that precede
- * it break the wait down per provider.
+ * `submit-latency` and read the phases in order.
+ *
+ * `submit-to-commit` answers "how long after Enter did the bubble appear", and the phases
+ * that precede it **partition** that span — `submit-pre-editor` + `resolve-editor-content`
+ * + `submit-post-editor` should add up to it. A partition is what separates "an await of
+ * ours is slow" from "the main thread was busy elsewhere": `resolve-editor-content` measures
+ * the awaited call itself, the two `submit-*` phases measure everything around it.
+ *
+ * First real measurement, worth keeping in mind when reading these lines: the send that
+ * produced `submit-to-commit 1322.8ms` had `context-resolution 0.2ms requests=0`, i.e. the
+ * wait was **not** context IPC at all — which is exactly why the partition exists.
  */
 export function recordSubmitLatency(event: SubmitLatencyEvent): void {
   try {

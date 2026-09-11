@@ -277,9 +277,15 @@ export const submitSessionInput = createAsyncThunk<
       // A merged GUI item or a trimmed-away historical bubble cannot be
       // addressed with offset arithmetic. Hydrate and match the stable ID
       // against disk, then use the post-hydration GUI coordinate.
+      const resolveStartedAt = performance.now();
       const resolved = await dispatch(
         resolveHistoryMutationTarget({ sessionId, targetMessageId }),
       ).unwrap();
+      recordSubmitLatency({
+        phase: "target-resolution",
+        sessionId,
+        durationMs: performance.now() - resolveStartedAt,
+      });
       if (!resolved) {
         throw new Error(
           "Cannot resend: the target message could not be located on disk",
@@ -287,7 +293,15 @@ export const submitSessionInput = createAsyncThunk<
       }
       resolvedIndex = resolved.guiIndex;
     } else if (pre.pagination.truncated) {
+      // A lazy-loaded window is hydrated from disk before sending: for a long session that
+      // is a full `history/load` round trip plus the merge, on the send path.
+      const hydrationStartedAt = performance.now();
       await dispatch(loadFullHistory({ sessionId })).unwrap();
+      recordSubmitLatency({
+        phase: "history-hydration",
+        sessionId,
+        durationMs: performance.now() - hydrationStartedAt,
+      });
     }
 
     const state = getState();
@@ -346,6 +360,16 @@ export const submitSessionInput = createAsyncThunk<
     // history; the USER_SUBMITTED save fills the authoritative cache from disk.
     const defaultContextProviders =
       state.config.config.experimental?.defaultContext ?? [];
+    // Partition of the pre-bubble wait: this phase + `resolve-editor-content` +
+    // `submit-post-editor` should add up to `submit-to-commit`. The partition is what
+    // separates "an await of ours is slow" from "the main thread was busy elsewhere".
+    recordSubmitLatency({
+      phase: "submit-pre-editor",
+      sessionId,
+      durationMs: performance.now() - submitStartedAt,
+      insertion: insertionKind,
+    });
+    const editorContentStartedAt = performance.now();
     const {
       selectedContextItems,
       selectedCode,
@@ -360,6 +384,19 @@ export const submitSessionInput = createAsyncThunk<
       availableSlashCommands: state.config.config.slashCommands,
       dispatch,
       getState,
+    });
+
+    recordSubmitLatency({
+      phase: "resolve-editor-content",
+      sessionId,
+      durationMs: performance.now() - editorContentStartedAt,
+      insertion: insertionKind,
+    });
+    recordSubmitLatency({
+      phase: "submit-post-editor",
+      sessionId,
+      durationMs: performance.now() - editorContentStartedAt,
+      insertion: insertionKind,
     });
 
     const filesForSymbols = [

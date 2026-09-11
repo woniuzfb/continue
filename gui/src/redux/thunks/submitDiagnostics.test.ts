@@ -207,7 +207,11 @@ describe("submit diagnostics — latency events", () => {
     expect(phases.has("stream-start")).toBe(true);
     // …and the terminal side, which runs in the terminal commit's own task.
     expect(phases.has("terminal-commit")).toBe(true);
-    expect(phases.has("terminal-save-enqueue")).toBe(true);
+    expect(phases.has("terminal-save")).toBe(true);
+    // The partition of the pre-bubble wait: these three should add up to `submit-to-commit`.
+    expect(phases.has("submit-pre-editor")).toBe(true);
+    expect(phases.has("resolve-editor-content")).toBe(true);
+    expect(phases.has("submit-post-editor")).toBe(true);
 
     // Durations are numbers, insertion shape is a closed enum.
     const commit = events.find((event) => event.phase === "commit-turn")!;

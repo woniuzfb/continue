@@ -211,8 +211,11 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
     // P4a: legacy message ID migration, "stream terminal" trigger. The save
     // above also kicks it, but no trigger is load-bearing on its own — each one
     // just says "this session may now be safe" and the schedule thunk decides.
+    // The awaited save: GUI payload build + IPC + Core's in-lock measurement + disk write.
+    // It is named `terminal-save` (not "...enqueue") because that is what it measures — the
+    // first real trace showed 3.6s here, which is worth watching.
     recordSubmitLatency({
-      phase: "terminal-save-enqueue",
+      phase: "terminal-save",
       sessionId,
       durationMs: performance.now() - beforeTerminalSave,
     });
