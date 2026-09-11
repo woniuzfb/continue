@@ -273,6 +273,17 @@ export function useSessionFullConversationMetrics(): SessionFullConversationMetr
   return useMemo(() => ({ metrics, freshness }), [metrics, freshness]);
 }
 
+/**
+ * 展示用的 pending 草稿（工作流 "submit latency and retry boundary" 第 3 步）。
+ * 只是展示：读它的组件不得据此推断会话内容（它不在 history 里）。
+ */
+export function useSessionPendingSubmission() {
+  const sessionId = useSessionId();
+  return useAppSelector(
+    (state) => activeRuntimeOf(state, sessionId)?.pendingSubmission,
+  );
+}
+
 export function useSessionEditState() {
   const sessionId = useSessionId();
   return useAppSelector(

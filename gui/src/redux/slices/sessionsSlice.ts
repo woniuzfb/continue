@@ -5,6 +5,7 @@ import {
   ChatMessage,
   ContextItemWithId,
   FileSymbolMap,
+  MessageContent,
   MessageModes,
   RuleMetadata,
   SetCodeToEditPayload,
@@ -12,6 +13,7 @@ import {
 } from "core";
 import type { SessionPersistenceErrorCode } from "core/util/sessionPersistenceError";
 import { type InlineErrorMessageType } from "../../components/mainInput/InlineErrorMessage";
+import type { AttachmentMeta } from "../../components/mainInput/types";
 import { type AttachedFile } from "../../components/mainInput/types";
 import type {
   FullConversationMetricsMeta,
@@ -216,6 +218,14 @@ export type SessionRuntimeState = {
    * runtime-only：不进 history、不进保存、不进指标。
    */
   isGatheringContext?: boolean;
+  /**
+   * 展示用的 pending 草稿（工作流 "submit latency and retry boundary" 第 3 步）。
+   *
+   * Stage 2F 之后气泡要等内容解析完才提交，于是用户在 ~1 秒里看不到任何反馈。这份草稿
+   * **只是展示**：不进 history、不进保存载荷、不进完整会话指标与 construction identity、
+   * 不参与 trim / paging / 请求构造，也**不推进** `conversationRevision`。
+   */
+  pendingSubmission?: PendingSubmission;
   /**
    * 正在飞行的只读计量请求数（方案.md §五.16.6 的 `measuring` 态）。用计数而不是布尔：
    * 同一 session 可能有并发请求（例如激活门禁与手动重算），布尔会让先返回的那个提前清掉
@@ -423,6 +433,32 @@ function markFullConversationMetricsStale(session: SessionRuntimeState): void {
   // snapshot has no provable environment, so it is dropped together with the meta.
   session.fullConversationMetricsEnvironment = undefined;
 }
+
+/**
+ * A send that is still being prepared: the user's text is already known (the editor
+ * content is available synchronously) but the turn cannot be committed until context
+ * resolution finishes.
+ *
+ * Presentation-only. It exists so the bubble appears in the same tick as Enter instead of
+ * after the context IPC (see `submitSessionInput`), and it is deliberately not a history
+ * item: every consumer of real content (save payload, metrics, identity, paging, trim,
+ * request building) must stay blind to it.
+ */
+export type PendingSubmission = {
+  /**
+   * Matches a specific attempt. Cleanup is ID-checked so a stale failure cannot clear a
+   * newer draft.
+   */
+  submissionId: string;
+  /** Where the committed turn will land — the draft renders in that same place. */
+  insertion: { kind: "append" } | { kind: "replace"; targetMessageId: string };
+  /** The text to show, taken synchronously from the editor. */
+  displayContent: MessageContent;
+  /** Attachment chips (metadata only — never the file contents). */
+  attachmentMeta?: AttachmentMeta[];
+  /** For the elapsed indicator; the draft is never persisted, so wall clock is fine. */
+  startedAt: number;
+};
 
 /**
  * Where a submitted turn lands (方案.md §七.3, Stage 2F 收口).
@@ -1519,6 +1555,37 @@ export const sessionsSlice = createSlice({
      * session). The state belongs to the session because during resolution there is no
      * submitted turn to attach it to.
      */
+    /**
+     * Shows the pending draft for a send that is still being prepared (see
+     * `PendingSubmission`). Purely presentational: no revision, no dirty, no history.
+     */
+    setPendingSubmission: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        submission: PendingSubmission;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.pendingSubmission = action.payload.submission;
+      }
+    },
+    /**
+     * Clears the draft — **only** when the id matches, so a slow failing attempt cannot
+     * remove the draft of a newer one.
+     */
+    clearPendingSubmission: (
+      state,
+      action: PayloadAction<{ sessionId: string; submissionId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (
+        session?.pendingSubmission?.submissionId === action.payload.submissionId
+      ) {
+        delete session.pendingSubmission;
+      }
+    },
     setSessionGatheringContext: (
       state,
       action: PayloadAction<{ sessionId: string; gathering: boolean }>,
@@ -1958,6 +2025,8 @@ export const {
   setSessionSymbols,
   setSessionInlineError,
   commitSubmittedTurn,
+  setPendingSubmission,
+  clearPendingSubmission,
   setSessionFullConversationMetrics,
   refreshSessionFullConversationMetricsEnvironment,
   beginSessionFullConversationMetricsMeasure,

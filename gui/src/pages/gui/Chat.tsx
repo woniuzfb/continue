@@ -29,6 +29,8 @@ import ContinueInputBox from "../../components/mainInput/ContinueInputBox";
 import { AttachmentMeta, AttachedFile } from "../../components/mainInput/types";
 import { useOnboardingCard } from "../../components/OnboardingCard";
 import StepContainer from "../../components/StepContainer";
+import { pendingSubmissionTargetIndex } from "../../redux/util/pendingSubmission";
+import { PendingSubmissionItem } from "../../components/StepContainer/PendingSubmissionItem";
 import { SyntheticConversationSummary } from "../../components/StepContainer/SyntheticConversationSummary";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
 import { useWebviewListener } from "../../hooks/useWebviewListener";
@@ -80,6 +82,7 @@ import {
   useSessionIsStreaming,
   useSessionMode,
   useSessionPagination,
+  useSessionPendingSubmission,
 } from "../../redux/selectors/sessionView";
 import {
   useIsVisibleSession,
@@ -163,6 +166,13 @@ export function Chat() {
   // suppression while a newer jump is still in flight.
   const jumpTokenRef = useRef(0);
   const history = useSessionHistory();
+  // The draft for a send that is still being prepared. It is never a history item, so it
+  // is rendered separately — appended after the transcript, or in place of its target.
+  const pendingSubmission = useSessionPendingSubmission();
+  const pendingTargetIndex = pendingSubmissionTargetIndex(
+    history,
+    pendingSubmission,
+  );
   const isHistoryLoading = useSessionPagination().loading;
   const showChatScrollbar = useAppSelector(
     (state) => state.config.config.ui?.showChatScrollbar,
@@ -732,7 +742,7 @@ export function Chat() {
             <div
               key={item.message.id}
               data-message-id={item.message.id}
-              className="min-w-0"
+              className={`min-w-0 ${index === pendingTargetIndex ? "opacity-60" : ""}`}
               style={{
                 minHeight: index === history.length - 1 ? "200px" : 0,
               }}
@@ -746,8 +756,16 @@ export function Chat() {
                 {renderChatHistoryItem(item, index)}
               </ErrorBoundary>
               {index === history.length - 1 && <InlineErrorMessage />}
+              {/* A replace draft renders where its target is — never at the tail, which
+                  would make an edit/resend look like a new message. */}
+              {index === pendingTargetIndex && pendingSubmission && (
+                <PendingSubmissionItem pending={pendingSubmission} />
+              )}
             </div>
           ))}
+        {pendingSubmission?.insertion.kind === "append" && (
+          <PendingSubmissionItem pending={pendingSubmission} />
+        )}
       </StepsDiv>
       <div className={"relative shrink-0"}>
         <InterruptedSessionBanner />
@@ -765,7 +783,9 @@ export function Chat() {
 
         <div
           style={{
-            pointerEvents: isStreaming ? "none" : "auto",
+            // While a send is being prepared the turn does not exist yet, so the editor
+            // must not accept a second one — the same gate streaming uses.
+            pointerEvents: isStreaming || pendingSubmission ? "none" : "auto",
           }}
         >
           <div className="flex flex-row items-center justify-between pb-1 pl-0.5 pr-2">

@@ -25,11 +25,17 @@ import {
   windowHasUnsavedMerge,
 } from "../util/historyTarget";
 import {
+  clearPendingSubmission,
   commitSubmittedTurn,
   resetSessionCodeBlockApplyIndex,
+  setPendingSubmission,
   setSessionMainEditorAttachmentsRestore,
 } from "../slices/sessionsSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
+import type {
+  PendingSubmission,
+  SessionRuntimeState,
+} from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { loadFullHistory, resolveHistoryMutationTarget } from "./sessionPaging";
 import { enqueueSessionSave } from "./sessionPersistence";
@@ -40,6 +46,7 @@ import {
 } from "./sessionStreamWrapper";
 import { runSessionStream } from "./sessionStreams";
 import { updateSessionFileSymbolsFromFiles } from "./updateFileSymbols";
+import { processEditorContent } from "../../components/mainInput/TipTapEditor/utils/processEditorContent";
 import { recordSubmitLatency } from "../../util/submitLatency";
 
 /**
@@ -112,6 +119,32 @@ function assistantPlaceholder(): ChatHistoryItemWithMessageId {
   };
 }
 
+/**
+ * Where the draft belongs. Needs no await: a caller-supplied identity is used as is, a
+ * window index is resolved against the current window, and no target means append.
+ *
+ * Returns `undefined` when the caller addressed a turn that is not in the window — the
+ * send is about to be refused anyway, so showing a draft would be a lie. (A target that
+ * only exists on disk is the same case: the user clicked a bubble that was in the window,
+ * so an unresolvable identity here means the window changed underneath.)
+ */
+function resolveDraftInsertion(
+  session: SessionRuntimeState,
+  index: number | undefined,
+  input: SessionSubmitInput,
+): PendingSubmission["insertion"] | undefined {
+  if (input.targetMessageId !== undefined) {
+    return { kind: "replace", targetMessageId: input.targetMessageId };
+  }
+  if (index !== undefined) {
+    const clicked = session.history[index];
+    return clicked
+      ? { kind: "replace", targetMessageId: carrierMessageIdOf(clicked) }
+      : undefined;
+  }
+  return { kind: "append" };
+}
+
 /** What preparation hands to the retryable stream step. */
 type PreparedSubmittedTurn = {
   legacySlashCommandData:
@@ -132,8 +165,45 @@ export const submitSessionInput = createAsyncThunk<
   ThunkApiType
 >("sessions/submitInput", async (input, { dispatch, getState, extra }) => {
   const { sessionId, editorState, modifiers, index, attachments } = input;
-  if (!selectSessionById(getState(), sessionId)) {
+  const startingSession = selectSessionById(getState(), sessionId);
+  if (!startingSession) {
     return false;
+  }
+  // A send already being prepared owns this session: refuse rather than queue a second
+  // draft (the UI also disables the input while one is pending).
+  if (startingSession.pendingSubmission) {
+    return false;
+  }
+
+  // ── Show the draft now, synchronously (workflow step 3) ─────────────────────
+  //
+  // The committed turn cannot exist yet (Stage 2F commits it after context resolution),
+  // so this row is the feedback for that wait. `processEditorContent` is synchronous, and
+  // the insertion identity is resolvable from the current window, so this costs nothing
+  // measurable — and it must stay that way: anything awaited here would reintroduce the
+  // delay it is meant to hide.
+  const submissionId = uuidv4();
+  const draftInsertion = resolveDraftInsertion(startingSession, index, input);
+  if (draftInsertion) {
+    dispatch(
+      setPendingSubmission({
+        sessionId,
+        submission: {
+          submissionId,
+          insertion: draftInsertion,
+          // Same projection the committed bubble renders. Parsing the editor state
+          // again here (resolveEditorContent parses it too) is deliberate: reusing its
+          // result would mean awaiting it first, which is exactly the delay this draft
+          // exists to hide. The parse is synchronous and pure.
+          displayContent: processEditorContent(editorState).parts,
+          attachmentMeta: attachments?.map((file) => ({
+            name: file.name,
+            path: file.path,
+          })),
+          startedAt: Date.now(),
+        },
+      }),
+    );
   }
 
   // ── Preparation (exactly once) ──────────────────────────────────────────────
@@ -429,12 +499,19 @@ export const submitSessionInput = createAsyncThunk<
         : undefined,
       insertionKind,
     };
-  })().catch((error) => {
-    // Same user-visible outcome as before this split: a dialog explaining the failure,
-    // and a `false` result for the send. Never a rejected promise — callers `unwrap()`.
-    reportSubmitFailure({ dispatch, getState }, sessionId, error);
-    return undefined;
-  });
+  })()
+    .catch((error) => {
+      // Same user-visible outcome as before this split: a dialog explaining the failure,
+      // and a `false` result for the send. Never a rejected promise — callers `unwrap()`.
+      reportSubmitFailure({ dispatch, getState }, sessionId, error);
+      return undefined;
+    })
+    .finally(() => {
+      // Every exit path clears the draft — success (the committed turn takes its place) and
+      // failure (resolution error, stale target, session gone) alike. ID-checked, so a slow
+      // failing attempt cannot clear a newer draft.
+      dispatch(clearPendingSubmission({ sessionId, submissionId }));
+    });
   if (!prepared) {
     return false;
   }
