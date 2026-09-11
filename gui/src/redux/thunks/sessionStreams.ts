@@ -30,6 +30,7 @@ import {
   applySessionStreamUpdate,
   beginSessionStream,
   finishSessionStream,
+  commitSessionConversationTurn,
   pauseSessionStream,
   setSessionFirstTurn,
   setSessionContextMetrics,
@@ -161,6 +162,16 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
     if (!isLiveRequest(getState(), sessionId, requestId)) {
       return false;
     }
+    // Chat terminal: commit the completed logical turn (方案.md §五.16.4) while
+    // the request is still live, then end the stream lifecycle. Non-chat
+    // streams (edit mode) never call this and must not invalidate the metrics.
+    dispatch(
+      commitSessionConversationTurn({
+        sessionId,
+        requestId,
+        terminalStatus: status,
+      }),
+    );
     dispatch(finishSessionStream({ sessionId, requestId, status }));
     checkpointBaselines.delete(sessionId);
     await dispatch(
@@ -557,7 +568,7 @@ async function streamModelTurn(
   // request even when the window is not truncated yet (firstTurnItems + a
   // reliable baseline is enough). The reduced compile still drives the actual
   // send / prune / out-of-context decision.
-  const requestDroppedMiddle =
+  const requestUsesReducedHistory =
     plan.kind === "ready" && plan.mode === "first-turn-plus-current";
 
   const { messages, appliedRules, appliedRulesSourceMessageId } =
@@ -627,7 +638,7 @@ async function streamModelTurn(
     contextLength,
   } = precompiledRes.content;
 
-  if (!requestDroppedMiddle) {
+  if (!requestUsesReducedHistory) {
     dispatch(
       setSessionContextMetrics({
         sessionId,

@@ -10,6 +10,7 @@ import {
   deleteCompactionByMessageId,
   deleteTurnByMessageId,
   finishSessionStream,
+  commitSessionConversationTurn,
   initialSessionRuntime,
   initialSessionsState,
   markSessionDirty,
@@ -282,10 +283,10 @@ describe("sessionsSlice — ownership", () => {
 
     state = sessionsSlice.reducer(
       state,
-      finishSessionStream({
+      commitSessionConversationTurn({
         sessionId: "s1",
         requestId: "r1",
-        status: "completed",
+        terminalStatus: "completed",
       }),
     );
     expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
@@ -294,14 +295,14 @@ describe("sessionsSlice — ownership", () => {
     expect(state.sessionsById.s1.contextPercentage).toBe(0.3);
     expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
 
-    // A stale terminal is a no-op.
+    // A stale terminal (a different live request) is a no-op.
     const after = state.sessionsById.s1.historyRevision;
     state = sessionsSlice.reducer(
       state,
-      finishSessionStream({
+      commitSessionConversationTurn({
         sessionId: "s1",
-        requestId: "r1",
-        status: "completed",
+        requestId: "r2",
+        terminalStatus: "completed",
       }),
     );
     expect(state.sessionsById.s1.historyRevision).toBe(after);
@@ -317,7 +318,11 @@ describe("sessionsSlice — ownership", () => {
       const before = state.sessionsById.s1.historyRevision;
       state = sessionsSlice.reducer(
         state,
-        finishSessionStream({ sessionId: "s1", requestId: "r1", status }),
+        commitSessionConversationTurn({
+          sessionId: "s1",
+          requestId: "r1",
+          terminalStatus: status,
+        }),
       );
       expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
     }
@@ -342,12 +347,44 @@ describe("sessionsSlice — ownership", () => {
 
     state = sessionsSlice.reducer(
       state,
-      finishSessionStream({
+      commitSessionConversationTurn({
         sessionId: "s1",
         requestId: "other",
+        terminalStatus: "completed",
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+  });
+
+  it("ends a non-chat stream without committing the conversation", () => {
+    // Edit mode's diff stream ends through finishSessionStream alone; it must
+    // not advance the conversation revision or clear the metrics freshness.
+    const meta = {
+      modelIdentity: "gpt-4o",
+      historyRevision: 0,
+      schemaVersion: 1,
+    };
+    let state = stateWith({
+      history: [item("u1", "user", "hi")],
+      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+      contextMetricsMeta: meta,
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      finishSessionStream({
+        sessionId: "s1",
+        requestId: "r1",
         status: "completed",
       }),
     );
+
     expect(state.sessionsById.s1.historyRevision).toBe(before);
     expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
   });

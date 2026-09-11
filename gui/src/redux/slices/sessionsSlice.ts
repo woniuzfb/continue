@@ -857,7 +857,6 @@ export const sessionsSlice = createSlice({
       if (!session || session.stream.requestId !== action.payload.requestId) {
         return;
       }
-      markConversationCommitted(session);
       const { error } = session.stream;
       session.stream = {
         status: action.payload.status === "completed" ? "idle" : "failed",
@@ -865,6 +864,26 @@ export const sessionsSlice = createSlice({
         // (方案.md §七.4); the requestId itself is released.
         ...(action.payload.status === "failed" && error ? { error } : {}),
       };
+    },
+    /**
+     * Chat terminal commit (方案.md §五.16.4). Only the CHAT stream's final turn
+     * advances the conversation revision and drops the metrics freshness
+     * identity. Non-chat streams (e.g. edit mode) end through
+     * `finishSessionStream` alone and must not invalidate the metrics.
+     */
+    commitSessionConversationTurn: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        requestId: string;
+        terminalStatus: "completed" | "aborted" | "failed";
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session || session.stream.requestId !== action.payload.requestId) {
+        return;
+      }
+      markConversationCommitted(session);
     },
     setSessionStreamError: (
       state,
@@ -1577,6 +1596,7 @@ export const {
   beginSessionStream,
   applySessionStreamUpdate,
   finishSessionStream,
+  commitSessionConversationTurn,
   pauseSessionStream,
   setSessionStreamError,
   setSessionPagination,
