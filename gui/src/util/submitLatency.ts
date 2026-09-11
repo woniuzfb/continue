@@ -13,11 +13,12 @@
  * Privacy: the event shape has **no** field for prompt text, context content, file
  * paths or attachment payloads. The only free-form values are a fixed phase name and a
  * provider **name** (e.g. `currentFile`, `codebase`, an MCP server name). Anything else
- * must be a number, a boolean or a closed enum. `submitLatency.test.ts` asserts this.
+ * must be a number, a boolean or a closed enum. `submitDiagnostics.test.ts` asserts this on
+ * the printed lines themselves.
  *
- * Output: `console.debug` (invisible unless the webview console is set to verbose) plus
- * a bounded in-memory ring buffer that `__continueSubmitLatencyEvents()` dumps on demand,
- * so a report can be produced from a real workload without a rebuild.
+ * Output: one `console.log` line per phase, prefixed `[submit-latency]`. Plain `log` on
+ * purpose — `debug` is hidden in the VS Code webview console unless the level is switched
+ * to Verbose, and a diagnostic nobody can see is not a diagnostic.
  */
 
 /** Fixed phase names. Keep them stable: they are the axis of any comparison. */
@@ -50,59 +51,42 @@ export type SubmitLatencyEvent = {
   ok?: boolean;
 };
 
-const MAX_EVENTS = 40;
-const events: SubmitLatencyEvent[] = [];
-
-let consoleHelperInstalled = false;
-
 /**
- * Exposes the ring buffer to the webview devtools console, so a report can be produced
- * by reproducing a send and then calling `__continueSubmitLatencyEvents()` — no rebuild,
- * no log level to change.
- */
-function installConsoleHelper(): void {
-  if (consoleHelperInstalled) {
-    return;
-  }
-  consoleHelperInstalled = true;
-  try {
-    if (typeof window === "undefined") {
-      return;
-    }
-    (
-      window as unknown as Record<string, unknown>
-    ).__continueSubmitLatencyEvents = () => readSubmitLatencyEvents();
-  } catch {
-    // ignore
-  }
-}
-
-/**
- * Records one phase. Always cheap (a push + a `console.debug`) and never throws — an
- * instrumentation failure must not be able to break a send.
+ * Records one phase. Always cheap and never throws — an instrumentation failure must not
+ * be able to break a send.
+ *
+ * The line is deliberately a single, greppable string: filter the webview console by
+ * `submit-latency` and read the phases in order. `submit-to-commit` is the one that answers
+ * "how long after Enter did the bubble appear"; the `context-resolution` lines that precede
+ * it break the wait down per provider.
  */
 export function recordSubmitLatency(event: SubmitLatencyEvent): void {
   try {
-    events.push(event);
-    if (events.length > MAX_EVENTS) {
-      events.shift();
+    const details: string[] = [];
+    if (event.durationMs !== undefined) {
+      details.push(`${event.durationMs.toFixed(1)}ms`);
     }
-    // `debug` level on purpose: hidden by default, available with verbose logging.
-    console.debug("[submit-latency]", event);
-    installConsoleHelper();
+    if (event.provider !== undefined) {
+      details.push(`provider=${event.provider}`);
+    }
+    if (event.requests !== undefined) {
+      details.push(`requests=${event.requests}`);
+    }
+    if (event.insertion !== undefined) {
+      details.push(event.insertion);
+    }
+    if (event.hadContext !== undefined) {
+      details.push(`hadContext=${event.hadContext}`);
+    }
+    if (event.ok === false) {
+      details.push("FAILED");
+    }
+    console.log(
+      `[submit-latency] ${event.sessionId} ${event.phase}${details.length ? " " + details.join(" ") : ""}`,
+    );
   } catch {
     // ignore
   }
-}
-
-/** The recent events, oldest first. For a support session / tests. */
-export function readSubmitLatencyEvents(): readonly SubmitLatencyEvent[] {
-  return events;
-}
-
-/** Test helper: drop everything recorded so far. */
-export function resetSubmitLatencyEvents(): void {
-  events.length = 0;
 }
 
 /**

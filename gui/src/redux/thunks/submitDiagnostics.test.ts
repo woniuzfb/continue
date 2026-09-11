@@ -9,10 +9,7 @@ import { resetSessionSaveQueues } from "./sessionPersistence";
 import { resetSessionStreamCheckpoints } from "./sessionStreams";
 import { resetSessionStreamRunner } from "./sessionTools";
 import { submitSessionInput } from "./sessionSubmit";
-import {
-  readSubmitLatencyEvents,
-  resetSubmitLatencyEvents,
-} from "../../util/submitLatency";
+import { captureSubmitLatencyLines } from "../../util/test/submitLatencyCapture";
 import { resolveEditorContent } from "../../components/mainInput/TipTapEditor/utils/resolveEditorContent";
 
 /**
@@ -93,12 +90,18 @@ const session = (store: ReturnType<typeof makeStore>) =>
 const run = (store: ReturnType<typeof makeStore>, thunk: any) =>
   (store.dispatch(thunk) as any).unwrap() as Promise<any>;
 
+let capture: ReturnType<typeof installSubmitLatencyCapture>;
+
+function installSubmitLatencyCapture() {
+  return captureSubmitLatencyLines();
+}
+
 describe("submit diagnostics — gathering flag ownership", () => {
   beforeEach(() => {
     resetSessionSaveQueues();
     resetSessionStreamCheckpoints();
     resetSessionStreamRunner();
-    resetSubmitLatencyEvents();
+    capture = installSubmitLatencyCapture();
   });
 
   it("clears the session flag when a context provider throws", async () => {
@@ -172,7 +175,7 @@ describe("submit diagnostics — latency events", () => {
     resetSessionSaveQueues();
     resetSessionStreamCheckpoints();
     resetSessionStreamRunner();
-    resetSubmitLatencyEvents();
+    capture = installSubmitLatencyCapture();
   });
 
   it("records every phase of a send, without leaking any content", async () => {
@@ -192,7 +195,7 @@ describe("submit diagnostics — latency events", () => {
       }),
     );
 
-    const events = readSubmitLatencyEvents();
+    const events = capture.events();
     const phases = new Set<string>(events.map((event) => event.phase));
     // The spans that bracket the user-visible wait…
     expect(phases.has("editor-processing")).toBe(true);
@@ -213,23 +216,12 @@ describe("submit diagnostics — latency events", () => {
     expect(commit.hadContext).toBe(false);
 
     // Privacy: no prompt text, no paths, no context payloads anywhere in the events.
-    const serialized = JSON.stringify(events);
-    expect(serialized).not.toContain(SECRET);
-    expect(serialized).not.toContain("/Users/");
-    for (const event of events) {
-      for (const key of Object.keys(event)) {
-        expect([
-          "phase",
-          "sessionId",
-          "durationMs",
-          "provider",
-          "requests",
-          "hadContext",
-          "insertion",
-          "ok",
-        ]).toContain(key);
-      }
-    }
+    // Privacy is asserted on the **printed output**, which is what leaves the machine if
+    // someone pastes a log: no prompt text, no paths, no context payloads.
+    const printed = capture.lines().join("\n");
+    expect(printed).not.toContain(SECRET);
+    expect(printed).not.toContain("/Users/");
+    expect(printed).not.toContain("non-mention-usage");
   });
 
   it("records the provider name without its query", async () => {
@@ -255,18 +247,17 @@ describe("submit diagnostics — latency events", () => {
 
     // The provider was really asked (that is the latency source) and the event names it.
     expect(seen.some((entry) => entry.name === "currentFile")).toBe(true);
-    const providerEvents = readSubmitLatencyEvents().filter(
-      (event) => event.provider !== undefined,
-    );
+    const providerEvents = capture
+      .events()
+      .filter((event) => event.provider !== undefined);
     expect(providerEvents.map((event) => event.provider)).toContain(
       "currentFile",
     );
-    const serialized = JSON.stringify(providerEvents);
     // The query the app sends is not part of the log; only the provider name is.
-    expect(serialized).not.toContain("non-mention-usage");
+    expect(capture.lines().join("\n")).not.toContain("non-mention-usage");
   });
 
-  it("exposes the buffer for a support session without enabling anything", async () => {
+  it("prints one greppable line per phase", async () => {
     const store = makeStore();
     await run(
       store,
@@ -277,10 +268,17 @@ describe("submit diagnostics — latency events", () => {
       }),
     );
 
-    // The console helper is installed lazily on the first event.
-    const helper = (globalThis as any).window?.__continueSubmitLatencyEvents;
-    expect(typeof helper).toBe("function");
-    expect(helper().length).toBeGreaterThan(0);
+    const lines = capture.lines();
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line.startsWith("[submit-latency] s1 ")).toBe(true);
+    }
+    // `submit-to-commit` is the number that answers "how long after Enter did the bubble
+    // appear", so it must always be there and carry a duration.
+    const total = capture
+      .events()
+      .find((event) => event.phase === "submit-to-commit");
+    expect(total?.durationMs).toBeGreaterThanOrEqual(0);
   });
 });
 

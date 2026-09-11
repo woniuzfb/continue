@@ -10,10 +10,7 @@ import { resetSessionStreamCheckpoints } from "./sessionStreams";
 import { resetSessionStreamRunner } from "./sessionTools";
 import { submitSessionInput } from "./sessionSubmit";
 import { resolveStreamRetry } from "../../util/streamRetry";
-import {
-  readSubmitLatencyEvents,
-  resetSubmitLatencyEvents,
-} from "../../util/submitLatency";
+import { captureSubmitLatencyLines } from "../../util/test/submitLatencyCapture";
 import { approveToolCall } from "./sessionTools";
 
 /**
@@ -95,6 +92,8 @@ const session = (store: ReturnType<typeof makeStore>) =>
 const run = (store: ReturnType<typeof makeStore>, thunk: any) =>
   (store.dispatch(thunk) as any).unwrap() as Promise<any>;
 
+let capture: ReturnType<typeof captureSubmitLatencyLines>;
+
 /** Answers the retry dialog as soon as the wrapper opens it. */
 function autoAnswerRetry(
   store: ReturnType<typeof makeStore>,
@@ -139,7 +138,7 @@ describe("submit retry boundary — a transient error must not resubmit the turn
     resetSessionSaveQueues();
     resetSessionStreamCheckpoints();
     resetSessionStreamRunner();
-    resetSubmitLatencyEvents();
+    capture = captureSubmitLatencyLines();
   });
 
   it("retries only the model stream: one user turn, one placeholder, one save", async () => {
@@ -482,5 +481,5 @@ describe("submit retry boundary — a transient error must not resubmit the turn
 });
 
 function latencyPhases(): string[] {
-  return readSubmitLatencyEvents().map((event) => event.phase);
+  return capture.events().map((event) => event.phase);
 }
