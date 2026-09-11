@@ -6,6 +6,7 @@ import {
   type FullConversationMeasurementRequest,
 } from "core/util/fullConversationMetrics";
 import { resolveSessionMeasurementInputs } from "../util/sessionRequestOptions";
+import { recordSubmitLatency } from "../../util/submitLatency";
 import {
   currentFullConversationMetricsEnvironment,
   currentFullConversationMetricsMeta,
@@ -133,16 +134,26 @@ function buildSessionPayload(
   ) {
     const model = selectSessionChatModel(state, sessionId);
     if (model) {
+      // This runs synchronously inside the same task as the terminal commit: it renders
+      // the system message and canonicalizes the whole construction identity, so it is
+      // worth its own measurement rather than being hidden inside the save.
+      const identityStartedAt = performance.now();
       const { request, identityInputs } = resolveSessionMeasurementInputs({
         state,
         session,
         model,
       });
+      const constructionIdentity =
+        fullConversationConstructionIdentity(identityInputs);
+      recordSubmitLatency({
+        phase: "terminal-identity",
+        sessionId,
+        durationMs: performance.now() - identityStartedAt,
+      });
       fullConversationMeasurement = {
         ...request,
         conversationRevision: session.conversationRevision,
-        constructionIdentity:
-          fullConversationConstructionIdentity(identityInputs),
+        constructionIdentity,
         schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
       };
     }

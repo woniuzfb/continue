@@ -12,6 +12,10 @@ import {
 import { stripImages } from "core/util/messageContent";
 import { IIdeMessenger } from "../../../../context/IdeMessenger";
 import { setSessionGatheringContext } from "../../../../redux/slices/sessionsSlice";
+import {
+  measureSubmitLatency,
+  measureSubmitLatencySync,
+} from "../../../../util/submitLatency";
 import { RootState } from "../../../../redux/store";
 import { processEditorContent } from "./processEditorContent";
 import { renderSlashCommandPrompt } from "./renderSlashCommand";
@@ -55,23 +59,29 @@ export async function resolveEditorContent({
   dispatch,
   getState,
 }: ResolveEditorContentInput): Promise<ResolveEditorContentOutput> {
+  // Latency instrumentation: the submitted turn is committed only after this function
+  // resolves, so whatever happens here is time the user spends without a bubble.
   const {
     parts,
     contextRequests: editorContextRequests,
     selectedCode,
     slashCommandName,
-  } = processEditorContent(editorState);
+  } = measureSubmitLatencySync({ phase: "editor-processing", sessionId }, () =>
+    processEditorContent(editorState),
+  );
 
   const {
     slashedParts,
     contextRequests: slashContextRequests,
     legacyCommandWithInput,
-  } = await renderSlashCommandPrompt(
-    ideMessenger,
-    slashCommandName,
-    parts,
-    availableSlashCommands,
-    selectedCode,
+  } = await measureSubmitLatency({ phase: "slash-rendering", sessionId }, () =>
+    renderSlashCommandPrompt(
+      ideMessenger,
+      slashCommandName,
+      parts,
+      availableSlashCommands,
+      selectedCode,
+    ),
   );
 
   const contextRequests = [...editorContextRequests, ...slashContextRequests];
@@ -86,27 +96,39 @@ export async function resolveEditorContent({
     dispatch(setSessionGatheringContext({ sessionId, gathering: true }));
   }
 
-  const selectedContextItems = await gatherContextItems({
-    sessionId,
-    contextRequests,
-    modifiers,
-    ideMessenger,
-    defaultContextProviders,
-    parts: slashedParts,
-    selectedCode,
-    getState,
-  });
+  try {
+    const selectedContextItems = await measureSubmitLatency(
+      {
+        phase: "context-resolution",
+        sessionId,
+        requests: contextRequests.length,
+      },
+      () =>
+        gatherContextItems({
+          sessionId,
+          contextRequests,
+          modifiers,
+          ideMessenger,
+          defaultContextProviders,
+          parts: slashedParts,
+          selectedCode,
+          getState,
+        }),
+    );
 
-  if (shouldGatherContext) {
-    dispatch(setSessionGatheringContext({ sessionId, gathering: false }));
+    return {
+      selectedContextItems,
+      selectedCode,
+      content: slashedParts,
+      legacyCommandWithInput,
+    };
+  } finally {
+    // `finally`, not the happy path: a provider that throws used to leave the session
+    // stuck in "gathering context" forever (there is no other writer of this flag).
+    if (shouldGatherContext) {
+      dispatch(setSessionGatheringContext({ sessionId, gathering: false }));
+    }
   }
-
-  return {
-    selectedContextItems,
-    selectedCode,
-    content: slashedParts,
-    legacyCommandWithInput,
-  };
 }
 
 /**
@@ -171,13 +193,18 @@ async function gatherContextItems({
   deduplicatedInputs.forEach((item, mentionIdx) => {
     parallelRequests.push(
       (async () => {
-        const result = await ideMessenger.request("context/getContextItems", {
-          name: item.provider,
-          query: item.query ?? "",
-          fullInput: stripImages(parts),
-          selectedCode,
-          isInAgentMode,
-        });
+        // Per-provider timing: the total only ever reports the slowest one.
+        const result = await measureSubmitLatency(
+          { phase: "context-resolution", sessionId, provider: item.provider },
+          () =>
+            ideMessenger.request("context/getContextItems", {
+              name: item.provider,
+              query: item.query ?? "",
+              fullInput: stripImages(parts),
+              selectedCode,
+              isInAgentMode,
+            }),
+        );
         mentionResults[mentionIdx] =
           result.status === "success" ? result.content : [];
       })(),
@@ -192,13 +219,17 @@ async function gatherContextItems({
   ) {
     parallelRequests.push(
       (async () => {
-        const result = await ideMessenger.request("context/getContextItems", {
-          name: "codebase",
-          query: "",
-          fullInput: stripImages(parts),
-          selectedCode,
-          isInAgentMode,
-        });
+        const result = await measureSubmitLatency(
+          { phase: "context-resolution", sessionId, provider: "codebase" },
+          () =>
+            ideMessenger.request("context/getContextItems", {
+              name: "codebase",
+              query: "",
+              fullInput: stripImages(parts),
+              selectedCode,
+              isInAgentMode,
+            }),
+        );
         if (result.status === "success") {
           codebaseResults = result.content;
         }
@@ -214,15 +245,16 @@ async function gatherContextItems({
   ) {
     parallelRequests.push(
       (async () => {
-        const currentFileResponse = await ideMessenger.request(
-          "context/getContextItems",
-          {
-            name: "currentFile",
-            query: "non-mention-usage",
-            fullInput: "",
-            selectedCode: [],
-            isInAgentMode,
-          },
+        const currentFileResponse = await measureSubmitLatency(
+          { phase: "context-resolution", sessionId, provider: "currentFile" },
+          () =>
+            ideMessenger.request("context/getContextItems", {
+              name: "currentFile",
+              query: "non-mention-usage",
+              fullInput: "",
+              selectedCode: [],
+              isInAgentMode,
+            }),
         );
         if (currentFileResponse.status === "success") {
           const currentFile = currentFileResponse.content[0];

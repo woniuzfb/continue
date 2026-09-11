@@ -212,6 +212,11 @@ export type SessionRuntimeState = {
    */
   fullConversationMetricsEnvironment?: FullConversationMetricsEnvironment;
   /**
+   * 该 session 正在为一次**尚未提交**的发送解析上下文（方案.md §五.20）。
+   * runtime-only：不进 history、不进保存、不进指标。
+   */
+  isGatheringContext?: boolean;
+  /**
    * 正在飞行的只读计量请求数（方案.md §五.16.6 的 `measuring` 态）。用计数而不是布尔：
    * 同一 session 可能有并发请求（例如激活门禁与手动重算），布尔会让先返回的那个提前清掉
    * 后一个仍在飞行的状态。
@@ -1504,18 +1509,28 @@ export const sessionsSlice = createSlice({
       }
     },
     /**
-     * Marks the last history item as gathering context (方案.md §五.20).
-     * `isGatheringContext` lives on the history item, so this is a targeted
-     * item write rather than a session flag.
+     * 方案.md §五.20 / "submit latency and retry boundary": is this session resolving
+     * context for a send that has not been committed yet?
+     *
+     * This is a **session** flag, not a history-item flag. It used to write
+     * `history.at(-1).isGatheringContext`, which required the assistant placeholder to
+     * already be in history — Stage 2F commits the submitted turn *after* the content is
+     * resolved, so the flag landed on the previous turn (or nowhere at all in a fresh
+     * session). The state belongs to the session because during resolution there is no
+     * submitted turn to attach it to.
      */
     setSessionGatheringContext: (
       state,
       action: PayloadAction<{ sessionId: string; gathering: boolean }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
-      const lastItem = session?.history.at(-1);
-      if (lastItem) {
-        lastItem.isGatheringContext = action.payload.gathering;
+      if (!session) {
+        return;
+      }
+      if (action.payload.gathering) {
+        session.isGatheringContext = true;
+      } else {
+        delete session.isGatheringContext;
       }
     },
     setSessionInterrupted: (

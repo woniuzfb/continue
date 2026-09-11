@@ -37,6 +37,7 @@ import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 import { sessionStreamWrapper } from "./sessionStreamWrapper";
 import { runSessionStream } from "./sessionStreams";
 import { updateSessionFileSymbolsFromFiles } from "./updateFileSymbols";
+import { recordSubmitLatency } from "../../util/submitLatency";
 
 /**
  * Phase 1 session-scoped send path (方案.md §七.3, §六).
@@ -122,6 +123,7 @@ export const submitSessionInput = createAsyncThunk<
     sessionStreamWrapper({
       sessionId,
       runStream: async () => {
+        const submitStartedAt = performance.now();
         // 1. Capture the target identity *before* any await (方案.md §十二): the
         // caller's index is relative to the window that was on screen, and both a
         // full load (which replaces `session.history`) and a trim moving
@@ -214,6 +216,10 @@ export const submitSessionInput = createAsyncThunk<
         // that snapshot's validity checkable again at commit time, and the target is
         // carried as an identity (a number would address another turn by then).
         const expectedConversationRevision = session.conversationRevision;
+        // Everything up to here was resolved against the pre-await snapshot: this is the
+        // span the user spends without a bubble (context IPC dominates it).
+        const insertionKind: "append" | "replace" =
+          targetMessageId === undefined ? "append" : "replace";
         const existingMessage =
           inputIndex >= 0 && inputIndex < session.history.length
             ? session.history[inputIndex].message
@@ -300,6 +306,7 @@ export const submitSessionInput = createAsyncThunk<
         // The reducer validates the target itself (identity + expected revision) and does
         // nothing when it no longer holds — so the success check below is the authority
         // on whether this submit happened at all.
+        const resolvedAt = performance.now();
         const submittedUserItem = userHistoryItem(
           finalContent,
           attachmentMeta,
@@ -325,6 +332,21 @@ export const submitSessionInput = createAsyncThunk<
         // itself. Membership of the freshly minted user item id is the only **positive**
         // signal: a revision comparison would be fooled by an unrelated bump that happens
         // to land on the same number.
+        recordSubmitLatency({
+          phase: "commit-turn",
+          sessionId,
+          durationMs: performance.now() - resolvedAt,
+          insertion: insertionKind,
+          hadContext: selectedContextItems.length > 0,
+          ok: true,
+        });
+        recordSubmitLatency({
+          phase: "submit-to-commit",
+          sessionId,
+          durationMs: performance.now() - submitStartedAt,
+          insertion: insertionKind,
+          hadContext: selectedContextItems.length > 0,
+        });
         const afterCommit = selectSessionById(getState(), sessionId);
         const committed =
           !!afterCommit &&
@@ -354,6 +376,7 @@ export const submitSessionInput = createAsyncThunk<
         dispatch(resetSessionCodeBlockApplyIndex({ sessionId }));
 
         // 4. Immediate save boundary (方案.md §七.2/§七.3).
+        const beforeSaveEnqueue = performance.now();
         void dispatch(
           enqueueSessionSave({
             sessionId,
@@ -365,7 +388,15 @@ export const submitSessionInput = createAsyncThunk<
           }),
         );
 
+        recordSubmitLatency({
+          phase: "save-enqueue",
+          sessionId,
+          durationMs: performance.now() - beforeSaveEnqueue,
+          insertion: insertionKind,
+        });
+
         // 5. Run the turn.
+        const beforeStreamStart = performance.now();
         await dispatch(
           runSessionStream({
             sessionId,
@@ -380,6 +411,12 @@ export const submitSessionInput = createAsyncThunk<
               : undefined,
           }),
         ).unwrap();
+        recordSubmitLatency({
+          phase: "stream-start",
+          sessionId,
+          durationMs: performance.now() - beforeStreamStart,
+          insertion: insertionKind,
+        });
       },
     }),
   ).unwrap()) as boolean;

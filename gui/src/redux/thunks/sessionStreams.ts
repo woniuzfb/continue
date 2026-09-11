@@ -16,6 +16,7 @@ import {
   selectSessionPendingToolCalls,
   selectSessionToolCalls,
 } from "../selectors/sessionToolCalls";
+import { recordSubmitLatency } from "../../util/submitLatency";
 import {
   buildSessionCompletionOptions,
   resolveNativeTooling,
@@ -172,6 +173,7 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
     // 建立了新内容版本**（Step 1 的 `hasConversationMutation` 门禁已经在 reducer 里决定
     // 了这一点）。无输出 terminal（首 token 前 Stop/Failure、out-of-context）不推进
     // revision，于是这里得到 `none`，磁盘 metrics 原样保留。
+    const terminalStartedAt = performance.now();
     const revisionBefore = selectSessionById(
       getState(),
       sessionId,
@@ -187,8 +189,15 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
       getState(),
       sessionId,
     )?.conversationRevision;
+    recordSubmitLatency({
+      phase: "terminal-commit",
+      sessionId,
+      durationMs: performance.now() - terminalStartedAt,
+      ok: true,
+    });
     dispatch(finishSessionStream({ sessionId, requestId, status }));
     checkpointBaselines.delete(sessionId);
+    const beforeTerminalSave = performance.now();
     await dispatch(
       enqueueSessionSave({
         sessionId,
@@ -202,6 +211,11 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
     // P4a: legacy message ID migration, "stream terminal" trigger. The save
     // above also kicks it, but no trigger is load-bearing on its own — each one
     // just says "this session may now be safe" and the schedule thunk decides.
+    recordSubmitLatency({
+      phase: "terminal-save-enqueue",
+      sessionId,
+      durationMs: performance.now() - beforeTerminalSave,
+    });
     void dispatch(scheduleMessageIdMigrationIfSafe({ sessionId }));
     return true;
   },

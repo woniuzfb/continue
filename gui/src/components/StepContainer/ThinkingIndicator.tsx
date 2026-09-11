@@ -30,8 +30,10 @@ const ThinkingIndicator = ({ historyItem }: ThinkingIndicatorProps) => {
     ? !!historyItem.message.content.length
     : !!historyItem.message.content;
   const isO1 = selectedModel?.model.startsWith("o1");
-  const isThinking =
-    isStreaming && !historyItem.isGatheringContext && !hasContent;
+  // No `isGatheringContext` check: that flag now belongs to the session and only while
+  // a send is still resolving context — by the time a placeholder exists and streams, it
+  // is already cleared (see `setSessionGatheringContext`).
+  const isThinking = isStreaming && !hasContent;
   if (!isThinking || !isO1) {
     return null;
   }

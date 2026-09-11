@@ -170,9 +170,11 @@ export function ContextItemsPeek({
   }, [contextItems]);
 
   const sessionId = useSessionId();
+  // Session-scoped: during context resolution the submitted turn is not in history yet
+  // (Stage 2F commits it afterwards), so the flag cannot live on the last item.
   const isGatheringContext = useAppSelector(
     (state) =>
-      selectActiveHistoryOf(state, sessionId).at(-1)?.isGatheringContext ??
+      (state.sessions.sessionsById[sessionId] as any)?.isGatheringContext ??
       false,
   );
 
