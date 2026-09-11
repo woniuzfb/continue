@@ -1,8 +1,11 @@
-import { LLMFullCompletionOptions, ModelDescription, Tool } from "core";
+import type { LLMFullCompletionOptions, ModelDescription, Tool } from "core";
 import { modelSupportsNativeTools } from "core/llm/toolSupport";
 import { modelSupportsImages } from "core/llm/autodetect";
 import { DEFAULT_MAX_TOKENS } from "core/llm/constants";
-import { measurementInputsAffectingTokens } from "core/llm/countTokens";
+// 方案.md §7.1.1：**必须**从 browser-safe 模块导入。`core/llm/countTokens` 是
+// Node/Core-only（asyncEncoder → workerpool → worker_threads/os/child_process/path、
+// llamaTokenizer、js-tiktoken），从它导入会把整条 Node 依赖链带进 webview bundle。
+import { measurementInputsAffectingTokens } from "core/llm/tokenMeasurementInputs";
 import { addSystemMessageToolsToSystemMessage } from "core/tools/systemMessageTools/buildToolsSystemMessage";
 import { getBaseSystemMessage } from "./getBaseSystemMessage";
 import { SystemMessageToolCodeblocksFramework } from "core/tools/systemMessageTools/toolCodeblocks";

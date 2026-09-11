@@ -20,9 +20,16 @@ import {
   stripInlineImageBase64,
 } from "../util/messageContent.js";
 import { AsyncEncoder, LlamaAsyncEncoder } from "./asyncEncoder.js";
-import { DEFAULT_PRUNING_LENGTH } from "./constants.js";
 import { getAdjustedTokenCountFromModel } from "./getAdjustedTokenCount.js";
 import llamaTokenizer from "./llamaTokenizer.js";
+// browser-safe 的纯预算/投影（方案.md §7.1.1）：定义在 tokenMeasurementInputs.ts，
+// 因为这个文件本身是 Node/Core-only（workerpool / llamaTokenizer）。GUI 只导入那个模块，
+// 绝不能从这里导入 —— 见 `gui/src/redux/browserBundleBoundary.test.ts`。
+import {
+  getTokenCountingBufferSafety,
+  resolveChatTokenBudget,
+  resolveExcludedToolOutputMinimum,
+} from "./tokenMeasurementInputs.js";
 
 interface Encoding {
   encode: Tiktoken["encode"];
@@ -410,17 +417,6 @@ function pruneStringFromTop(
   return encoding.decode(tokens.slice(tokens.length - maxTokens));
 }
 
-const MAX_TOKEN_SAFETY_BUFFER = 1000;
-const TOKEN_SAFETY_PROPORTION = 0.02;
-export function getTokenCountingBufferSafety(contextLength: number) {
-  return Math.min(
-    MAX_TOKEN_SAFETY_BUFFER,
-    contextLength * TOKEN_SAFETY_PROPORTION,
-  );
-}
-
-const MIN_RESPONSE_TOKENS = 1000;
-
 function pruneRawPromptFromTop(
   modelName: string,
   contextLength: number,
@@ -432,38 +428,6 @@ function pruneRawPromptFromTop(
     tokensForCompletion -
     getTokenCountingBufferSafety(contextLength);
   return pruneStringFromTop(modelName, maxTokens, prompt);
-}
-
-/**
- * 方案.md §7.1.1/§7.1.2：**唯一的 token 预算计算**。`compileChatMessages`（发送路径的
- * prune 决策与指标）与 `measureChatMessagesNoPrune`（完整会话计量）必须共用这一处，
- * 禁止各自复制公式 —— 否则两边的 `availableTokens` / 安全缓冲 / 输出预留会漂移。
- */
-export type ChatTokenBudget = {
-  contextLength: number;
-  countingSafetyBuffer: number;
-  /** 为输出保留的 token：`min(MIN_RESPONSE_TOKENS, maxTokens)`。 */
-  minOutputTokens: number;
-  /** 供输入使用的预算：`contextLength − countingSafetyBuffer − minOutputTokens`。 */
-  availableTokens: number;
-};
-
-export function resolveChatTokenBudget({
-  knownContextLength,
-  maxTokens,
-}: {
-  knownContextLength: number | undefined;
-  maxTokens: number;
-}): ChatTokenBudget {
-  const contextLength = knownContextLength ?? DEFAULT_PRUNING_LENGTH;
-  const countingSafetyBuffer = getTokenCountingBufferSafety(contextLength);
-  const minOutputTokens = Math.min(MIN_RESPONSE_TOKENS, maxTokens);
-  return {
-    contextLength,
-    countingSafetyBuffer,
-    minOutputTokens,
-    availableTokens: contextLength - countingSafetyBuffer - minOutputTokens,
-  };
 }
 
 /**
@@ -486,8 +450,9 @@ export function createBudgetMessageCounter({
   excludedToolOutputMinimum: number;
   countMessage(message: ChatMessage): number;
 } {
-  const excludedToolOutputMinimum =
-    excludeToolOutputsFromTokenCountMinTokens ?? 6000;
+  const excludedToolOutputMinimum = resolveExcludedToolOutputMinimum(
+    excludeToolOutputsFromTokenCountMinTokens,
+  );
   return {
     excludedToolOutputMinimum,
     countMessage: (message: ChatMessage): number => {
@@ -570,66 +535,6 @@ export function prepareMessagesForBudget(
       extractionError: e as Error,
     };
   }
-}
-
-/**
- * 方案.md §7.1.3（C.3）：**影响计量的有效输入清单**，供后续（Stage 2D）生成
- * `constructionIdentity` 时纳入 —— Stage 2A 的身份只覆盖构造环境（model / mode /
- * reasoning / rules / tools / system / completion options / summary 语义），
- * `supportsImages` 与 exclude-tool-output 这一类**只影响 token 计数**的模型/全局配置
- * 当时不可见，必须在这里显式列出。
- *
- * 注意：`toolNames` 只用于可读性；tool 定义的完整形状（name/description/parameters）
- * 决定 `toolTokens`，而它已经作为 `effectiveTools` 进入 Stage 2A 的构造身份。
- */
-export type MeasurementInputsAffectingTokens = {
-  modelName: string;
-  /** 解析后的窗口（`knownContextLength ?? DEFAULT_PRUNING_LENGTH`）。 */
-  contextLength: number;
-  maxTokens: number;
-  /** 派生但影响预算，必须一起纳入身份。 */
-  minOutputTokens: number;
-  countingSafetyBuffer: number;
-  supportsImages: boolean;
-  toolNames: string[];
-  excludeToolOutputsFromTokenCount: boolean;
-  excludeToolOutputsFromTokenCountMinTokens: number;
-};
-
-export function measurementInputsAffectingTokens({
-  modelName,
-  knownContextLength,
-  maxTokens,
-  supportsImages,
-  tools,
-  excludeToolOutputsFromTokenCount,
-  excludeToolOutputsFromTokenCountMinTokens,
-}: {
-  modelName: string;
-  knownContextLength: number | undefined;
-  maxTokens: number;
-  supportsImages: boolean;
-  tools?: Tool[];
-  excludeToolOutputsFromTokenCount?: boolean;
-  excludeToolOutputsFromTokenCountMinTokens?: number;
-}): MeasurementInputsAffectingTokens {
-  const budget = resolveChatTokenBudget({ knownContextLength, maxTokens });
-  const { excludedToolOutputMinimum } = createBudgetMessageCounter({
-    modelName,
-    excludeToolOutputsFromTokenCount,
-    excludeToolOutputsFromTokenCountMinTokens,
-  });
-  return {
-    modelName,
-    contextLength: budget.contextLength,
-    maxTokens,
-    minOutputTokens: budget.minOutputTokens,
-    countingSafetyBuffer: budget.countingSafetyBuffer,
-    supportsImages,
-    toolNames: (tools ?? []).map((tool) => tool.function.name),
-    excludeToolOutputsFromTokenCount: !!excludeToolOutputsFromTokenCount,
-    excludeToolOutputsFromTokenCountMinTokens: excludedToolOutputMinimum,
-  };
 }
 
 /**

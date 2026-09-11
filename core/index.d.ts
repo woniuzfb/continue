@@ -141,7 +141,7 @@ export interface ILLM
 
   compileChatMessages(
     messages: ChatMessage[],
-    options: LLMFullCompletionOpeions,
+    options: LLMFullCompletionOptions,
     /** 方案.md §十四: indexes that must never be pruned. */
     protectedMessageIndexes?: number[],
   ): CompiledChatMessagesReport;
@@ -154,7 +154,7 @@ export interface ILLM
    */
   measureChatMessagesNoPrune(
     messages: ChatMessage[],
-    options: LLMFullCompletionOpeions,
+    options: LLMFullCompletionOptions,
   ): ChatTokenMeasurement;
 
   embed(chunks: string[]): Promise<number[][]>;

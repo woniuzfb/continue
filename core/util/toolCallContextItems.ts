@@ -1,4 +1,5 @@
-import { ContextItem, ContextItemWithId, ToolCallState } from "..";
+// 全部是类型：`import type` 才能被擦掉，否则 GUI 打包会经 Core barrel 拉进运行时依赖。
+import type { ContextItem, ContextItemWithId, ToolCallState } from "..";
 
 /**
  * 方案.md §7.1.3（共享纯构造核心）：tool call 的 context items 投影是**纯函数**，

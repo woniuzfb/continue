@@ -8,10 +8,10 @@ import { ILLM } from "../../index.js";
 import { DEFAULT_MAX_TOKENS } from "../../llm/constants.js";
 import {
   countTokens,
-  getTokenCountingBufferSafety,
   pruneLinesFromBottom,
   pruneLinesFromTop,
 } from "../../llm/countTokens";
+import { getTokenCountingBufferSafety } from "../../llm/tokenMeasurementInputs.js";
 import { getUriPathBasename } from "../../util/uri";
 import { SnippetPayload } from "../snippets";
 import { AutocompleteSnippet } from "../snippets/types";

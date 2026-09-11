@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage, Tool } from "..";
+import { compileChatMessages, measureChatMessagesNoPrune } from "./countTokens";
 import {
-  compileChatMessages,
   getTokenCountingBufferSafety,
-  measureChatMessagesNoPrune,
   measurementInputsAffectingTokens,
   resolveChatTokenBudget,
-} from "./countTokens";
+} from "./tokenMeasurementInputs";
 
 /**
  * Stage 2C（方案.md §7.1.1/§7.1.2）：共享 token 预算 + no-prune 完整会话计量。

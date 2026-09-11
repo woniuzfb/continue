@@ -1,4 +1,6 @@
-import {
+// 类型必须用 `import type`（esbuild 不擦除值导入）：这个模块会被 GUI 打包，
+// 值导入会把 Core barrel `..` 拉进 webview 的运行时依赖图。
+import type {
   ChatHistoryItem,
   ChatMessage,
   ContextItemWithId,
@@ -10,7 +12,7 @@ import {
 } from "..";
 import { chatMessageIsEmpty } from "../llm/messages";
 import { getSystemMessageWithRules } from "../llm/rules/getSystemMessageWithRules";
-import { RulePolicies } from "../llm/rules/types";
+import type { RulePolicies } from "../llm/rules/types";
 import { BuiltInToolNames } from "../tools/builtIn";
 import {
   CANCELLED_TOOL_CALL_MESSAGE,
