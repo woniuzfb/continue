@@ -2,6 +2,7 @@ import { createAsyncThunk } from "@reduxjs/toolkit";
 import { JSONContent } from "@tiptap/core";
 import {
   ChatHistoryItem,
+  ContextItemWithId,
   InputModifiers,
   MessagePart,
   TextMessagePart,
@@ -24,13 +25,9 @@ import {
   windowHasUnsavedMerge,
 } from "../util/historyTarget";
 import {
-  markSessionDirty,
+  commitSubmittedTurn,
   resetSessionCodeBlockApplyIndex,
-  clearSessionConversationSummary,
-  setSessionHistory,
   setSessionMainEditorAttachmentsRestore,
-  setSessionConversationSummary,
-  updateHistoryItemByMessageId,
 } from "../slices/sessionsSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { ThunkApiType } from "../store";
@@ -86,6 +83,7 @@ function userHistoryItem(
   content: ChatHistoryItemWithMessageId["message"]["content"],
   metadata: AttachmentMeta[],
   editorState: JSONContent,
+  contextItems: ContextItemWithId[] = [],
 ): ChatHistoryItemWithMessageId {
   return {
     message: {
@@ -94,7 +92,7 @@ function userHistoryItem(
       content,
       metadata: metadata.length > 0 ? { attachments: metadata } : undefined,
     } as ChatHistoryItemWithMessageId["message"],
-    contextItems: [],
+    contextItems,
     editorState,
   };
 }
@@ -227,66 +225,22 @@ export const submitSessionInput = createAsyncThunk<
           path: f.path,
         }));
 
-        // 2. Structural write: user item + assistant placeholder. Content is
-        // filled after resolveEditorContent, mirroring the legacy flow.
-        const userItem = userHistoryItem("", attachmentMeta, editorState);
-        const nextHistory: ChatHistoryItemWithMessageId[] =
-          session.history.length > 0 && inputIndex < session.history.length
-            ? [
-                ...session.history.slice(0, inputIndex),
-                userItem,
-                assistantPlaceholder(),
-              ]
-            : [...session.history, userItem, assistantPlaceholder()];
-
-        dispatch(
-          setSessionHistory({
-            sessionId,
-            history: nextHistory,
-            // 方案.md §五.16.1: user 内容新增/编辑/重发替换是新的内容版本。
-            origin: "content",
-          }),
-        );
-        // `firstTurnItems` is the authoritative original first turn persisted
-        // for the Local Provider conversation key. Never rebuild it from an
-        // edited tail: when the edited bubble is itself the first/only turn,
-        // doing so replaces the original key with `new user + empty assistant`.
-        // The first edit may appear valid, but the next edit then compiles an
-        // almost-empty request and leaves ContextStatus near zero.
+        // 2. Resolve the editor content **first** (方案.md §七.3, Stage 2F): context
+        // providers and slash commands are async, and the whole submitted turn —
+        // structure + complete user content + context items + attachments — is written
+        // by a single action below. Writing the structure before this await used to
+        // advance the content revision a second time when the content was filled, and
+        // exposed a savable window holding an empty user message.
         //
-        // A brand-new session with no first-turn cache safely uses the full
-        // current history; the USER_SUBMITTED save fills the authoritative
-        // cache from disk.
-        const oldSummary = session.latestConversationSummary;
-        const retainedSummaryIndex = oldSummary
-          ? nextHistory.findIndex(
-              (item) =>
-                item.message.id === oldSummary.sourceMessageId &&
-                item.conversationSummary === oldSummary.content,
-            )
-          : -1;
-        if (oldSummary && retainedSummaryIndex < 0) {
-          dispatch(clearSessionConversationSummary({ sessionId }));
-        } else if (oldSummary && retainedSummaryIndex >= 0) {
-          dispatch(
-            setSessionConversationSummary({
-              sessionId,
-              summary: {
-                ...oldSummary,
-                sourceAbsoluteIndex: retainedSummaryIndex,
-              },
-            }),
-          );
-        }
-        dispatch(markSessionDirty({ sessionId }));
-        dispatch(
-          setSessionMainEditorAttachmentsRestore({
-            sessionId,
-            attachments: undefined,
-          }),
-        );
-        dispatch(resetSessionCodeBlockApplyIndex({ sessionId }));
-
+        // `firstTurnItems` is deliberately untouched: it is the authoritative original
+        // first turn persisted for the Local Provider conversation key. Never rebuild it
+        // from an edited tail: when the edited bubble is itself the first/only turn,
+        // doing so replaces the original key with `new user + empty assistant`. The first
+        // edit may appear valid, but the next edit then compiles an almost-empty request
+        // and leaves ContextStatus near zero.
+        //
+        // A brand-new session with no first-turn cache safely uses the full current
+        // history; the USER_SUBMITTED save fills the authoritative cache from disk.
         const defaultContextProviders =
           state.config.config.experimental?.defaultContext ?? [];
         const {
@@ -318,8 +272,8 @@ export const submitSessionInput = createAsyncThunk<
           }),
         );
 
-        // 3. Fill the user message: attachments travel as a trailing text
-        // part so the echoed bubble stays clean (chips come from metadata).
+        // Attachments travel as a trailing text part so the echoed bubble stays clean
+        // (chips come from metadata).
         let finalContent: ChatHistoryItem["message"]["content"] = content;
         if (filesToAttach.length > 0) {
           const parts: MessagePart[] = Array.isArray(content)
@@ -331,19 +285,32 @@ export const submitSessionInput = createAsyncThunk<
           });
           finalContent = parts;
         }
+
+        // 3. ONE atomic write for the whole submitted turn (方案.md §五.16.1, Stage 2F):
+        // user item with its complete content/context items/attachments, the assistant
+        // placeholder, the compaction-summary reindex, exactly one `conversationRevision`
+        // advance and one metrics-staleness drop. No state in which the placeholder is
+        // visible next to an empty user message ever exists.
         dispatch(
-          updateHistoryItemByMessageId({
+          commitSubmittedTurn({
             sessionId,
-            messageId: userItem.message.id,
-            updates: {
-              message: {
-                ...userItem.message,
-                content: finalContent,
-              } as ChatHistoryItemWithMessageId["message"],
-              contextItems: selectedContextItems,
-            },
+            userItem: userHistoryItem(
+              finalContent,
+              attachmentMeta,
+              editorState,
+              selectedContextItems,
+            ),
+            assistantPlaceholder: assistantPlaceholder(),
+            insertionPoint: inputIndex,
           }),
         );
+        dispatch(
+          setSessionMainEditorAttachmentsRestore({
+            sessionId,
+            attachments: undefined,
+          }),
+        );
+        dispatch(resetSessionCodeBlockApplyIndex({ sessionId }));
 
         // 4. Immediate save boundary (方案.md §七.2/§七.3).
         void dispatch(

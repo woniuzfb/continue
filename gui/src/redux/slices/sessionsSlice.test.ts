@@ -24,6 +24,7 @@ import {
   setSessionConversationSummary,
   clearSessionConversationSummary,
   setSessionHistory,
+  commitSubmittedTurn,
   setSessionFullConversationMetrics,
   beginSessionFullConversationMetricsMeasure,
   endSessionFullConversationMetricsMeasure,
@@ -1530,6 +1531,156 @@ describe("sessionsSlice — conversation revision ownership", () => {
       expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
       expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
     }
+  });
+});
+
+describe("sessionsSlice — commitSubmittedTurn (Stage 2F)", () => {
+  const placeholder = () => ({
+    message: { id: "p1", role: "assistant", content: "" } as any,
+    contextItems: [],
+  });
+  const submitted = (content = "hello") => ({
+    message: { id: "n1", role: "user", content } as any,
+    contextItems: [],
+  });
+
+  it("appends the turn and advances the content version exactly once", () => {
+    let state = stateWith({ history: [item("u1", "user", "hi")] });
+    const before = state.sessionsById.s1.conversationRevision;
+    const persistenceBefore = state.sessionsById.s1.persistence?.revision ?? 0;
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "s1",
+        userItem: submitted(),
+        assistantPlaceholder: placeholder(),
+        insertionPoint: 1,
+      }),
+    );
+
+    const session = state.sessionsById.s1;
+    expect(session.history.map((entry) => entry.message.id)).toEqual([
+      "u1",
+      "n1",
+      "p1",
+    ]);
+    expect(session.conversationRevision).toBe(before + 1);
+    // One persistence advance as well: the whole submit is one mutation.
+    expect(session.persistence?.revision).toBe(persistenceBefore + 1);
+    expect(session.dirty).toBe(true);
+    expect(session.persistence?.state).toBe("pending");
+  });
+
+  it("replaces the turn at the insertion point and truncates the tail", () => {
+    let state = stateWith({
+      history: [
+        item("u1", "user", "1"),
+        item("a1", "assistant", "2"),
+        item("u2", "user", "3"),
+        item("a2", "assistant", "4"),
+      ],
+    });
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "s1",
+        userItem: submitted("edited"),
+        assistantPlaceholder: placeholder(),
+        insertionPoint: 2,
+      }),
+    );
+
+    expect(
+      state.sessionsById.s1.history.map((entry) => entry.message.id),
+    ).toEqual(["u1", "a1", "n1", "p1"]);
+  });
+
+  it("re-points a surviving summary carrier without a second version", () => {
+    // A stale `sourceAbsoluteIndex` (what a hydration / paging move leaves behind)
+    // must be corrected by the submit itself, as part of its single boundary — the
+    // standalone `setSessionConversationSummary` action would have advanced the
+    // content revision a second time.
+    let state = stateWith({
+      history: [
+        item("u1", "user", "1"),
+        {
+          ...item("a1", "assistant", "2"),
+          conversationSummary: "s0",
+        } as ChatHistoryItemWithMessageId,
+        item("u2", "user", "3"),
+      ],
+      latestConversationSummary: {
+        sourceMessageId: "a1",
+        sourceAbsoluteIndex: 0,
+        content: "s0",
+      },
+    });
+    const before = state.sessionsById.s1.conversationRevision;
+
+    // Resending the turn *after* the carrier keeps it, at the same absolute index.
+    state = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "s1",
+        userItem: submitted(),
+        assistantPlaceholder: placeholder(),
+        insertionPoint: 2,
+      }),
+    );
+
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.latestConversationSummary).toEqual({
+      sourceMessageId: "a1",
+      sourceAbsoluteIndex: 1,
+      content: "s0",
+    });
+  });
+
+  it("drops a summary whose carrier the replacement truncated", () => {
+    let state = stateWith({
+      history: [
+        item("u1", "user", "1"),
+        {
+          ...item("a1", "assistant", "2"),
+          conversationSummary: "s0",
+        } as ChatHistoryItemWithMessageId,
+      ],
+      latestConversationSummary: {
+        sourceMessageId: "a1",
+        sourceAbsoluteIndex: 1,
+        content: "s0",
+      },
+    });
+    const before = state.sessionsById.s1.conversationRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "s1",
+        userItem: submitted(),
+        assistantPlaceholder: placeholder(),
+        insertionPoint: 1,
+      }),
+    );
+
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.latestConversationSummary).toBeUndefined();
+  });
+
+  it("is a no-op for an unknown session", () => {
+    const state = stateWith();
+    const next = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "missing",
+        userItem: submitted(),
+        assistantPlaceholder: placeholder(),
+        insertionPoint: 0,
+      }),
+    );
+    expect(next.sessionsById).toEqual(state.sessionsById);
   });
 });
 

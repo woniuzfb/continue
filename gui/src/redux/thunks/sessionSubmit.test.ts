@@ -40,6 +40,11 @@ function item(
 type StoreOptions = {
   history?: ChatHistoryItemWithMessageId[];
   firstTurnItems?: ChatHistoryItemWithMessageId[];
+  latestConversationSummary?: {
+    sourceMessageId: string;
+    sourceAbsoluteIndex: number;
+    content: string;
+  };
   truncated?: boolean;
   loadedOffset?: number;
   model?: boolean;
@@ -51,6 +56,7 @@ function makeStore(options: StoreOptions = {}) {
   const {
     history = [item("u1", "user", "earlier"), item("a1", "assistant", "sure")],
     firstTurnItems = [],
+    latestConversationSummary,
     truncated = false,
     loadedOffset = 0,
     model = true,
@@ -61,6 +67,7 @@ function makeStore(options: StoreOptions = {}) {
   const s1 = initialSessionRuntime("s1", "Chat 1", {
     history,
     firstTurnItems,
+    ...(latestConversationSummary ? { latestConversationSummary } : {}),
     mode: "agent",
     chatModelTitle: "gpt-4o",
     persistence: {
@@ -119,6 +126,36 @@ function session(store: ReturnType<typeof makeStore>, sessionId = "s1") {
 
 function run(store: ReturnType<typeof makeStore>, thunk: any) {
   return (store.dispatch(thunk) as any).unwrap() as Promise<boolean>;
+}
+
+/**
+ * Holds the reply open so a test can observe the state **between** the submitted
+ * turn and the terminal commit — that is the only way to attribute a
+ * `conversationRevision` advance to the submit itself (Stage 2F).
+ */
+function deferredStream(store: ReturnType<typeof makeStore>) {
+  let release: (() => void) | undefined;
+  let iterated = false;
+  store.mockIdeMessenger.llmStreamChat = async function* () {
+    iterated = true;
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    yield [{ role: "assistant", content: "late reply" } as any];
+  } as any;
+  return {
+    async started() {
+      await vi.waitFor(() => expect(iterated).toBe(true));
+    },
+    release() {
+      release?.();
+    },
+  };
+}
+
+/** Text of a message whose content may be a string or a parts array. */
+function textOf(content: unknown): string {
+  return typeof content === "string" ? content : JSON.stringify(content ?? "");
 }
 
 describe("submitSessionInput", () => {
@@ -582,5 +619,303 @@ describe("submitSessionInput — measurement intent (Stage 2D 收口)", () => {
       ([type]) => type === "history/save",
     )![1] as any;
     expect(payload.fullConversationMeasurement).toBeUndefined();
+  });
+});
+
+describe("submitSessionInput — revision ownership (Stage 2F)", () => {
+  beforeEach(() => {
+    resetSessionSaveQueues();
+    resetSessionStreamCheckpoints();
+    resetSessionStreamRunner();
+  });
+
+  it("advances the content version exactly once for the submitted turn", async () => {
+    const store = makeStore();
+    const stream = deferredStream(store);
+    const before = session(store).conversationRevision;
+
+    const pending = run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+    await stream.started();
+
+    // One atomic write: the complete user item and the placeholder are both there,
+    // and the content version moved exactly once.
+    const target = session(store);
+    expect(target.conversationRevision).toBe(before + 1);
+    expect(target.history).toHaveLength(4);
+    const userItem = target.history.at(-2);
+    const placeholder = target.history.at(-1);
+    expect(userItem.message.role).toBe("user");
+    expect(textOf(userItem.message.content)).toContain("hello world");
+    expect(userItem.contextItems).toEqual([]);
+    expect(typeof userItem.message.id).toBe("string");
+    expect(placeholder.message.role).toBe("assistant");
+    expect(placeholder.message.content).toBe("");
+    expect(placeholder.message.id).not.toBe(userItem.message.id);
+    // The snapshot's value survives; its freshness identity is dropped.
+    expect(target.fullConversationMetricsMeta).toBeUndefined();
+
+    stream.release();
+    await pending;
+
+    // …and the reply's terminal commit is the second and last boundary.
+    expect(session(store).conversationRevision).toBe(before + 2);
+  });
+
+  it("never exposes a placeholder next to an incomplete user message", async () => {
+    // The old two-step write (structure, then content) had an observable window in
+    // which history ended with an empty user message + placeholder. Any save
+    // (unload flush, targeted mode/model save) could have persisted that window, and
+    // a measurement would have described a conversation that never existed.
+    const store = makeStore();
+    const observed: ChatHistoryItemWithMessageId[][] = [];
+    const unsubscribe = store.subscribe(() => {
+      const history = (store.getState() as any).sessions.sessionsById.s1
+        ?.history as ChatHistoryItemWithMessageId[] | undefined;
+      if (history) {
+        observed.push(history);
+      }
+    });
+
+    await run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+    unsubscribe();
+
+    const incomplete = observed.filter((history) => {
+      const last = history.at(-1);
+      const previous = history.at(-2);
+      return (
+        last?.message.role === "assistant" &&
+        last.message.content === "" &&
+        (previous?.message.role !== "user" ||
+          textOf(previous.message.content) === "")
+      );
+    });
+    expect(incomplete).toEqual([]);
+    expect(observed.length).toBeGreaterThan(0);
+  });
+
+  it("keeps one complete turn at exactly two versions when the turn fails before a token", async () => {
+    const store = makeStore();
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      throw new Error("provider failed before the first token");
+    } as any;
+    const before = session(store).conversationRevision;
+
+    await run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+
+    // The submit is a content version; a failed terminal with no output is not.
+    expect(session(store).conversationRevision).toBe(before + 1);
+    const placeholder = session(store).history.at(-1);
+    expect(placeholder.message.role).toBe("assistant");
+    expect(placeholder.message.content).toBe("");
+  });
+
+  it("counts a partial-then-failed turn as two versions", async () => {
+    const store = makeStore();
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      yield [{ role: "assistant", content: "half a" } as any];
+      // A permanent failure: a transient one would open the retry dialog and the
+      // thunk would wait for a choice that no test makes.
+      throw new Error("provider failed after the first token");
+    } as any;
+    const before = session(store).conversationRevision;
+
+    await run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+
+    expect(session(store).conversationRevision).toBe(before + 2);
+    expect(textOf(session(store).history.at(-1)?.message.content)).toContain(
+      "half a",
+    );
+  });
+
+  it("is one version for an edit-and-resend in the middle of the history", async () => {
+    const store = makeStore({
+      history: [
+        item("u1", "user", "first"),
+        item("a1", "assistant", "answer"),
+        item("u2", "user", "second"),
+        item("a2", "assistant", "answer 2"),
+      ],
+    });
+    const stream = deferredStream(store);
+    const before = session(store).conversationRevision;
+
+    const pending = run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+        index: 2,
+      }),
+    );
+    await stream.started();
+
+    const target = session(store);
+    expect(target.conversationRevision).toBe(before + 1);
+    expect(target.history).toHaveLength(4);
+    expect(target.history[0].message.content).toBe("first");
+    expect(target.history[1].message.content).toBe("answer");
+    expect(textOf(target.history[2].message.content)).toContain("hello world");
+    expect(target.history[3].message.content).toBe("");
+
+    stream.release();
+    await pending;
+    expect(session(store).conversationRevision).toBe(before + 2);
+  });
+
+  it("re-points a surviving compaction summary without a second version", async () => {
+    const store = makeStore({
+      history: [
+        item("u1", "user", "first"),
+        { ...item("a1", "assistant", "answer"), conversationSummary: "s0" },
+        item("u2", "user", "second"),
+        item("a2", "assistant", "answer 2"),
+      ],
+      latestConversationSummary: {
+        sourceMessageId: "a1",
+        sourceAbsoluteIndex: 1,
+        content: "s0",
+      },
+    });
+    // The disk holds the same summary, so the save response's authority agrees with
+    // the runtime value (otherwise clearing it would be a separate, legitimate
+    // boundary that has nothing to do with the submitted turn).
+    store.mockIdeMessenger.responses["history/save"] = {
+      firstTurnItems: [],
+      totalHistoryCount: 4,
+      latestConversationSummary: {
+        sourceMessageId: "a1",
+        sourceAbsoluteIndex: 1,
+        content: "s0",
+      },
+    } as any;
+    const stream = deferredStream(store);
+    const before = session(store).conversationRevision;
+
+    const pending = run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+        index: 2,
+      }),
+    );
+    await stream.started();
+
+    const target = session(store);
+    expect(target.conversationRevision).toBe(before + 1);
+    expect(target.latestConversationSummary).toEqual({
+      sourceMessageId: "a1",
+      sourceAbsoluteIndex: 1,
+      content: "s0",
+    });
+
+    stream.release();
+    await pending;
+    expect(session(store).conversationRevision).toBe(before + 2);
+    expect(session(store).latestConversationSummary).toEqual({
+      sourceMessageId: "a1",
+      sourceAbsoluteIndex: 1,
+      content: "s0",
+    });
+  });
+
+  it("drops a summary whose carrier the resend truncated, still as one version", async () => {
+    const store = makeStore({
+      history: [
+        item("u1", "user", "first"),
+        { ...item("a1", "assistant", "answer"), conversationSummary: "s0" },
+        item("u2", "user", "second"),
+        item("a2", "assistant", "answer 2"),
+      ],
+      latestConversationSummary: {
+        sourceMessageId: "a1",
+        sourceAbsoluteIndex: 1,
+        content: "s0",
+      },
+    });
+    const stream = deferredStream(store);
+    const before = session(store).conversationRevision;
+
+    // Replacing the carrier's own turn truncates it away.
+    const pending = run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+        index: 1,
+      }),
+    );
+    await stream.started();
+
+    const target = session(store);
+    expect(target.conversationRevision).toBe(before + 1);
+    expect(target.latestConversationSummary).toBeUndefined();
+
+    stream.release();
+    await pending;
+    expect(session(store).conversationRevision).toBe(before + 2);
+  });
+
+  it("enqueues USER_SUBMITTED only after the complete user content is written", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "history/save",
+        expect.objectContaining({ sessionId: "s1" }),
+      );
+    });
+    const firstSave = request.mock.calls.find(
+      ([type]) => type === "history/save",
+    )![1] as any;
+    // No measurement on this boundary (§五.16.4): the turn's authoritative metrics
+    // come from the terminal save.
+    expect(firstSave.fullConversationMeasurement).toBeUndefined();
+    // …and the payload already carries the complete user message.
+    const lastUser = [...firstSave.history]
+      .reverse()
+      .find((entry: any) => entry.message.role === "user");
+    expect(textOf(lastUser.message.content)).toContain("hello world");
   });
 });

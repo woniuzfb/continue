@@ -419,6 +419,38 @@ function markFullConversationMetricsStale(session: SessionRuntimeState): void {
 }
 
 /**
+ * Re-point (or drop) the compaction summary after a submitted turn replaced the
+ * tail of the conversation (方案.md §五.16.1, Stage 2F).
+ *
+ * A resend can truncate the summary's carrier item away, or shift its index. Both
+ * belong to the **same** mutation as the submitted turn, so they must not advance
+ * the content revision a second time — the standalone
+ * `setSessionConversationSummary` / `clearSessionConversationSummary` actions do
+ * advance it, which is why submit folds the reindex into its single boundary.
+ */
+function reindexSummaryAfterSubmittedTurn(session: SessionRuntimeState): void {
+  const summary = session.latestConversationSummary;
+  if (!summary) {
+    return;
+  }
+  const index = session.history.findIndex(
+    (item) =>
+      item.message.id === summary.sourceMessageId &&
+      item.conversationSummary === summary.content,
+  );
+  if (index < 0) {
+    session.latestConversationSummary = undefined;
+    return;
+  }
+  if (index !== summary.sourceAbsoluteIndex) {
+    session.latestConversationSummary = {
+      ...summary,
+      sourceAbsoluteIndex: index,
+    };
+  }
+}
+
+/**
  * Terminal commit (方案.md §五.16.4): the assistant turn is final, so
  * `conversationRevision` advances exactly once — the individual chunks and the
  * tool writes inside the turn only advanced the persistence revision.
@@ -605,9 +637,12 @@ export const sessionsSlice = createSlice({
      *   replaced by the authoritative disk content of the *same* logical
      *   conversation, so it must NOT mark the session dirty and must NOT advance
      *   the content revision (方案.md §五.16.1: hydration / paging must not);
-     * - `origin: "content"` (submit / retry): the caller must immediately
-     *   `markSessionDirty` (persistence.revision), and this write is a new
-     *   content version.
+     * - `origin: "content"`: the caller replaces the window with **new** content
+     *   in one write, so the caller must immediately `markSessionDirty`
+     *   (persistence.revision) and this write is a new content version. A submitted
+     *   turn does **not** use this path since Stage 2F — it is an insert, not a
+     *   whole-array replacement, and it owns its boundary through
+     *   `commitSubmittedTurn` (方案.md §五.16.1).
      */
     setSessionHistory: (
       state,
@@ -625,6 +660,52 @@ export const sessionsSlice = createSlice({
           markFullConversationMetricsStale(session);
         }
       }
+    },
+    /**
+     * A submitted turn is **one atomic conversation mutation** (方案.md §五.16.1/§七.3,
+     * Stage 2F).
+     *
+     * The user item becomes visible with its complete content, context items and
+     * attachments *together with* the assistant placeholder, and
+     * `conversationRevision` advances exactly once. Splitting this into "create the
+     * structure" + "fill the content" used to advance the revision twice and left an
+     * observable window in which history held an empty user message next to the
+     * placeholder — a window any save (unload flush, a targeted mode/model save)
+     * could have persisted, and any measurement would have described a conversation
+     * that never existed.
+     *
+     * `insertionPoint >= history.length` appends; a smaller index replaces the turn
+     * at that position (edit-and-resend truncates the tail, as before).
+     */
+    commitSubmittedTurn: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        userItem: ChatHistoryItemWithMessageId;
+        assistantPlaceholder: ChatHistoryItemWithMessageId;
+        /** Absolute index of the turn to replace; `>= history.length` appends. */
+        insertionPoint: number;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const { userItem, assistantPlaceholder, insertionPoint } = action.payload;
+      const replaces =
+        insertionPoint >= 0 && insertionPoint < session.history.length;
+      session.history = replaces
+        ? [
+            ...session.history.slice(0, insertionPoint),
+            userItem,
+            assistantPlaceholder,
+          ]
+        : [...session.history, userItem, assistantPlaceholder];
+      reindexSummaryAfterSubmittedTurn(session);
+      // One boundary for the whole submit: persistence dirty + exactly one content
+      // version, with the metrics snapshot's freshness dropped (its value stays).
+      markHistoryChanged(session);
+      markFullConversationMetricsStale(session);
     },
     setContextItemsByMessageId: (
       state,
@@ -1816,6 +1897,7 @@ export const {
   setSessionNewestToolbarPreviewForInput,
   setSessionSymbols,
   setSessionInlineError,
+  commitSubmittedTurn,
   setSessionFullConversationMetrics,
   refreshSessionFullConversationMetricsEnvironment,
   beginSessionFullConversationMetricsMeasure,

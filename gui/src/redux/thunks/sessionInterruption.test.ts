@@ -139,9 +139,23 @@ describe("interrupted sessions", () => {
   it("retry supersedes the stale calls and starts a fresh request", async () => {
     const store = makeStore("calling");
     const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const before = session(store).conversationRevision;
 
     await run(store, retryInterruptedSession({ sessionId: "s1" }));
 
+    // Stage 2F acceptance #8: a retry writes **no new turn structure**. The only
+    // content version so far is canceling the stale tool calls — a real content change
+    // made outside any live turn (`setSessionInterrupted` itself is not content).
+    // Whatever the resumed turn writes stays inside that live turn until its own
+    // terminal commit, so a retry can never double-count a submitted turn; in this
+    // fixture the resumed request is still waiting for a tool call, so no terminal has
+    // happened yet.
+    expect(session(store).conversationRevision).toBe(before + 1);
+    expect(
+      session(store).history.filter(
+        (entry: any) => entry.message.role === "user",
+      ),
+    ).toHaveLength(1);
     expect(session(store).interrupted).toBe(false);
     expect(request).toHaveBeenCalledWith("llm/compileChat", expect.anything());
     // The stale call no longer blocks a new turn.

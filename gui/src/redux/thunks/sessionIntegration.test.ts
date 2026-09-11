@@ -150,6 +150,7 @@ describe("session architecture end to end", () => {
     expect(session(store).history).toHaveLength(2);
 
     // 2. Submit: user message + placeholder, then the model asks for a tool.
+    const revisionBeforeSubmit = session(store).conversationRevision;
     await run(
       store,
       submitSessionInput({
@@ -161,6 +162,9 @@ describe("session architecture end to end", () => {
 
     const afterSubmit = session(store);
     expect(afterSubmit.history).toHaveLength(4);
+    // Stage 2F: the submitted turn is exactly one content version, and the tool
+    // call/result writes inside the live turn keep it there until the terminal.
+    expect(afterSubmit.conversationRevision).toBe(revisionBeforeSubmit + 1);
     expect(afterSubmit.history[2].message.role).toBe("user");
     expect(afterSubmit.pendingApprovalCount).toBe(1);
     // Not streaming while waiting for approval, but the request is still live.
@@ -201,6 +205,9 @@ describe("session architecture end to end", () => {
     expect(final.persistence?.state).toBe("clean");
     expect(final.dirty).toBe(false);
     expect(turn).toBe(2);
+    // The whole logical turn — submit, tool call, tool result, continuation — is
+    // exactly two content versions (方案.md §五.16.4, Stage 2F acceptance #5).
+    expect(final.conversationRevision).toBe(revisionBeforeSubmit + 2);
 
     // Terminal save went to disk for the right session.
     expect(request).toHaveBeenCalledWith(
