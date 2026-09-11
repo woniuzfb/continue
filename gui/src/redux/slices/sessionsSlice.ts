@@ -93,6 +93,25 @@ export type SessionStreamState = {
   requestId?: string;
   aborter?: AbortController;
   error?: string;
+  /**
+   * Whether the **live request** has already written conversation content
+   * (方案.md §五.16.4 step 2). `undefined` means false.
+   *
+   * `commitSessionConversationTurn` only advances the conversation revision when
+   * the turn actually produced content that stays in the conversation: a request
+   * that ended before any assistant text / tool call / tool result / preserved
+   * partial output (compile failure, stop or provider failure before the first
+   * token, no chat model selected) must not move it — the user's own submit
+   * already did, and nothing else changed.
+   *
+   * Lifetime follows the **logical turn**, not one model request: the tool loop
+   * starts its next model request while the predecessor is still live
+   * (`beginSessionStream` with a live `requestId`), and the terminal of that
+   * continuation is the one that commits the whole turn. So the rule is exactly
+   * "a request that starts with no live predecessor starts from false", and
+   * `finishSessionStream` drops the arming with the request that owned it.
+   */
+  hasConversationMutation?: boolean;
 };
 
 /**
@@ -388,16 +407,36 @@ function markHistoryChanged(session: SessionRuntimeState): void {
 }
 
 /**
+ * Drops the freshness identity of the metrics snapshot while keeping its
+ * last-known VALUE visible (方案.md §五.16): the ring must not blank just because
+ * the conversation moved on, and a consumer decides freshness by comparing the
+ * identity (missing identity = stale, recompute when the gate allows).
+ */
+function markContextMetricsStale(session: SessionRuntimeState): void {
+  session.contextMetricsMeta = undefined;
+}
+
+/**
  * Terminal commit (方案.md §五.16.4; transitional name until the
  * conversationRevision rename). The assistant turn is now final, so the
- * conversation revision advances exactly once — the individual chunks only
- * advanced the persistence revision. Keep the last-known metrics VALUE visible
- * and drop only its freshness identity, so a finished reply does not blank the
- * context ring.
+ * conversation revision advances exactly once — the individual chunks and the
+ * tool writes inside the turn only advanced the persistence revision.
  */
 function markConversationCommitted(session: SessionRuntimeState): void {
   session.historyRevision += 1;
-  session.contextMetricsMeta = undefined;
+  markContextMetricsStale(session);
+}
+
+/**
+ * Arms the terminal commit of the live chat request (方案.md §五.16.4 step 2).
+ * Called from every write point that puts conversation content into the GUI
+ * history while a request is live. A session with no live request has no turn to
+ * commit, so nothing is recorded.
+ */
+function noteStreamConversationMutation(session: SessionRuntimeState): void {
+  if (session.stream.requestId !== undefined) {
+    session.stream.hasConversationMutation = true;
+  }
 }
 
 /**
@@ -634,10 +673,22 @@ export const sessionsSlice = createSlice({
         return;
       }
       if (updateChangesConversation(action.payload.updates)) {
-        // A content mutation changes the full logical conversation: bump the
-        // conversation revision and invalidate freshness (方案.md §五.16).
-        markHistoryChanged(session);
-        invalidateContextMetrics(session);
+        if (session.stream.requestId !== undefined) {
+          // 方案.md §五.16.4: inside a live logical turn the terminal commit is
+          // the ONLY conversation-revision boundary. Tool call / tool result
+          // writes reach history through this reducer, so they must only mark
+          // the content for saving and arm that commit — advancing the revision
+          // here as well would count the same logical change twice.
+          markPersistenceChanged(session);
+          noteStreamConversationMutation(session);
+        } else {
+          // Out of stream (user edit / compact / delete / hydration): this write
+          // is a complete content version by itself — no terminal will follow.
+          markHistoryChanged(session);
+        }
+        // Content changed, so the snapshot is no longer fresh — but its value is
+        // still the last-known one and stays displayed (方案.md §五.16).
+        markContextMetricsStale(session);
       } else {
         // promptLogs / reasoning / editorState bookkeeping: must be saved, but
         // must NOT invalidate the context metrics — otherwise the ring drops to
@@ -748,6 +799,16 @@ export const sessionsSlice = createSlice({
     },
 
     // ── First turn / Summary ──────────────────────────────────────────────
+    /**
+     * `firstTurnItems` is a **derived cache of the disk head**: Core echoes it
+     * back on every successful save, and the load paths rebuild it from the
+     * history they just read. It only feeds the Local Provider's reduced send
+     * payload — the full-conversation metrics are built from the full history —
+     * and every change of its source (history edit, compact, delete, hydration)
+     * advances the conversation revision by itself. Echoing the same items back
+     * must therefore not advance it again (方案.md §五.16.1: hydration / prepend
+     * / paging must not increment).
+     */
     setSessionFirstTurn: (
       state,
       action: PayloadAction<{
@@ -757,8 +818,18 @@ export const sessionsSlice = createSlice({
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
-        session.firstTurnItems = action.payload.firstTurnItems;
-        session.historyRevision += 1;
+        const { firstTurnItems } = action.payload;
+        const unchanged =
+          session.firstTurnItems.length === firstTurnItems.length &&
+          session.firstTurnItems.every(
+            (item, index) =>
+              item.message.id === firstTurnItems[index]?.message.id,
+          );
+        // The response stays authoritative even when nothing moved.
+        session.firstTurnItems = firstTurnItems;
+        if (!unchanged) {
+          session.historyRevision += 1;
+        }
       }
     },
     setSessionConversationSummary: (
@@ -773,17 +844,34 @@ export const sessionsSlice = createSlice({
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
-      if (session) {
-        session.latestConversationSummary = action.payload.summary;
-        session.historyRevision += 1;
+      if (!session) {
+        return;
       }
+      const { summary } = action.payload;
+      const previous = session.latestConversationSummary;
+      // The save response carries the same summary back on every save; only a
+      // real change is a new version of the conversation content (方案.md
+      // §五.16.1). Assigning an equal-value object would also churn the
+      // reference every save.
+      const changed =
+        previous?.sourceMessageId !== summary.sourceMessageId ||
+        previous?.sourceAbsoluteIndex !== summary.sourceAbsoluteIndex ||
+        previous?.content !== summary.content;
+      if (!changed) {
+        return;
+      }
+      session.latestConversationSummary = summary;
+      session.historyRevision += 1;
     },
     clearSessionConversationSummary: (
       state,
       action: PayloadAction<{ sessionId: string }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
-      if (session) {
+      // A save without a compaction omits the summary on **every** save; there is
+      // nothing to clear by then, and a write that changes nothing must not
+      // advance the content revision (方案.md §五.16.1).
+      if (session && session.latestConversationSummary !== undefined) {
         session.latestConversationSummary = undefined;
         session.historyRevision += 1;
       }
@@ -800,10 +888,19 @@ export const sessionsSlice = createSlice({
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
+        // A continuation (the tool loop's next model request) starts while the
+        // predecessor request is still live and belongs to the same logical
+        // turn, so what the turn already wrote must still be committed by that
+        // continuation's terminal. A fresh turn starts with no output.
+        const isContinuation = session.stream.requestId !== undefined;
+        const hasConversationMutation = isContinuation
+          ? (session.stream.hasConversationMutation ?? false)
+          : false;
         session.stream = {
           status: "streaming",
           requestId: action.payload.requestId,
           aborter: action.payload.aborter,
+          hasConversationMutation,
         };
       }
     },
@@ -823,7 +920,11 @@ export const sessionsSlice = createSlice({
       // 方案.md §五.16.2: a chunk is content that must be saved, but it does not
       // advance the conversation revision — the terminal commit does that once.
       markPersistenceChanged(session);
-      applyStreamUpdatesToHistory(session, action.payload.messages);
+      // Compile-metadata-only chunks are not conversation content and do not arm
+      // the terminal commit (方案.md §五.16.4 step 2).
+      if (applyStreamUpdatesToHistory(session, action.payload.messages)) {
+        noteStreamConversationMutation(session);
+      }
     },
     /**
      * The model is no longer streaming but the request is still live: the
@@ -843,6 +944,10 @@ export const sessionsSlice = createSlice({
         status: "idle",
         requestId: action.payload.requestId,
         aborter: session.stream.aborter,
+        // The turn is still live: whatever it already wrote is still committed
+        // by this request's terminal (方案.md §五.16.4 step 2).
+        hasConversationMutation:
+          session.stream.hasConversationMutation ?? false,
       };
     },
     finishSessionStream: (
@@ -858,6 +963,7 @@ export const sessionsSlice = createSlice({
         return;
       }
       const { error } = session.stream;
+      // The request ends here, so the terminal commit's arming ends with it.
       session.stream = {
         status: action.payload.status === "completed" ? "idle" : "failed",
         // Terminal failure keeps its error metadata for the recovery entry
@@ -883,6 +989,14 @@ export const sessionsSlice = createSlice({
       if (!session || session.stream.requestId !== action.payload.requestId) {
         return;
       }
+      // 方案.md §五.16.4 step 2: a completed logical turn is one whose output
+      // actually reached the GUI history. A request that ended before writing
+      // anything (out-of-context compile, stop or provider failure before the
+      // first token, no chat model selected) must not advance the revision the
+      // user's submit already advanced.
+      if (!session.stream.hasConversationMutation) {
+        return;
+      }
       markConversationCommitted(session);
     },
     setSessionStreamError: (
@@ -901,6 +1015,9 @@ export const sessionsSlice = createSlice({
         status: "failed",
         requestId: action.payload.requestId,
         error: action.payload.error,
+        // A failure after partial output still formed a turn that must commit.
+        hasConversationMutation:
+          session.stream.hasConversationMutation ?? false,
       };
     },
 

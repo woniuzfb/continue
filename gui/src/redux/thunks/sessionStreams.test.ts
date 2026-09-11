@@ -337,28 +337,146 @@ describe("sessionStreams", () => {
   });
 
   it("reports out-of-context as an inline error and stops the stream", async () => {
-    const store = makeStore();
+    const meta = {
+      modelIdentity: "gpt-4o",
+      historyRevision: 0,
+      schemaVersion: 1,
+    };
+    const store = makeStore({
+      contextMetrics: { didPrune: false, contextPercentage: 0.4 },
+      contextMetricsMeta: meta,
+    });
     store.mockIdeMessenger.request = vi.fn(async (type: string) => {
       if (type === "llm/compileChat") {
         return { status: "error", error: "Not enough context", done: true };
       }
       return { status: "success", content: undefined, done: true };
     }) as any;
+    const revisionBefore = session(store).historyRevision;
 
     await run(store, runSessionStream({ sessionId: "s1" }));
 
     const target = session(store);
     expect(target.inlineErrorMessage).toBe("out-of-context");
     expect(target.stream).toEqual({ status: "failed" });
+    // 方案.md §五.16.4 step 2: the model never wrote anything, so the terminal
+    // must not advance the conversation revision nor drop the freshness
+    // identity the user's submit had produced.
+    expect(target.historyRevision).toBe(revisionBefore);
+    expect(target.contextMetricsMeta).toBe(meta);
   });
 
   it("marks the stream failed when no model is selected", async () => {
-    const store = makeStore({ chatModelTitle: undefined, models: [] });
+    const meta = {
+      modelIdentity: "gpt-4o",
+      historyRevision: 0,
+      schemaVersion: 1,
+    };
+    const store = makeStore({
+      chatModelTitle: undefined,
+      models: [],
+      contextMetricsMeta: meta,
+    });
+    const revisionBefore = session(store).historyRevision;
 
     await run(store, runSessionStream({ sessionId: "s1" }));
 
     expect(session(store).stream.status).toBe("failed");
     expect(session(store).stream.error).toBe("No chat model selected");
+    expect(session(store).historyRevision).toBe(revisionBefore);
+    expect(session(store).contextMetricsMeta).toBe(meta);
+  });
+
+  it("does not commit a turn that was stopped before its first token", async () => {
+    const meta = {
+      modelIdentity: "gpt-4o",
+      historyRevision: 0,
+      schemaVersion: 1,
+    };
+    const store = makeStore({
+      contextMetrics: { didPrune: false, contextPercentage: 0.4 },
+      contextMetricsMeta: meta,
+    });
+    const revisionBefore = session(store).historyRevision;
+    // The user hits Stop while the request is still waiting for the first chunk.
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      session(store).stream.aborter!.abort();
+    } as any;
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    const target = session(store);
+    expect(target.stream.status).toBe("failed");
+    expect(target.historyRevision).toBe(revisionBefore);
+    // The send path's own accepted compile is a fresh but equal snapshot (same
+    // model, same revision, same schema), so the turn is still measured — only
+    // identity of the object differs, which is not what freshness means.
+    expect(target.contextMetricsMeta).toEqual(meta);
+  });
+
+  it("commits a turn that streamed partial output before it was stopped", async () => {
+    const store = makeStore({
+      contextMetrics: { didPrune: false, contextPercentage: 0.4 },
+      contextMetricsMeta: {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+    });
+    const revisionBefore = session(store).historyRevision;
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      yield [textChunk("partial")];
+      session(store).stream.aborter!.abort();
+    } as any;
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    const target = session(store);
+    expect(target.stream.status).toBe("failed");
+    expect(target.history.at(-1).message.content).toBe("partial");
+    // Preserved partial output is a completed logical turn: exactly one revision
+    // for the whole stream, whatever the number of chunks was.
+    expect(target.historyRevision).toBe(revisionBefore + 1);
+    expect(target.contextMetricsMeta).toBeUndefined();
+    expect(target.contextMetrics).toBeDefined();
+  });
+
+  it("commits a tool-call turn exactly once, at its continuation's terminal", async () => {
+    const store = makeStore({
+      toolPolicies: { run_terminal_cmd: "allowedWithoutPermission" },
+      contextMetrics: { didPrune: false, contextPercentage: 0.4 },
+      contextMetricsMeta: {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+    });
+    const revisionBeforeTurn = session(store).historyRevision;
+    let turn = 0;
+    let revisionBeforeTerminal = -1;
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      turn++;
+      if (turn === 1) {
+        yield [toolCallChunk()];
+        return;
+      }
+      // The continuation fails before writing a token: everything this logical
+      // turn produced was written by the *previous* request (tool call + result).
+      revisionBeforeTerminal = session(store).historyRevision;
+      throw new Error("provider failed before the first token");
+    } as any;
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+    await vi.waitFor(() => {
+      expect(session(store).stream.status).toBe("failed");
+    });
+
+    const target = session(store);
+    // The whole logical turn — tool call, tool result and the failed
+    // continuation — is exactly one conversation version.
+    expect(target.historyRevision).toBe(revisionBeforeTurn + 1);
+    expect(revisionBeforeTerminal).toBe(revisionBeforeTurn);
+    expect(target.contextMetricsMeta).toBeUndefined();
   });
 
   it("keeps the request live while a tool call awaits approval", async () => {

@@ -16,11 +16,15 @@ import {
   markSessionDirty,
   markSessionPersisted,
   markSessionSaveFailed,
+  pauseSessionStream,
   setActiveSessionId,
   setAllSessionMergeSettings,
   setAppliedRulesByMessageId,
   setCompactionLoadingByMessageId,
   setSessionConversationSummary,
+  clearSessionConversationSummary,
+  setSessionFirstTurn,
+  setSessionStreamError,
   setSessionTitle,
   trimSessionHistoryWindow,
   updateHistoryItemByMessageId,
@@ -212,7 +216,8 @@ describe("sessionsSlice — ownership", () => {
         updates: { message: item("u1", "user", "edited").message },
       }),
     );
-    expect(state.sessionsById.s1.contextMetrics).toBeUndefined();
+    expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+    expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
     expect(state.sessionsById.s1.historyRevision).toBe(revisionBefore + 1);
   });
 
@@ -316,6 +321,16 @@ describe("sessionsSlice — ownership", () => {
         beginSessionStream({ sessionId: "s1", requestId: "r1" }),
       );
       const before = state.sessionsById.s1.historyRevision;
+      // The turn wrote content before it was stopped / failed: it is a real
+      // logical turn, so its terminal commits it.
+      state = sessionsSlice.reducer(
+        state,
+        applySessionStreamUpdate({
+          sessionId: "s1",
+          requestId: "r1",
+          messages: [{ role: "assistant", content: "partial" } as any],
+        }),
+      );
       state = sessionsSlice.reducer(
         state,
         commitSessionConversationTurn({
@@ -325,6 +340,557 @@ describe("sessionsSlice — ownership", () => {
         }),
       );
       expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    }
+  });
+
+  it("does not commit a terminal that wrote no conversation content", () => {
+    // 方案.md §五.16.4 step 2: out-of-context compile, stop or failure before the
+    // first token, no model selected. The user's submit already advanced the
+    // revision; a terminal for a turn that formed no output must not advance it
+    // again, nor may it drop the metrics freshness identity.
+    for (const status of ["completed", "aborted", "failed"] as const) {
+      const meta = {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      };
+      let state = stateWith({
+        history: [item("u1", "user", "hi")],
+        contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+        contextMetricsMeta: meta,
+      });
+      state = sessionsSlice.reducer(
+        state,
+        beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+      );
+      const before = state.sessionsById.s1.historyRevision;
+
+      state = sessionsSlice.reducer(
+        state,
+        commitSessionConversationTurn({
+          sessionId: "s1",
+          requestId: "r1",
+          terminalStatus: status,
+        }),
+      );
+
+      expect(state.sessionsById.s1.historyRevision).toBe(before);
+      expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+    }
+  });
+
+  it("does not arm the terminal commit from a compile-metadata-only chunk", () => {
+    const meta = {
+      modelIdentity: "gpt-4o",
+      historyRevision: 0,
+      schemaVersion: 1,
+    };
+    let state = stateWith({
+      history: [item("u1", "user", "hi")],
+      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+      contextMetricsMeta: meta,
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            metadata: { didPrune: true, contextPercentage: 0.5 },
+          } as any,
+        ],
+      }),
+    );
+    // The prune info is kept, but it is not conversation content.
+    expect(state.sessionsById.s1.isPruned).toBe(true);
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSessionConversationTurn({
+        sessionId: "s1",
+        requestId: "r1",
+        terminalStatus: "completed",
+      }),
+    );
+
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+  });
+
+  it("does not arm the terminal commit from a frame that writes nothing", () => {
+    // 方案.md §五.16.4 step 2 must mean "this frame actually wrote conversation
+    // content", not "this frame is not a compile-metadata frame". These frames
+    // write nothing into an empty assistant placeholder:
+    //   · Anthropic ends every stream with `{role:"assistant", content:"", usage}`
+    //     (`core/llm/llms/Anthropic.ts`), a field this helper does not store;
+    //   · a whitespace-only frame is dropped by the append guard.
+    const frames = [
+      { role: "assistant", content: "" },
+      { role: "assistant", content: "", usage: { prompt_tokens: 1 } },
+      { role: "assistant", content: "   " },
+    ] as any[];
+
+    for (const frame of frames) {
+      const meta = {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      };
+      let state = stateWith({
+        history: [item("u1", "user", "hi"), item("p1", "assistant", "")],
+        contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+        contextMetricsMeta: meta,
+      });
+      state = sessionsSlice.reducer(
+        state,
+        beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+      );
+      const before = state.sessionsById.s1.historyRevision;
+
+      state = sessionsSlice.reducer(
+        state,
+        applySessionStreamUpdate({
+          sessionId: "s1",
+          requestId: "r1",
+          messages: [frame],
+        }),
+      );
+
+      expect(state.sessionsById.s1.stream.hasConversationMutation).toBeFalsy();
+
+      state = sessionsSlice.reducer(
+        state,
+        commitSessionConversationTurn({
+          sessionId: "s1",
+          requestId: "r1",
+          terminalStatus: "completed",
+        }),
+      );
+      expect(state.sessionsById.s1.historyRevision).toBe(before);
+      expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+    }
+
+    // A thinking frame with neither signature nor reasoning details, landing on
+    // an existing thinking item, also writes nothing.
+    let state = stateWith({
+      history: [
+        item("u1", "user", "hi"),
+        {
+          message: { id: "t1", role: "thinking", content: "" } as any,
+          contextItems: [],
+        },
+      ],
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [{ role: "thinking", content: "" } as any],
+      }),
+    );
+    expect(state.sessionsById.s1.stream.hasConversationMutation).toBeFalsy();
+    state = sessionsSlice.reducer(
+      state,
+      commitSessionConversationTurn({
+        sessionId: "s1",
+        requestId: "r1",
+        terminalStatus: "completed",
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+  });
+
+  it("arms when a batch mixes metadata and empty frames with real content", () => {
+    let state = stateWith({
+      history: [item("u1", "user", "hi"), item("p1", "assistant", "")],
+      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+      contextMetricsMeta: {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            metadata: { didPrune: true, contextPercentage: 0.5 },
+          },
+          { role: "assistant", content: "" },
+          { role: "assistant", content: "real answer" },
+        ] as any[],
+      }),
+    );
+
+    expect(state.sessionsById.s1.stream.hasConversationMutation).toBe(true);
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSessionConversationTurn({
+        sessionId: "s1",
+        requestId: "r1",
+        terminalStatus: "completed",
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+  });
+
+  it("arms the turn from a new history item even when it starts empty", () => {
+    // A tool result is appended as a new history item through
+    // applySessionStreamUpdate; an empty-output tool still produced that item,
+    // so the turn must commit (方案.md §五.16.1: tool result 进入完整逻辑会话).
+    let state = stateWith({
+      history: [item("u1", "user", "hi"), item("a1", "assistant", "")],
+      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+      contextMetricsMeta: {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [{ role: "tool", content: "", toolCallId: "t1" } as any],
+      }),
+    );
+
+    expect(state.sessionsById.s1.history).toHaveLength(3);
+    expect(state.sessionsById.s1.stream.hasConversationMutation).toBe(true);
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSessionConversationTurn({
+        sessionId: "s1",
+        requestId: "r1",
+        terminalStatus: "completed",
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+  });
+
+  it("keeps the arming across the tool loop's continuation request", () => {
+    // The tool loop starts its next model request while the predecessor is still
+    // live; that continuation's terminal is the one that commits the turn.
+    let state = stateWith({
+      history: [item("u1", "user", "hi")],
+      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [{ role: "assistant", content: "call" } as any],
+      }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r2" }),
+    );
+
+    expect(state.sessionsById.s1.stream.hasConversationMutation).toBe(true);
+    state = sessionsSlice.reducer(
+      state,
+      commitSessionConversationTurn({
+        sessionId: "s1",
+        requestId: "r2",
+        terminalStatus: "completed",
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
+  });
+
+  it("starts a new turn without the previous turn's arming", () => {
+    let state = stateWith({
+      history: [item("u1", "user", "hi")],
+      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [{ role: "assistant", content: "reply" } as any],
+      }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      commitSessionConversationTurn({
+        sessionId: "s1",
+        requestId: "r1",
+        terminalStatus: "completed",
+      }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      finishSessionStream({
+        sessionId: "s1",
+        requestId: "r1",
+        status: "completed",
+      }),
+    );
+    const meta = state.sessionsById.s1.contextMetricsMeta;
+    const before = state.sessionsById.s1.historyRevision;
+
+    // The next turn fails before its first token.
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r2" }),
+    );
+    expect(state.sessionsById.s1.stream.hasConversationMutation).toBe(false);
+    state = sessionsSlice.reducer(
+      state,
+      commitSessionConversationTurn({
+        sessionId: "s1",
+        requestId: "r2",
+        terminalStatus: "failed",
+      }),
+    );
+
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+  });
+
+  it("keeps the arming across pause and stream error", () => {
+    // Awaiting-approval and waiting-for-apply are `idle` with a live request,
+    // and a failed stream may still have written partial output. Both keep the
+    // turn's arming so the terminal commits it.
+    for (const kind of ["pause", "error"] as const) {
+      let state = stateWith({ history: [item("u1", "user", "hi")] });
+      state = sessionsSlice.reducer(
+        state,
+        beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+      );
+      state = sessionsSlice.reducer(
+        state,
+        applySessionStreamUpdate({
+          sessionId: "s1",
+          requestId: "r1",
+          messages: [{ role: "assistant", content: "partial" } as any],
+        }),
+      );
+      const before = state.sessionsById.s1.historyRevision;
+
+      state = sessionsSlice.reducer(
+        state,
+        kind === "pause"
+          ? pauseSessionStream({ sessionId: "s1", requestId: "r1" })
+          : setSessionStreamError({
+              sessionId: "s1",
+              requestId: "r1",
+              error: "boom",
+            }),
+      );
+      expect(state.sessionsById.s1.stream.hasConversationMutation).toBe(true);
+
+      state = sessionsSlice.reducer(
+        state,
+        commitSessionConversationTurn({
+          sessionId: "s1",
+          requestId: "r1",
+          terminalStatus: kind === "pause" ? "aborted" : "failed",
+        }),
+      );
+      expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    }
+  });
+
+  it("advances the conversation revision once for a tool continuation turn", () => {
+    // 方案.md §五.16.4: the terminal commit is the ONLY conversation-revision
+    // boundary inside a live turn. Tool call / tool result writes reach history
+    // through updateHistoryItemByMessageId, so they must only mark the content
+    // for saving and arm that commit — bumping here too would count the same
+    // logical change twice.
+    let state = stateWith({ history: [item("a1", "assistant", "")] });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+    const persistenceBefore = state.sessionsById.s1.persistence?.revision ?? 0;
+
+    state = sessionsSlice.reducer(
+      state,
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "a1",
+        updates: {
+          toolCallStates: [{ toolCallId: "t1", status: "done" } as any],
+        },
+      }),
+    );
+
+    // Still must be saved, but it is not yet a new conversation version.
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.persistence?.revision).toBe(
+      persistenceBefore + 1,
+    );
+    expect(state.sessionsById.s1.stream.hasConversationMutation).toBe(true);
+
+    // Awaiting approval, then the continuation request that owns the terminal.
+    state = sessionsSlice.reducer(
+      state,
+      pauseSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r2" }),
+    );
+    expect(state.sessionsById.s1.stream.hasConversationMutation).toBe(true);
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSessionConversationTurn({
+        sessionId: "s1",
+        requestId: "r2",
+        terminalStatus: "completed",
+      }),
+    );
+
+    // Exactly one revision for the whole logical turn, tool writes included.
+    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+  });
+
+  it("advances the conversation revision immediately for an out-of-stream mutation", () => {
+    // No live request: an edit / compact / delete is a complete content version
+    // by itself, so there is no terminal that could commit it later.
+    let state = stateWith({ history: [item("u1", "user", "hi")] });
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "u1",
+        updates: { message: item("u1", "user", "edited").message },
+      }),
+    );
+
+    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+  });
+
+  it("keeps the last-known metrics values when a mutation makes them stale", () => {
+    // 方案.md §五.16: a stale snapshot keeps its last-known VALUE (the ring does
+    // not blank); only the freshness identity is dropped. This holds for an
+    // out-of-stream mutation and for a write inside a live turn.
+    for (const live of [false, true]) {
+      const metrics = {
+        didPrune: false,
+        contextPercentage: 0.33,
+        inputTokens: 10,
+        contextLength: 100,
+      };
+      let state = stateWith({
+        history: [item("a1", "assistant", "")],
+        contextMetrics: metrics,
+        contextMetricsMeta: {
+          modelIdentity: "gpt-4o",
+          historyRevision: 0,
+          schemaVersion: 1,
+        },
+      });
+      if (live) {
+        state = sessionsSlice.reducer(
+          state,
+          beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+        );
+      }
+
+      state = sessionsSlice.reducer(
+        state,
+        updateHistoryItemByMessageId({
+          sessionId: "s1",
+          messageId: "a1",
+          updates: {
+            toolCallStates: [{ toolCallId: "t1", status: "done" } as any],
+          },
+        }),
+      );
+
+      expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+      expect(state.sessionsById.s1.contextPercentage).toBeUndefined();
+      expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
+    }
+  });
+
+  it("does not arm from a bookkeeping-only update", () => {
+    // appliedRules / promptLogs / reasoning are saved but are not conversation
+    // content, so a turn that only wrote them has nothing to commit.
+    for (const updates of [
+      { appliedRules: [] },
+      { promptLogs: [] },
+    ] as Partial<ChatHistoryItemWithMessageId>[]) {
+      let state = stateWith({ history: [item("a1", "assistant", "")] });
+      state = sessionsSlice.reducer(
+        state,
+        beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+      );
+      state = sessionsSlice.reducer(
+        state,
+        updateHistoryItemByMessageId({
+          sessionId: "s1",
+          messageId: "a1",
+          updates,
+        }),
+      );
+      const before = state.sessionsById.s1.historyRevision;
+
+      state = sessionsSlice.reducer(
+        state,
+        commitSessionConversationTurn({
+          sessionId: "s1",
+          requestId: "r1",
+          terminalStatus: "completed",
+        }),
+      );
+
+      expect(state.sessionsById.s1.historyRevision).toBe(before);
     }
   });
 
@@ -534,6 +1100,111 @@ describe("sessionsSlice — stream identity", () => {
     );
     expect(state.sessionsById.s1.history).toHaveLength(2);
     expect(state.sessionsById.s1.history[1].message.content).toBe("hello");
+  });
+});
+
+describe("sessionsSlice — save-echo bookkeeping", () => {
+  // A successful save echoes the disk first turn and summary back into the
+  // runtime (方案.md §七.8.1). Neither is a new version of the conversation
+  // content, so the echo must not advance the revision (方案.md §五.16.1) —
+  // otherwise every save makes the metrics snapshot look stale and drops an
+  // in-flight metrics compile.
+  it("does not advance the revision when a save echoes the same first turn", () => {
+    let state = stateWith({
+      history: [item("u1", "user", "a")],
+      firstTurnItems: [item("u1", "user", "a")],
+    });
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionFirstTurn({
+        sessionId: "s1",
+        firstTurnItems: [item("u1", "user", "a")],
+      }),
+    );
+
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    // The response still replaced the value (it is the authority for content).
+    expect(state.sessionsById.s1.firstTurnItems).toHaveLength(1);
+  });
+
+  it("advances the revision when the first turn really changed", () => {
+    let state = stateWith({
+      history: [item("u1", "user", "a")],
+      firstTurnItems: [item("u1", "user", "a")],
+    });
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionFirstTurn({
+        sessionId: "s1",
+        firstTurnItems: [item("u9", "user", "a")],
+      }),
+    );
+
+    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+  });
+
+  it("does not advance the revision or churn the reference for an equal summary", () => {
+    const summary = { sourceMessageId: "u1", content: "sum" };
+    let state = stateWith({
+      history: [item("u1", "user", "a")],
+      latestConversationSummary: summary,
+    });
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionConversationSummary({
+        sessionId: "s1",
+        summary: { sourceMessageId: "u1", content: "sum" },
+      }),
+    );
+
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.latestConversationSummary).toBe(summary);
+
+    // A real change is a new version of the conversation content.
+    state = sessionsSlice.reducer(
+      state,
+      setSessionConversationSummary({
+        sessionId: "s1",
+        summary: { sourceMessageId: "u1", content: "new sum" },
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.latestConversationSummary?.content).toBe(
+      "new sum",
+    );
+  });
+
+  it("does not advance the revision clearing a summary that is already absent", () => {
+    let state = stateWith({ history: [item("u1", "user", "a")] });
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      clearSessionConversationSummary({ sessionId: "s1" }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionConversationSummary({
+        sessionId: "s1",
+        summary: { sourceMessageId: "u1", content: "sum" },
+      }),
+    );
+    const afterSet = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      clearSessionConversationSummary({ sessionId: "s1" }),
+    );
+    expect(state.sessionsById.s1.latestConversationSummary).toBeUndefined();
+    expect(state.sessionsById.s1.historyRevision).toBe(afterSet + 1);
   });
 });
 

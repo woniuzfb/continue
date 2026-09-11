@@ -430,28 +430,45 @@ export type StreamUpdateTarget = {
 };
 
 /**
+ * 只携带编译元数据的流式消息：由 `BaseLLM.streamChat` 在后端自己编译
+ * （`precompiled !== true`）时产出，内容为空，只带裁剪/占用信息，供前端免去
+ * 一次单独的 compile 请求。它不是会话内容 —— 它不写入任何 message/tool 字段，
+ * 只写 `StreamUpdateTarget` 上的展示元数据。
+ */
+function isCompileMetadataMessage(message: ChatMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    message.content === "" &&
+    "metadata" in message &&
+    !!message.metadata &&
+    ("didPrune" in message.metadata || "contextPercentage" in message.metadata)
+  );
+}
+
+/**
  * 纯函数版 streamUpdate：把流式消息合并进目标 history。
  * 从原 reducer 提取，保证正常流与后台续流走同一套合并逻辑。
+ *
+ * 返回值表示**本次调用是否真的写入了会话语义内容**（方案.md §五.16.4 步骤 2）。
+ * 判据是「某个分支确实改了目标」，**不是**「这条消息看起来有内容」：
+ * 非编译元数据的空 assistant 帧（例如 Anthropic 每轮流结尾的
+ * `{role:"assistant", content:"", usage}`）、只剩空白的帧、以及落在同 role 条目上
+ * 且没有任何可写字段的 thinking 帧，都不会改动 history，因此必须返回 false，
+ * 否则终态提交会在没有产出内容的回合上推进内容版本。
  */
 export function applyStreamUpdatesToHistory(
   target: StreamUpdateTarget,
   messages: ChatMessage[],
-): void {
+): boolean {
   if (!target.history.length) {
-    return;
+    return false;
   }
+  let wroteConversationContent = false;
   for (const message of messages) {
     // Handle metadata-only messages (yielded by BaseLLM.streamChat when
     // the backend compiles non-precompiled messages). These carry context
     // pruning info so the frontend doesn't need a separate compile request.
-    if (
-      message.role === "assistant" &&
-      message.content === "" &&
-      "metadata" in message &&
-      message.metadata &&
-      ("didPrune" in message.metadata ||
-        "contextPercentage" in message.metadata)
-    ) {
+    if (isCompileMetadataMessage(message)) {
       target.isPruned = !!(message.metadata as any).didPrune;
       target.contextPercentage =
         (message.metadata as any).contextPercentage ?? 0;
@@ -473,6 +490,7 @@ export function applyStreamUpdatesToHistory(
         },
         contextItems: [],
       });
+      wroteConversationContent = true;
       continue;
     }
 
@@ -514,7 +532,7 @@ export function applyStreamUpdatesToHistory(
 
         handleToolCallsInMessage(message, lastItem);
 
-        return;
+        return true;
       }
     }
 
@@ -563,6 +581,8 @@ export function applyStreamUpdatesToHistory(
         target.history.push(historyItem);
         lastItem = target.history[target.history.length - 1];
         lastMessage = lastItem.message;
+        // A new item changes the saved history even when it starts empty.
+        wroteConversationContent = true;
       }
     }
 
@@ -574,6 +594,7 @@ export function applyStreamUpdatesToHistory(
           active: true,
           text: messageContent.replace("<think>", "").trim(),
         };
+        wroteConversationContent = true;
       } else if (
         lastItem.reasoning?.active &&
         messageContent.includes("</think>")
@@ -583,26 +604,32 @@ export function applyStreamUpdatesToHistory(
         lastItem.reasoning.active = false;
         lastItem.reasoning.endAt = Date.now();
         lastMessage.content += answerStart.trimStart();
+        wroteConversationContent = true;
       } else if (lastItem.reasoning?.active) {
         if (
           lastItem.reasoning.text.length > 0 ||
           messageContent.trim().length > 0
         ) {
           lastItem.reasoning.text += messageContent;
+          wroteConversationContent = true;
         }
-      } else {
+      } else if (
         // Note this only works because new message above
         // was already rendered from parts to string
-        if (
-          lastMessage.content.length > 0 ||
-          messageContent.trim().length > 0
-        ) {
-          lastMessage.content += messageContent;
-        }
+        lastMessage.content.length > 0 ||
+        messageContent.trim().length > 0
+      ) {
+        lastMessage.content += messageContent;
+        wroteConversationContent = true;
       }
     } else if (message.role === "thinking" && message.signature) {
-      if (lastMessage.role === "thinking") {
+      // Only a real change: a repeated signature frame must not look like output.
+      if (
+        lastMessage.role === "thinking" &&
+        lastMessage.signature !== message.signature
+      ) {
         lastMessage.signature = message.signature;
+        wroteConversationContent = true;
       }
     } else if (
       message.role === "assistant" &&
@@ -610,6 +637,7 @@ export function applyStreamUpdatesToHistory(
       lastMessage.role === "assistant"
     ) {
       handleStreamingToolCallUpdates(message, lastItem);
+      wroteConversationContent = true;
     }
 
     // Attach Responses API output item id to the current assistant message if present
@@ -630,6 +658,8 @@ export function applyStreamUpdatesToHistory(
       // Also keep singular for backwards compatibility
       lastMessage.metadata.responsesOutputItemId = message.metadata
         .responsesOutputItemId as string;
+      // The item's persisted metadata changed, so it is a content write.
+      wroteConversationContent = true;
     }
 
     if (
@@ -641,8 +671,10 @@ export function applyStreamUpdatesToHistory(
         lastMessage.reasoning_details,
         message.reasoning_details,
       );
+      wroteConversationContent = true;
     }
   }
+  return wroteConversationContent;
 }
 
 /**
