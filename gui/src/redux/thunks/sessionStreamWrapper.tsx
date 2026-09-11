@@ -52,6 +52,30 @@ async function stopLiveRequest(
   await api.dispatch(stopSessionStream({ sessionId, requestId }));
 }
 
+/**
+ * Reports a failure that happened **before** any stream started (target validation,
+ * context resolution, the atomic commit). It produces the same user-visible outcome as a
+ * permanent stream error — a dialog, and a `false` result for the send — but it must not
+ * go through the retry loop.
+ *
+ * Workflow "submit latency and retry boundary", step 2: the wrapper's retry re-runs its
+ * `runStream` closure, and that closure used to contain the whole submit (editor
+ * resolution + turn commit + `USER_SUBMITTED` save). A single transient model error
+ * therefore submitted the turn twice — measured: two user items, a permanently empty
+ * assistant placeholder, `conversationRevision` +3 — and the revision guard could not
+ * stop it, because each attempt re-reads the revision it expects.
+ */
+export function reportSubmitFailure(
+  api: { dispatch: AppThunkDispatch; getState: () => RootState },
+  sessionId: string,
+  error: unknown,
+): void {
+  api.dispatch(
+    setDialogMessage(<StreamErrorDialog error={error} sessionId={sessionId} />),
+  );
+  api.dispatch(setShowDialog(true));
+}
+
 export const sessionStreamWrapper = createAsyncThunk<
   boolean,
   { sessionId: string; runStream: () => Promise<void> },

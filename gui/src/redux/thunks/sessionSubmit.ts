@@ -34,7 +34,10 @@ import { ThunkApiType } from "../store";
 import { loadFullHistory, resolveHistoryMutationTarget } from "./sessionPaging";
 import { enqueueSessionSave } from "./sessionPersistence";
 import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
-import { sessionStreamWrapper } from "./sessionStreamWrapper";
+import {
+  reportSubmitFailure,
+  sessionStreamWrapper,
+} from "./sessionStreamWrapper";
 import { runSessionStream } from "./sessionStreams";
 import { updateSessionFileSymbolsFromFiles } from "./updateFileSymbols";
 import { recordSubmitLatency } from "../../util/submitLatency";
@@ -109,6 +112,20 @@ function assistantPlaceholder(): ChatHistoryItemWithMessageId {
   };
 }
 
+/** What preparation hands to the retryable stream step. */
+type PreparedSubmittedTurn = {
+  legacySlashCommandData:
+    | {
+        command: any;
+        contextItems: any;
+        historyIndex: number;
+        input: string;
+        selectedCode: any;
+      }
+    | undefined;
+  insertionKind: "append" | "replace";
+};
+
 export const submitSessionInput = createAsyncThunk<
   boolean,
   SessionSubmitInput,
@@ -119,304 +136,334 @@ export const submitSessionInput = createAsyncThunk<
     return false;
   }
 
+  // ── Preparation (exactly once) ──────────────────────────────────────────────
+  //
+  // Workflow "submit latency and retry boundary", step 2: everything from here to the
+  // `USER_SUBMITTED` save happens **once per user action**. Only the model stream is
+  // retried (see the wrapper call at the end). Letting a retry re-enter this block
+  // submitted the same turn twice — measured: two user items, a permanently empty
+  // assistant placeholder, `conversationRevision` +3 — and the revision guard cannot stop
+  // it, because every attempt re-reads the revision it expects.
+  const prepared = await (async (): Promise<
+    PreparedSubmittedTurn | undefined
+  > => {
+    const submitStartedAt = performance.now();
+    // 1. Capture the target identity *before* any await (方案.md §十二): the
+    // caller's index is relative to the window that was on screen, and both a
+    // full load (which replaces `session.history`) and a trim moving
+    // `loadedOffset` invalidate that index. The identity survives both.
+    const pre = selectSessionById(getState(), sessionId);
+    if (!pre) {
+      throw new Error("Session no longer exists");
+    }
+    const windowHasMerge = windowHasUnsavedMerge(pre.history);
+    let targetMessageId: string | undefined;
+    // The window index used for the arithmetic below. `index` is used
+    // verbatim only when the caller did not supply an identity.
+    let windowIndex = index;
+    if (input.targetMessageId !== undefined) {
+      // Identity wins: re-resolve the target's position in the window **now**.
+      // If lazy loading has trimmed the bubble, resolve the identity against
+      // disk below rather than rejecting a real historical message.
+      const found = findGuiIndexContainingMessageId(
+        pre.history,
+        input.targetMessageId,
+      );
+      windowIndex = found >= 0 ? found : undefined;
+      targetMessageId = input.targetMessageId;
+      if (found < 0 && !pre.pagination.truncated) {
+        throw new Error(
+          "Cannot resend: the target message is no longer in the loaded history",
+        );
+      }
+    } else if (index !== undefined) {
+      const clicked = pre.history[index];
+      targetMessageId = clicked ? carrierMessageIdOf(clicked) : undefined;
+      if (targetMessageId === undefined) {
+        throw new Error(
+          "Cannot resend: the target message is no longer in the loaded history",
+        );
+      }
+    }
+
+    // Captured from the pre-await snapshot on purpose: `loadFullHistory`
+    // resets `loadedOffset` to 0, but the caller's index is relative to the
+    // window that was visible when it was passed (方案.md §十二).
+    const capturedOffset = pre.pagination.loadedOffset ?? 0;
+
+    // 2. Lazy-loaded history must be complete before sending, otherwise the
+    // model only sees the tail of the conversation.
+    //
+    // A window holding an unsaved merged bubble is not 1:1 with disk, so its
+    // index cannot be converted arithmetically: resolve the captured identity
+    // in both arrays — which hydrates the window in the same round trip — and
+    // address the **window** coordinate, because the replacement below writes
+    // to `session.history`. A miss aborts instead of editing another message.
+    let resolvedIndex: number | undefined;
+    if (
+      targetMessageId !== undefined &&
+      (windowHasMerge || windowIndex === undefined)
+    ) {
+      // A merged GUI item or a trimmed-away historical bubble cannot be
+      // addressed with offset arithmetic. Hydrate and match the stable ID
+      // against disk, then use the post-hydration GUI coordinate.
+      const resolved = await dispatch(
+        resolveHistoryMutationTarget({ sessionId, targetMessageId }),
+      ).unwrap();
+      if (!resolved) {
+        throw new Error(
+          "Cannot resend: the target message could not be located on disk",
+        );
+      }
+      resolvedIndex = resolved.guiIndex;
+    } else if (pre.pagination.truncated) {
+      await dispatch(loadFullHistory({ sessionId })).unwrap();
+    }
+
+    const state = getState();
+    const session = selectSessionById(state, sessionId);
+    if (!session) {
+      throw new Error("Session no longer exists");
+    }
+    if (!selectSessionChatModel(state, sessionId)) {
+      throw new Error("No chat model selected");
+    }
+
+    const inputIndex =
+      resolvedIndex !== undefined
+        ? resolvedIndex
+        : windowIndex !== undefined
+          ? windowToAbsoluteIndex(capturedOffset, windowIndex)
+          : session.history.length;
+    // Stage 2F 收口: everything above was resolved against `session` — the snapshot
+    // taken **before** `resolveEditorContent` awaits. The revision is what makes
+    // that snapshot's validity checkable again at commit time, and the target is
+    // carried as an identity (a number would address another turn by then).
+    const expectedConversationRevision = session.conversationRevision;
+    // Everything up to here was resolved against the pre-await snapshot: this is the
+    // span the user spends without a bubble (context IPC dominates it).
+    const insertionKind: "append" | "replace" =
+      targetMessageId === undefined ? "append" : "replace";
+    const existingMessage =
+      inputIndex >= 0 && inputIndex < session.history.length
+        ? session.history[inputIndex].message
+        : undefined;
+    // A resend does not pass attachments: inherit them from the message
+    // being replaced (paths in metadata, contents in <file_content>).
+    const filesToAttach =
+      attachments ??
+      (existingMessage ? extractAttachmentsFromMessage(existingMessage) : []);
+    const attachmentMeta: AttachmentMeta[] = filesToAttach.map((f) => ({
+      name: f.name,
+      path: f.path,
+    }));
+
+    // 2. Resolve the editor content **first** (方案.md §七.3, Stage 2F): context
+    // providers and slash commands are async, and the whole submitted turn —
+    // structure + complete user content + context items + attachments — is written
+    // by a single action below. Writing the structure before this await used to
+    // advance the content revision a second time when the content was filled, and
+    // exposed a savable window holding an empty user message.
+    //
+    // `firstTurnItems` is deliberately untouched: it is the authoritative original
+    // first turn persisted for the Local Provider conversation key. Never rebuild it
+    // from an edited tail: when the edited bubble is itself the first/only turn,
+    // doing so replaces the original key with `new user + empty assistant`. The first
+    // edit may appear valid, but the next edit then compiles an almost-empty request
+    // and leaves ContextStatus near zero.
+    //
+    // A brand-new session with no first-turn cache safely uses the full current
+    // history; the USER_SUBMITTED save fills the authoritative cache from disk.
+    const defaultContextProviders =
+      state.config.config.experimental?.defaultContext ?? [];
+    const {
+      selectedContextItems,
+      selectedCode,
+      content,
+      legacyCommandWithInput,
+    } = await resolveEditorContent({
+      sessionId,
+      editorState,
+      modifiers,
+      ideMessenger: extra.ideMessenger,
+      defaultContextProviders,
+      availableSlashCommands: state.config.config.slashCommands,
+      dispatch,
+      getState,
+    });
+
+    const filesForSymbols = [
+      ...selectedContextItems
+        .filter((item) => item.uri?.type === "file" && item.uri?.value)
+        .map((item) => item.uri!.value),
+      ...selectedCode.map((rif) => rif.filepath),
+    ];
+    void dispatch(
+      updateSessionFileSymbolsFromFiles({
+        sessionId,
+        filepaths: filesForSymbols,
+      }),
+    );
+
+    // Attachments travel as a trailing text part so the echoed bubble stays clean
+    // (chips come from metadata).
+    let finalContent: ChatHistoryItem["message"]["content"] = content;
+    if (filesToAttach.length > 0) {
+      const parts: MessagePart[] = Array.isArray(content)
+        ? (content as MessagePart[])
+        : [{ type: "text", text: content as string } as TextMessagePart];
+      parts.push({
+        type: "text",
+        text: buildAttachedFilesText(filesToAttach),
+      });
+      finalContent = parts;
+    }
+
+    // 3. ONE atomic write for the whole submitted turn (方案.md §五.16.1, Stage 2F):
+    // user item with its complete content/context items/attachments, the assistant
+    // placeholder, the compaction-summary reindex, exactly one `conversationRevision`
+    // advance and one metrics-staleness drop. No state in which the placeholder is
+    // visible next to an empty user message ever exists.
+    //
+    // The reducer validates the target itself (identity + expected revision) and does
+    // nothing when it no longer holds — so the success check below is the authority
+    // on whether this submit happened at all.
+    const resolvedAt = performance.now();
+    const submittedUserItem = userHistoryItem(
+      finalContent,
+      attachmentMeta,
+      editorState,
+      selectedContextItems,
+    );
+    dispatch(
+      commitSubmittedTurn({
+        sessionId,
+        userItem: submittedUserItem,
+        assistantPlaceholder: assistantPlaceholder(),
+        insertion:
+          targetMessageId === undefined
+            ? { kind: "append", expectedConversationRevision }
+            : {
+                kind: "replace",
+                targetMessageId,
+                expectedConversationRevision,
+              },
+      }),
+    );
+    // The reducer reports nothing, so "did it commit?" must be answered by the state
+    // itself. Membership of the freshly minted user item id is the only **positive**
+    // signal: a revision comparison would be fooled by an unrelated bump that happens
+    // to land on the same number.
+    recordSubmitLatency({
+      phase: "commit-turn",
+      sessionId,
+      durationMs: performance.now() - resolvedAt,
+      insertion: insertionKind,
+      hadContext: selectedContextItems.length > 0,
+      ok: true,
+    });
+    recordSubmitLatency({
+      phase: "submit-to-commit",
+      sessionId,
+      durationMs: performance.now() - submitStartedAt,
+      insertion: insertionKind,
+      hadContext: selectedContextItems.length > 0,
+    });
+    const afterCommit = selectSessionById(getState(), sessionId);
+    const committed =
+      !!afterCommit &&
+      afterCommit.history.some(
+        (item) => item.message.id === submittedUserItem.message.id,
+      );
+    if (!committed) {
+      // Either the conversation moved on while the content was being resolved (the
+      // target would have been stale) or the target message is gone. Either way: no
+      // save, no request — a stale submit must not rewrite another turn, and it must
+      // not silently become an append.
+      if (!afterCommit) {
+        throw new Error("Session no longer exists");
+      }
+      throw new Error(
+        afterCommit.conversationRevision !== expectedConversationRevision
+          ? "Cannot send: the conversation changed while the message was being prepared"
+          : "Cannot resend: the target message is no longer in the loaded history",
+      );
+    }
+    dispatch(
+      setSessionMainEditorAttachmentsRestore({
+        sessionId,
+        attachments: undefined,
+      }),
+    );
+    dispatch(resetSessionCodeBlockApplyIndex({ sessionId }));
+
+    // 4. Immediate save boundary (方案.md §七.2/§七.3).
+    const beforeSaveEnqueue = performance.now();
+    void dispatch(
+      enqueueSessionSave({
+        sessionId,
+        reason: "USER_SUBMITTED",
+        // 方案.md §五.16.4：这里只有 user + **空** assistant placeholder，
+        // 不是权威的完整会话指标；保留 last-known（stale），由 terminal save 形成
+        // 新的 fresh 指标。
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
+
+    recordSubmitLatency({
+      phase: "save-enqueue",
+      sessionId,
+      durationMs: performance.now() - beforeSaveEnqueue,
+      insertion: insertionKind,
+    });
+
+    return {
+      legacySlashCommandData: legacyCommandWithInput
+        ? {
+            command: legacyCommandWithInput.command,
+            contextItems: selectedContextItems,
+            historyIndex: inputIndex,
+            input: legacyCommandWithInput.input,
+            selectedCode,
+          }
+        : undefined,
+      insertionKind,
+    };
+  })().catch((error) => {
+    // Same user-visible outcome as before this split: a dialog explaining the failure,
+    // and a `false` result for the send. Never a rejected promise — callers `unwrap()`.
+    reportSubmitFailure({ dispatch, getState }, sessionId, error);
+    return undefined;
+  });
+  if (!prepared) {
+    return false;
+  }
+  const preparedAt = performance.now();
+
+  // ── The retryable unit: only the model stream ───────────────────────────────
+  //
+  // `sessionStreamWrapper` retries this closure on transient / overloaded failures. It
+  // must contain nothing that writes the submitted turn: that turn is already committed,
+  // saved and visible, so re-running it duplicates it.
   return (await dispatch(
     sessionStreamWrapper({
       sessionId,
       runStream: async () => {
-        const submitStartedAt = performance.now();
-        // 1. Capture the target identity *before* any await (方案.md §十二): the
-        // caller's index is relative to the window that was on screen, and both a
-        // full load (which replaces `session.history`) and a trim moving
-        // `loadedOffset` invalidate that index. The identity survives both.
-        const pre = selectSessionById(getState(), sessionId);
-        if (!pre) {
-          throw new Error("Session no longer exists");
-        }
-        const windowHasMerge = windowHasUnsavedMerge(pre.history);
-        let targetMessageId: string | undefined;
-        // The window index used for the arithmetic below. `index` is used
-        // verbatim only when the caller did not supply an identity.
-        let windowIndex = index;
-        if (input.targetMessageId !== undefined) {
-          // Identity wins: re-resolve the target's position in the window **now**.
-          // If lazy loading has trimmed the bubble, resolve the identity against
-          // disk below rather than rejecting a real historical message.
-          const found = findGuiIndexContainingMessageId(
-            pre.history,
-            input.targetMessageId,
-          );
-          windowIndex = found >= 0 ? found : undefined;
-          targetMessageId = input.targetMessageId;
-          if (found < 0 && !pre.pagination.truncated) {
-            throw new Error(
-              "Cannot resend: the target message is no longer in the loaded history",
-            );
-          }
-        } else if (index !== undefined) {
-          const clicked = pre.history[index];
-          targetMessageId = clicked ? carrierMessageIdOf(clicked) : undefined;
-          if (targetMessageId === undefined) {
-            throw new Error(
-              "Cannot resend: the target message is no longer in the loaded history",
-            );
-          }
-        }
-
-        // Captured from the pre-await snapshot on purpose: `loadFullHistory`
-        // resets `loadedOffset` to 0, but the caller's index is relative to the
-        // window that was visible when it was passed (方案.md §十二).
-        const capturedOffset = pre.pagination.loadedOffset ?? 0;
-
-        // 2. Lazy-loaded history must be complete before sending, otherwise the
-        // model only sees the tail of the conversation.
-        //
-        // A window holding an unsaved merged bubble is not 1:1 with disk, so its
-        // index cannot be converted arithmetically: resolve the captured identity
-        // in both arrays — which hydrates the window in the same round trip — and
-        // address the **window** coordinate, because the replacement below writes
-        // to `session.history`. A miss aborts instead of editing another message.
-        let resolvedIndex: number | undefined;
-        if (
-          targetMessageId !== undefined &&
-          (windowHasMerge || windowIndex === undefined)
-        ) {
-          // A merged GUI item or a trimmed-away historical bubble cannot be
-          // addressed with offset arithmetic. Hydrate and match the stable ID
-          // against disk, then use the post-hydration GUI coordinate.
-          const resolved = await dispatch(
-            resolveHistoryMutationTarget({ sessionId, targetMessageId }),
-          ).unwrap();
-          if (!resolved) {
-            throw new Error(
-              "Cannot resend: the target message could not be located on disk",
-            );
-          }
-          resolvedIndex = resolved.guiIndex;
-        } else if (pre.pagination.truncated) {
-          await dispatch(loadFullHistory({ sessionId })).unwrap();
-        }
-
-        const state = getState();
-        const session = selectSessionById(state, sessionId);
-        if (!session) {
-          throw new Error("Session no longer exists");
-        }
-        if (!selectSessionChatModel(state, sessionId)) {
-          throw new Error("No chat model selected");
-        }
-
-        const inputIndex =
-          resolvedIndex !== undefined
-            ? resolvedIndex
-            : windowIndex !== undefined
-              ? windowToAbsoluteIndex(capturedOffset, windowIndex)
-              : session.history.length;
-        // Stage 2F 收口: everything above was resolved against `session` — the snapshot
-        // taken **before** `resolveEditorContent` awaits. The revision is what makes
-        // that snapshot's validity checkable again at commit time, and the target is
-        // carried as an identity (a number would address another turn by then).
-        const expectedConversationRevision = session.conversationRevision;
-        // Everything up to here was resolved against the pre-await snapshot: this is the
-        // span the user spends without a bubble (context IPC dominates it).
-        const insertionKind: "append" | "replace" =
-          targetMessageId === undefined ? "append" : "replace";
-        const existingMessage =
-          inputIndex >= 0 && inputIndex < session.history.length
-            ? session.history[inputIndex].message
-            : undefined;
-        // A resend does not pass attachments: inherit them from the message
-        // being replaced (paths in metadata, contents in <file_content>).
-        const filesToAttach =
-          attachments ??
-          (existingMessage
-            ? extractAttachmentsFromMessage(existingMessage)
-            : []);
-        const attachmentMeta: AttachmentMeta[] = filesToAttach.map((f) => ({
-          name: f.name,
-          path: f.path,
-        }));
-
-        // 2. Resolve the editor content **first** (方案.md §七.3, Stage 2F): context
-        // providers and slash commands are async, and the whole submitted turn —
-        // structure + complete user content + context items + attachments — is written
-        // by a single action below. Writing the structure before this await used to
-        // advance the content revision a second time when the content was filled, and
-        // exposed a savable window holding an empty user message.
-        //
-        // `firstTurnItems` is deliberately untouched: it is the authoritative original
-        // first turn persisted for the Local Provider conversation key. Never rebuild it
-        // from an edited tail: when the edited bubble is itself the first/only turn,
-        // doing so replaces the original key with `new user + empty assistant`. The first
-        // edit may appear valid, but the next edit then compiles an almost-empty request
-        // and leaves ContextStatus near zero.
-        //
-        // A brand-new session with no first-turn cache safely uses the full current
-        // history; the USER_SUBMITTED save fills the authoritative cache from disk.
-        const defaultContextProviders =
-          state.config.config.experimental?.defaultContext ?? [];
-        const {
-          selectedContextItems,
-          selectedCode,
-          content,
-          legacyCommandWithInput,
-        } = await resolveEditorContent({
-          sessionId,
-          editorState,
-          modifiers,
-          ideMessenger: extra.ideMessenger,
-          defaultContextProviders,
-          availableSlashCommands: state.config.config.slashCommands,
-          dispatch,
-          getState,
-        });
-
-        const filesForSymbols = [
-          ...selectedContextItems
-            .filter((item) => item.uri?.type === "file" && item.uri?.value)
-            .map((item) => item.uri!.value),
-          ...selectedCode.map((rif) => rif.filepath),
-        ];
-        void dispatch(
-          updateSessionFileSymbolsFromFiles({
-            sessionId,
-            filepaths: filesForSymbols,
-          }),
-        );
-
-        // Attachments travel as a trailing text part so the echoed bubble stays clean
-        // (chips come from metadata).
-        let finalContent: ChatHistoryItem["message"]["content"] = content;
-        if (filesToAttach.length > 0) {
-          const parts: MessagePart[] = Array.isArray(content)
-            ? (content as MessagePart[])
-            : [{ type: "text", text: content as string } as TextMessagePart];
-          parts.push({
-            type: "text",
-            text: buildAttachedFilesText(filesToAttach),
-          });
-          finalContent = parts;
-        }
-
-        // 3. ONE atomic write for the whole submitted turn (方案.md §五.16.1, Stage 2F):
-        // user item with its complete content/context items/attachments, the assistant
-        // placeholder, the compaction-summary reindex, exactly one `conversationRevision`
-        // advance and one metrics-staleness drop. No state in which the placeholder is
-        // visible next to an empty user message ever exists.
-        //
-        // The reducer validates the target itself (identity + expected revision) and does
-        // nothing when it no longer holds — so the success check below is the authority
-        // on whether this submit happened at all.
-        const resolvedAt = performance.now();
-        const submittedUserItem = userHistoryItem(
-          finalContent,
-          attachmentMeta,
-          editorState,
-          selectedContextItems,
-        );
-        dispatch(
-          commitSubmittedTurn({
-            sessionId,
-            userItem: submittedUserItem,
-            assistantPlaceholder: assistantPlaceholder(),
-            insertion:
-              targetMessageId === undefined
-                ? { kind: "append", expectedConversationRevision }
-                : {
-                    kind: "replace",
-                    targetMessageId,
-                    expectedConversationRevision,
-                  },
-          }),
-        );
-        // The reducer reports nothing, so "did it commit?" must be answered by the state
-        // itself. Membership of the freshly minted user item id is the only **positive**
-        // signal: a revision comparison would be fooled by an unrelated bump that happens
-        // to land on the same number.
-        recordSubmitLatency({
-          phase: "commit-turn",
-          sessionId,
-          durationMs: performance.now() - resolvedAt,
-          insertion: insertionKind,
-          hadContext: selectedContextItems.length > 0,
-          ok: true,
-        });
-        recordSubmitLatency({
-          phase: "submit-to-commit",
-          sessionId,
-          durationMs: performance.now() - submitStartedAt,
-          insertion: insertionKind,
-          hadContext: selectedContextItems.length > 0,
-        });
-        const afterCommit = selectSessionById(getState(), sessionId);
-        const committed =
-          !!afterCommit &&
-          afterCommit.history.some(
-            (item) => item.message.id === submittedUserItem.message.id,
-          );
-        if (!committed) {
-          // Either the conversation moved on while the content was being resolved (the
-          // target would have been stale) or the target message is gone. Either way: no
-          // save, no request — a stale submit must not rewrite another turn, and it must
-          // not silently become an append.
-          if (!afterCommit) {
-            throw new Error("Session no longer exists");
-          }
-          throw new Error(
-            afterCommit.conversationRevision !== expectedConversationRevision
-              ? "Cannot send: the conversation changed while the message was being prepared"
-              : "Cannot resend: the target message is no longer in the loaded history",
-          );
-        }
-        dispatch(
-          setSessionMainEditorAttachmentsRestore({
-            sessionId,
-            attachments: undefined,
-          }),
-        );
-        dispatch(resetSessionCodeBlockApplyIndex({ sessionId }));
-
-        // 4. Immediate save boundary (方案.md §七.2/§七.3).
-        const beforeSaveEnqueue = performance.now();
-        void dispatch(
-          enqueueSessionSave({
-            sessionId,
-            reason: "USER_SUBMITTED",
-            // 方案.md §五.16.4：这里只有 user + **空** assistant placeholder，
-            // 不是权威的完整会话指标；保留 last-known（stale），由 terminal save 形成
-            // 新的 fresh 指标。
-            measurementIntent: NO_MEASUREMENT,
-          }),
-        );
-
-        recordSubmitLatency({
-          phase: "save-enqueue",
-          sessionId,
-          durationMs: performance.now() - beforeSaveEnqueue,
-          insertion: insertionKind,
-        });
-
-        // 5. Run the turn.
-        const beforeStreamStart = performance.now();
-        await dispatch(
-          runSessionStream({
-            sessionId,
-            legacySlashCommandData: legacyCommandWithInput
-              ? {
-                  command: legacyCommandWithInput.command,
-                  contextItems: selectedContextItems,
-                  historyIndex: inputIndex,
-                  input: legacyCommandWithInput.input,
-                  selectedCode,
-                }
-              : undefined,
-          }),
-        ).unwrap();
+        // Recorded per **attempt**: with a retry this appears twice, which is exactly the
+        // evidence that the retry stayed inside the stream step. The duration is the wait
+        // since preparation finished (dispatch overhead, plus the backoff on a retry).
         recordSubmitLatency({
           phase: "stream-start",
           sessionId,
-          durationMs: performance.now() - beforeStreamStart,
-          insertion: insertionKind,
+          durationMs: performance.now() - preparedAt,
+          insertion: prepared.insertionKind,
         });
+        await dispatch(
+          runSessionStream({
+            sessionId,
+            legacySlashCommandData: prepared.legacySlashCommandData,
+          }),
+        ).unwrap();
       },
     }),
   ).unwrap()) as boolean;
