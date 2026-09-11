@@ -11,7 +11,7 @@ import { FeedbackButtons } from "../FeedbackButtons";
 import { CopyIconButton } from "../gui/CopyIconButton";
 import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
 import {
-  useSessionContextMetricsFields,
+  useSessionFullConversationMetricsFields,
   useSessionHistory,
 } from "../../redux/selectors/sessionView";
 
@@ -32,7 +32,8 @@ export default function ResponseActions({
   onDelete,
   isLast,
 }: ResponseActionsProps) {
-  const { contextPercentage, isPruned } = useSessionContextMetricsFields();
+  const { contextPercentage, isPruned } =
+    useSessionFullConversationMetricsFields();
 
   const history = useSessionHistory();
   const excludeThinkingFromCopy = useAppSelector(

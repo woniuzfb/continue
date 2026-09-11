@@ -214,6 +214,8 @@ export const loadFullHistory = createAsyncThunk<
       setSessionHistory({
         sessionId,
         history: mergedReport.items,
+        // 方案.md §五.16.1: 全量水合替换的是窗口，完整逻辑会话内容没变。
+        origin: "hydration",
       }),
     );
     dispatch(

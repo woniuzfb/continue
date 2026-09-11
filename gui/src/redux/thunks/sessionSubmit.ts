@@ -238,7 +238,14 @@ export const submitSessionInput = createAsyncThunk<
               ]
             : [...session.history, userItem, assistantPlaceholder()];
 
-        dispatch(setSessionHistory({ sessionId, history: nextHistory }));
+        dispatch(
+          setSessionHistory({
+            sessionId,
+            history: nextHistory,
+            // 方案.md §五.16.1: user 内容新增/编辑/重发替换是新的内容版本。
+            origin: "content",
+          }),
+        );
         // `firstTurnItems` is the authoritative original first turn persisted
         // for the Local Provider conversation key. Never rebuild it from an
         // edited tail: when the edited bubble is itself the first/only turn,

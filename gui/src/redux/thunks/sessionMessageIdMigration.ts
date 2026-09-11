@@ -50,8 +50,9 @@ import { hasPendingSessionSave } from "../util/sessionSaveQueue";
  *
  * 3. **A migration is not a conversation change.** It rewrites `message.id` in
  *    the disk file only. So nothing here may mark the session dirty, advance
- *    `historyRevision`, move `persistence.revision` or touch
- *    `contextMetrics` / `contextMetricsMeta` — the metrics circle keeps showing
+ *    `conversationRevision`, move `persistence.revision` or touch
+ *    `fullConversationMetrics` / `fullConversationMetricsMeta` — the circle keeps
+ *    showing
  *    the same valid snapshot and never recompiles.
  */
 

@@ -23,10 +23,15 @@ import {
   setCompactionLoadingByMessageId,
   setSessionConversationSummary,
   clearSessionConversationSummary,
+  setSessionHistory,
+  setSessionFullConversationMetrics,
   setSessionFirstTurn,
+  setSessionMode,
+  prependSessionHistory,
   setSessionStreamError,
   setSessionTitle,
   trimSessionHistoryWindow,
+  truncateHistoryAfterMessageId,
   updateHistoryItemByMessageId,
   sessionsSlice,
 } from "./sessionsSlice";
@@ -173,23 +178,24 @@ describe("sessionsSlice — ownership", () => {
     // this reducer. That must be saved, but it must NOT invalidate the metrics
     // snapshot — otherwise the ring drops to zero the moment a reply finishes.
     const metrics = {
-      didPrune: false,
-      contextPercentage: 0.42,
       inputTokens: 199149,
       contextLength: 200000,
+      availableTokens: 851,
+      contextPercentage: 0.42,
+      exceedsContext: false,
     };
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      contextMetrics: metrics,
-      contextMetricsMeta: {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+      fullConversationMetrics: metrics,
+      fullConversationMetricsMeta: {
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
       isPruned: false,
       contextPercentage: 0.42,
     });
-    const revisionBefore = state.sessionsById.s1.historyRevision;
+    const revisionBefore = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -200,9 +206,9 @@ describe("sessionsSlice — ownership", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+    expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
     expect(state.sessionsById.s1.contextPercentage).toBe(0.42);
-    expect(state.sessionsById.s1.historyRevision).toBe(revisionBefore);
+    expect(state.sessionsById.s1.conversationRevision).toBe(revisionBefore);
     // Still must be re-saved.
     expect(state.sessionsById.s1.dirty).toBe(true);
     expect(state.sessionsById.s1.persistence?.state).toBe("pending");
@@ -216,9 +222,9 @@ describe("sessionsSlice — ownership", () => {
         updates: { message: item("u1", "user", "edited").message },
       }),
     );
-    expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
-    expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
-    expect(state.sessionsById.s1.historyRevision).toBe(revisionBefore + 1);
+    expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
+    expect(state.sessionsById.s1.conversationRevision).toBe(revisionBefore + 1);
   });
 
   it("does not advance the conversation revision on a stream chunk", () => {
@@ -229,7 +235,7 @@ describe("sessionsSlice — ownership", () => {
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const revisionBefore = state.sessionsById.s1.historyRevision;
+    const revisionBefore = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -240,23 +246,24 @@ describe("sessionsSlice — ownership", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(revisionBefore);
+    expect(state.sessionsById.s1.conversationRevision).toBe(revisionBefore);
     expect(state.sessionsById.s1.dirty).toBe(true);
   });
 
   it("advances the conversation revision exactly once at a completed terminal", () => {
     const metrics = {
-      didPrune: false,
-      contextPercentage: 0.3,
       inputTokens: 10,
       contextLength: 100,
+      availableTokens: 90,
+      contextPercentage: 0.3,
+      exceedsContext: false,
     };
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      contextMetrics: metrics,
-      contextMetricsMeta: {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+      fullConversationMetrics: metrics,
+      fullConversationMetricsMeta: {
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
       contextPercentage: 0.3,
@@ -265,7 +272,7 @@ describe("sessionsSlice — ownership", () => {
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -284,7 +291,7 @@ describe("sessionsSlice — ownership", () => {
       }),
     );
     // Chunks never advance the conversation revision.
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
 
     state = sessionsSlice.reducer(
       state,
@@ -294,14 +301,14 @@ describe("sessionsSlice — ownership", () => {
         terminalStatus: "completed",
       }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
     // Last-known value kept visible; only the freshness identity is cleared.
-    expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+    expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
     expect(state.sessionsById.s1.contextPercentage).toBe(0.3);
-    expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
 
     // A stale terminal (a different live request) is a no-op.
-    const after = state.sessionsById.s1.historyRevision;
+    const after = state.sessionsById.s1.conversationRevision;
     state = sessionsSlice.reducer(
       state,
       commitSessionConversationTurn({
@@ -310,7 +317,7 @@ describe("sessionsSlice — ownership", () => {
         terminalStatus: "completed",
       }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(after);
+    expect(state.sessionsById.s1.conversationRevision).toBe(after);
   });
 
   it("advances the conversation revision once for aborted and failed terminals", () => {
@@ -320,7 +327,7 @@ describe("sessionsSlice — ownership", () => {
         state,
         beginSessionStream({ sessionId: "s1", requestId: "r1" }),
       );
-      const before = state.sessionsById.s1.historyRevision;
+      const before = state.sessionsById.s1.conversationRevision;
       // The turn wrote content before it was stopped / failed: it is a real
       // logical turn, so its terminal commits it.
       state = sessionsSlice.reducer(
@@ -339,7 +346,7 @@ describe("sessionsSlice — ownership", () => {
           terminalStatus: status,
         }),
       );
-      expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+      expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
     }
   });
 
@@ -350,20 +357,26 @@ describe("sessionsSlice — ownership", () => {
     // again, nor may it drop the metrics freshness identity.
     for (const status of ["completed", "aborted", "failed"] as const) {
       const meta = {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       };
       let state = stateWith({
         history: [item("u1", "user", "hi")],
-        contextMetrics: { didPrune: false, contextPercentage: 0.2 },
-        contextMetricsMeta: meta,
+        fullConversationMetrics: {
+          inputTokens: 0,
+          contextLength: 0,
+          availableTokens: 0,
+          contextPercentage: 0.2,
+          exceedsContext: false,
+        },
+        fullConversationMetricsMeta: meta,
       });
       state = sessionsSlice.reducer(
         state,
         beginSessionStream({ sessionId: "s1", requestId: "r1" }),
       );
-      const before = state.sessionsById.s1.historyRevision;
+      const before = state.sessionsById.s1.conversationRevision;
 
       state = sessionsSlice.reducer(
         state,
@@ -374,27 +387,33 @@ describe("sessionsSlice — ownership", () => {
         }),
       );
 
-      expect(state.sessionsById.s1.historyRevision).toBe(before);
-      expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+      expect(state.sessionsById.s1.conversationRevision).toBe(before);
+      expect(state.sessionsById.s1.fullConversationMetricsMeta).toBe(meta);
     }
   });
 
   it("does not arm the terminal commit from a compile-metadata-only chunk", () => {
     const meta = {
-      modelIdentity: "gpt-4o",
-      historyRevision: 0,
+      constructionIdentity: "gpt-4o",
+      conversationRevision: 0,
       schemaVersion: 1,
     };
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
-      contextMetricsMeta: meta,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.2,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: meta,
     });
     state = sessionsSlice.reducer(
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -422,8 +441,8 @@ describe("sessionsSlice — ownership", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
-    expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBe(meta);
   });
 
   it("does not arm the terminal commit from a frame that writes nothing", () => {
@@ -441,20 +460,26 @@ describe("sessionsSlice — ownership", () => {
 
     for (const frame of frames) {
       const meta = {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       };
       let state = stateWith({
         history: [item("u1", "user", "hi"), item("p1", "assistant", "")],
-        contextMetrics: { didPrune: false, contextPercentage: 0.2 },
-        contextMetricsMeta: meta,
+        fullConversationMetrics: {
+          inputTokens: 0,
+          contextLength: 0,
+          availableTokens: 0,
+          contextPercentage: 0.2,
+          exceedsContext: false,
+        },
+        fullConversationMetricsMeta: meta,
       });
       state = sessionsSlice.reducer(
         state,
         beginSessionStream({ sessionId: "s1", requestId: "r1" }),
       );
-      const before = state.sessionsById.s1.historyRevision;
+      const before = state.sessionsById.s1.conversationRevision;
 
       state = sessionsSlice.reducer(
         state,
@@ -475,8 +500,8 @@ describe("sessionsSlice — ownership", () => {
           terminalStatus: "completed",
         }),
       );
-      expect(state.sessionsById.s1.historyRevision).toBe(before);
-      expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+      expect(state.sessionsById.s1.conversationRevision).toBe(before);
+      expect(state.sessionsById.s1.fullConversationMetricsMeta).toBe(meta);
     }
 
     // A thinking frame with neither signature nor reasoning details, landing on
@@ -494,7 +519,7 @@ describe("sessionsSlice — ownership", () => {
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
     state = sessionsSlice.reducer(
       state,
       applySessionStreamUpdate({
@@ -512,16 +537,22 @@ describe("sessionsSlice — ownership", () => {
         terminalStatus: "completed",
       }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
   });
 
   it("arms when a batch mixes metadata and empty frames with real content", () => {
     let state = stateWith({
       history: [item("u1", "user", "hi"), item("p1", "assistant", "")],
-      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
-      contextMetricsMeta: {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.2,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: {
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
     });
@@ -529,7 +560,7 @@ describe("sessionsSlice — ownership", () => {
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -558,7 +589,7 @@ describe("sessionsSlice — ownership", () => {
         terminalStatus: "completed",
       }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
   });
 
   it("arms the turn from a new history item even when it starts empty", () => {
@@ -567,10 +598,16 @@ describe("sessionsSlice — ownership", () => {
     // so the turn must commit (方案.md §五.16.1: tool result 进入完整逻辑会话).
     let state = stateWith({
       history: [item("u1", "user", "hi"), item("a1", "assistant", "")],
-      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
-      contextMetricsMeta: {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.2,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: {
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
     });
@@ -578,7 +615,7 @@ describe("sessionsSlice — ownership", () => {
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -600,7 +637,7 @@ describe("sessionsSlice — ownership", () => {
         terminalStatus: "completed",
       }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
   });
 
   it("keeps the arming across the tool loop's continuation request", () => {
@@ -608,7 +645,13 @@ describe("sessionsSlice — ownership", () => {
     // live; that continuation's terminal is the one that commits the turn.
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.2,
+        exceedsContext: false,
+      },
     });
     state = sessionsSlice.reducer(
       state,
@@ -622,7 +665,7 @@ describe("sessionsSlice — ownership", () => {
         messages: [{ role: "assistant", content: "call" } as any],
       }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -638,14 +681,20 @@ describe("sessionsSlice — ownership", () => {
         terminalStatus: "completed",
       }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
-    expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
   });
 
   it("starts a new turn without the previous turn's arming", () => {
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.2,
+        exceedsContext: false,
+      },
     });
     state = sessionsSlice.reducer(
       state,
@@ -675,8 +724,8 @@ describe("sessionsSlice — ownership", () => {
         status: "completed",
       }),
     );
-    const meta = state.sessionsById.s1.contextMetricsMeta;
-    const before = state.sessionsById.s1.historyRevision;
+    const meta = state.sessionsById.s1.fullConversationMetricsMeta;
+    const before = state.sessionsById.s1.conversationRevision;
 
     // The next turn fails before its first token.
     state = sessionsSlice.reducer(
@@ -693,8 +742,8 @@ describe("sessionsSlice — ownership", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
-    expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBe(meta);
   });
 
   it("keeps the arming across pause and stream error", () => {
@@ -715,7 +764,7 @@ describe("sessionsSlice — ownership", () => {
           messages: [{ role: "assistant", content: "partial" } as any],
         }),
       );
-      const before = state.sessionsById.s1.historyRevision;
+      const before = state.sessionsById.s1.conversationRevision;
 
       state = sessionsSlice.reducer(
         state,
@@ -737,7 +786,7 @@ describe("sessionsSlice — ownership", () => {
           terminalStatus: kind === "pause" ? "aborted" : "failed",
         }),
       );
-      expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+      expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
     }
   });
 
@@ -752,7 +801,7 @@ describe("sessionsSlice — ownership", () => {
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
     const persistenceBefore = state.sessionsById.s1.persistence?.revision ?? 0;
 
     state = sessionsSlice.reducer(
@@ -767,7 +816,7 @@ describe("sessionsSlice — ownership", () => {
     );
 
     // Still must be saved, but it is not yet a new conversation version.
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
     expect(state.sessionsById.s1.persistence?.revision).toBe(
       persistenceBefore + 1,
     );
@@ -794,14 +843,14 @@ describe("sessionsSlice — ownership", () => {
     );
 
     // Exactly one revision for the whole logical turn, tool writes included.
-    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
   });
 
   it("advances the conversation revision immediately for an out-of-stream mutation", () => {
     // No live request: an edit / compact / delete is a complete content version
     // by itself, so there is no terminal that could commit it later.
     let state = stateWith({ history: [item("u1", "user", "hi")] });
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -812,7 +861,7 @@ describe("sessionsSlice — ownership", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
   });
 
   it("keeps the last-known metrics values when a mutation makes them stale", () => {
@@ -821,17 +870,18 @@ describe("sessionsSlice — ownership", () => {
     // out-of-stream mutation and for a write inside a live turn.
     for (const live of [false, true]) {
       const metrics = {
-        didPrune: false,
-        contextPercentage: 0.33,
         inputTokens: 10,
         contextLength: 100,
+        availableTokens: 90,
+        contextPercentage: 0.33,
+        exceedsContext: false,
       };
       let state = stateWith({
         history: [item("a1", "assistant", "")],
-        contextMetrics: metrics,
-        contextMetricsMeta: {
-          modelIdentity: "gpt-4o",
-          historyRevision: 0,
+        fullConversationMetrics: metrics,
+        fullConversationMetricsMeta: {
+          constructionIdentity: "gpt-4o",
+          conversationRevision: 0,
           schemaVersion: 1,
         },
       });
@@ -853,9 +903,9 @@ describe("sessionsSlice — ownership", () => {
         }),
       );
 
-      expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+      expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
       expect(state.sessionsById.s1.contextPercentage).toBeUndefined();
-      expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
+      expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
     }
   });
 
@@ -879,7 +929,7 @@ describe("sessionsSlice — ownership", () => {
           updates,
         }),
       );
-      const before = state.sessionsById.s1.historyRevision;
+      const before = state.sessionsById.s1.conversationRevision;
 
       state = sessionsSlice.reducer(
         state,
@@ -890,26 +940,32 @@ describe("sessionsSlice — ownership", () => {
         }),
       );
 
-      expect(state.sessionsById.s1.historyRevision).toBe(before);
+      expect(state.sessionsById.s1.conversationRevision).toBe(before);
     }
   });
 
   it("does not advance the conversation revision for a stale terminal", () => {
     const meta = {
-      modelIdentity: "gpt-4o",
-      historyRevision: 0,
+      constructionIdentity: "gpt-4o",
+      conversationRevision: 0,
       schemaVersion: 1,
     };
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
-      contextMetricsMeta: meta,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.2,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: meta,
     });
     state = sessionsSlice.reducer(
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -919,28 +975,34 @@ describe("sessionsSlice — ownership", () => {
         terminalStatus: "completed",
       }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
-    expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBe(meta);
   });
 
   it("ends a non-chat stream without committing the conversation", () => {
     // Edit mode's diff stream ends through finishSessionStream alone; it must
     // not advance the conversation revision or clear the metrics freshness.
     const meta = {
-      modelIdentity: "gpt-4o",
-      historyRevision: 0,
+      constructionIdentity: "gpt-4o",
+      conversationRevision: 0,
       schemaVersion: 1,
     };
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
-      contextMetricsMeta: meta,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.2,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: meta,
     });
     state = sessionsSlice.reducer(
       state,
       beginSessionStream({ sessionId: "s1", requestId: "r1" }),
     );
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -951,22 +1013,28 @@ describe("sessionsSlice — ownership", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
-    expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBe(meta);
   });
 
   it("treats appliedRules as bookkeeping, not a conversation change", () => {
-    const metrics = { didPrune: false, contextPercentage: 0.3 };
+    const metrics = {
+      inputTokens: 0,
+      contextLength: 0,
+      availableTokens: 0,
+      contextPercentage: 0.3,
+      exceedsContext: false,
+    };
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      contextMetrics: metrics,
-      contextMetricsMeta: {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+      fullConversationMetrics: metrics,
+      fullConversationMetricsMeta: {
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
     });
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -977,8 +1045,8 @@ describe("sessionsSlice — ownership", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
-    expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+    expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
     expect(state.sessionsById.s1.dirty).toBe(true);
     expect(state.sessionsById.s1.persistence?.revision).toBeGreaterThan(0);
   });
@@ -1114,7 +1182,7 @@ describe("sessionsSlice — save-echo bookkeeping", () => {
       history: [item("u1", "user", "a")],
       firstTurnItems: [item("u1", "user", "a")],
     });
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -1124,17 +1192,21 @@ describe("sessionsSlice — save-echo bookkeeping", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
     // The response still replaced the value (it is the authority for content).
     expect(state.sessionsById.s1.firstTurnItems).toHaveLength(1);
   });
 
-  it("advances the revision when the first turn really changed", () => {
+  it("never advances the revision from a first-turn write, even a real change", () => {
+    // 方案.md §五.16.1 / 已知限制 #64: `firstTurnItems` is a derived cache of the
+    // disk head that only feeds the Local Provider's reduced send payload; the
+    // full-conversation metrics are built from the full history, so hydration and
+    // save echo never own the content revision.
     let state = stateWith({
       history: [item("u1", "user", "a")],
       firstTurnItems: [item("u1", "user", "a")],
     });
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -1144,7 +1216,9 @@ describe("sessionsSlice — save-echo bookkeeping", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+    // The response is still the authority for the value itself.
+    expect(state.sessionsById.s1.firstTurnItems[0].message.id).toBe("u9");
   });
 
   it("does not advance the revision or churn the reference for an equal summary", () => {
@@ -1153,7 +1227,7 @@ describe("sessionsSlice — save-echo bookkeeping", () => {
       history: [item("u1", "user", "a")],
       latestConversationSummary: summary,
     });
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
@@ -1163,7 +1237,7 @@ describe("sessionsSlice — save-echo bookkeeping", () => {
       }),
     );
 
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
     expect(state.sessionsById.s1.latestConversationSummary).toBe(summary);
 
     // A real change is a new version of the conversation content.
@@ -1174,7 +1248,7 @@ describe("sessionsSlice — save-echo bookkeeping", () => {
         summary: { sourceMessageId: "u1", content: "new sum" },
       }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
     expect(state.sessionsById.s1.latestConversationSummary?.content).toBe(
       "new sum",
     );
@@ -1182,13 +1256,13 @@ describe("sessionsSlice — save-echo bookkeeping", () => {
 
   it("does not advance the revision clearing a summary that is already absent", () => {
     let state = stateWith({ history: [item("u1", "user", "a")] });
-    const before = state.sessionsById.s1.historyRevision;
+    const before = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
       clearSessionConversationSummary({ sessionId: "s1" }),
     );
-    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
 
     state = sessionsSlice.reducer(
       state,
@@ -1197,14 +1271,14 @@ describe("sessionsSlice — save-echo bookkeeping", () => {
         summary: { sourceMessageId: "u1", content: "sum" },
       }),
     );
-    const afterSet = state.sessionsById.s1.historyRevision;
+    const afterSet = state.sessionsById.s1.conversationRevision;
 
     state = sessionsSlice.reducer(
       state,
       clearSessionConversationSummary({ sessionId: "s1" }),
     );
     expect(state.sessionsById.s1.latestConversationSummary).toBeUndefined();
-    expect(state.sessionsById.s1.historyRevision).toBe(afterSet + 1);
+    expect(state.sessionsById.s1.conversationRevision).toBe(afterSet + 1);
   });
 });
 
@@ -1294,6 +1368,196 @@ describe("sessionsSlice — message identity", () => {
     expect(
       state.sessionsById.s1.history[0].conversationSummary,
     ).toBeUndefined();
+  });
+});
+
+describe("sessionsSlice — conversation revision ownership", () => {
+  // 方案.md §五.16.1: only real content changes own the revision. Window
+  // operations (hydration / prepend / trim) and construction-environment changes
+  // (mode) must leave it alone — the identity comparison of §五.16.2 is what
+  // makes the snapshot stale in those cases.
+  it("does not advance the revision for hydration, prepend or trim", () => {
+    let state = stateWith({
+      history: [item("u1", "user", "1"), item("a1", "assistant", "2")],
+      pagination: {
+        truncated: true,
+        loadedOffset: 2,
+        totalCount: 4,
+        loadedDiskCount: 2,
+        hasMore: true,
+        loading: false,
+        requestGeneration: 0,
+        persistPending: false,
+      },
+    });
+    const before = state.sessionsById.s1.conversationRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionHistory({
+        sessionId: "s1",
+        history: [item("u1", "user", "1"), item("a1", "assistant", "2")],
+        origin: "hydration",
+      }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      prependSessionHistory({
+        sessionId: "s1",
+        items: [item("u0", "user", "older")],
+        hasMore: true,
+        newLoadedOffset: 1,
+        totalCount: 4,
+      } as any),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      trimSessionHistoryWindow({
+        sessionId: "s1",
+        keepCount: 2,
+        removedDiskItems: 0,
+        fullDiskItemCount: 3,
+        retainedDiskItemCount: 3,
+      } as any),
+    );
+
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+  });
+
+  it("advances the revision for a content replacement", () => {
+    let state = stateWith({ history: [item("u1", "user", "1")] });
+    const before = state.sessionsById.s1.conversationRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionHistory({
+        sessionId: "s1",
+        history: [item("u2", "user", "2")],
+        origin: "content",
+      }),
+    );
+
+    expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
+    // A content replacement makes the snapshot stale without blanking it.
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
+  });
+
+  it("does not advance the revision when the mode changes", () => {
+    let state = stateWith({ mode: "agent" });
+    const before = state.sessionsById.s1.conversationRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionMode({ sessionId: "s1", mode: "chat" }),
+    );
+
+    expect(state.sessionsById.s1.mode).toBe("chat");
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+  });
+
+  it("keeps the last-known metrics when a turn or the history is deleted", () => {
+    // 方案.md §五.16: the value is the last-known one and stays visible; only the
+    // freshness identity is dropped (deleteTurn / truncate included).
+    const metrics = {
+      inputTokens: 10,
+      contextLength: 100,
+      availableTokens: 90,
+      contextPercentage: 0.5,
+      exceedsContext: false,
+    };
+    for (const action of ["delete", "truncate"] as const) {
+      let state = stateWith({
+        history: [
+          item("u1", "user", "one"),
+          item("a1", "assistant", "two"),
+          item("u2", "user", "three"),
+        ],
+        fullConversationMetrics: metrics,
+        fullConversationMetricsMeta: {
+          constructionIdentity: "identity",
+          conversationRevision: 0,
+          schemaVersion: 1,
+        },
+      });
+      const before = state.sessionsById.s1.conversationRevision;
+
+      state = sessionsSlice.reducer(
+        state,
+        action === "delete"
+          ? deleteTurnByMessageId({ sessionId: "s1", messageId: "u1" })
+          : truncateHistoryAfterMessageId({
+              sessionId: "s1",
+              messageId: "a1",
+              assistantPlaceholderId: "p1",
+            }),
+      );
+
+      expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
+      expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
+      expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
+    }
+  });
+});
+
+describe("sessionsSlice — full conversation metrics", () => {
+  const result = (revision: number, identity = "identity") => ({
+    metrics: {
+      inputTokens: 10,
+      contextLength: 100,
+      availableTokens: 90,
+      contextPercentage: 0.1,
+      exceedsContext: false,
+    },
+    meta: {
+      constructionIdentity: identity,
+      conversationRevision: revision,
+      schemaVersion: 1,
+    },
+  });
+
+  it("stores the result and projects it onto the legacy UI fields", () => {
+    let state = stateWith({ history: [item("u1", "user", "hi")] });
+    const before = state.sessionsById.s1.conversationRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionFullConversationMetrics({
+        sessionId: "s1",
+        result: result(before),
+      }),
+    );
+
+    expect(state.sessionsById.s1.fullConversationMetrics).toEqual(
+      result(before).metrics,
+    );
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toEqual(
+      result(before).meta,
+    );
+    // 过渡投影：ContextStatus 仍读这些零散字段（Stage 2E 才改读完整指标）。
+    expect(state.sessionsById.s1.isPruned).toBe(false);
+    expect(state.sessionsById.s1.contextPercentage).toBe(0.1);
+    expect(state.sessionsById.s1.contextInputTokens).toBe(10);
+    expect(state.sessionsById.s1.contextLength).toBe(100);
+  });
+
+  it("rejects a result for another conversation revision", () => {
+    // 方案.md §五.16.5: the thunk validates the complete identity; the reducer
+    // repeats the cheap revision check so a stale result can never claim
+    // freshness.
+    let state = stateWith({ history: [item("u1", "user", "hi")] });
+    const before = state.sessionsById.s1.conversationRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setSessionFullConversationMetrics({
+        sessionId: "s1",
+        result: result(before + 1),
+      }),
+    );
+
+    expect(state.sessionsById.s1.fullConversationMetrics).toBeUndefined();
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
+    expect(state.sessionsById.s1.contextPercentage).toBeUndefined();
   });
 });
 
@@ -1488,14 +1752,16 @@ describe("clearSavedMergedReplyProvenance", () => {
     expect(session.history[1].message.id).toBe("a1");
     // A new array is only justified because something was actually dropped.
     expect(session.history).not.toBe(before);
-    // Pure: no dirty, no revision, no historyRevision — otherwise a save would
+    // Pure: no dirty, no revision, no conversationRevision — otherwise a save would
     // schedule another save (or invalidate the request-history cache) for free.
     expect(session.dirty).toBe(true);
     expect(session.persistence).toMatchObject({
       state: "pending",
       revision: 5,
     });
-    expect(session.historyRevision).toBe(state.sessionsById.s1.historyRevision);
+    expect(session.conversationRevision).toBe(
+      state.sessionsById.s1.conversationRevision,
+    );
   });
 
   it("keeps the array reference when no fingerprint matches", () => {
@@ -1596,8 +1862,8 @@ describe("sessionsSlice — merge settings projection", () => {
     expect(next.tabDescriptors).toEqual(state.tabDescriptors);
     for (const id of ["s1", "s2"]) {
       expect(next.sessionsById[id].dirty).toBe(true);
-      expect(next.sessionsById[id].historyRevision).toBe(
-        state.sessionsById[id].historyRevision,
+      expect(next.sessionsById[id].conversationRevision).toBe(
+        state.sessionsById[id].conversationRevision,
       );
       expect(next.sessionsById[id].persistence).toEqual(
         state.sessionsById[id].persistence,

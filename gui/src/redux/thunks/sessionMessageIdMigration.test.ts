@@ -13,7 +13,7 @@ import {
   resetSessionSaveQueues,
   setPendingSave,
 } from "../util/sessionSaveQueue";
-import { needsContextMetricsRecompute } from "./sessionMetrics";
+import { needsFullConversationMetricsRecompute } from "./sessionMetrics";
 import {
   canMigrateSessionMessageIds,
   IDE_INFO_TIMEOUT_MS,
@@ -34,7 +34,7 @@ import {
  *     `unsupported`: "declared but did not answer" ≠ "cannot do this".
  *  3. The gate never writes to a session that is mid-flight.
  *  4. Migration must not look like a conversation change: no dirty flag, no
- *     `historyRevision` move, no metrics invalidation, no `history/save`.
+ *     `conversationRevision` move, no metrics invalidation, no `history/save`.
  */
 
 function item(
@@ -52,18 +52,19 @@ function item(
   };
 }
 
-/** A valid snapshot: identity / schema / historyRevision all still match. */
+/** A valid snapshot: identity / schema / conversationRevision all still match. */
 const METRICS_SNAPSHOT = {
-  didPrune: false,
-  contextPercentage: 0.42,
   inputTokens: 1_234,
   contextLength: 100_000,
+  availableTokens: 98_766,
+  contextPercentage: 0.42,
+  exceedsContext: false,
 };
 
 const METRICS_META = {
   // No chat model is configured, so the session's identity is "".
-  modelIdentity: "",
-  historyRevision: 0,
+  constructionIdentity: "",
+  conversationRevision: 0,
   schemaVersion: 1,
 };
 
@@ -679,12 +680,12 @@ describe("migration never looks like a conversation change", () => {
     const store = makeStore(
       {
         s1: {
-          contextMetrics: METRICS_SNAPSHOT,
-          contextMetricsMeta: METRICS_META,
+          fullConversationMetrics: METRICS_SNAPSHOT,
+          fullConversationMetricsMeta: METRICS_META,
         },
         s2: {
-          contextMetrics: METRICS_SNAPSHOT,
-          contextMetricsMeta: METRICS_META,
+          fullConversationMetrics: METRICS_SNAPSHOT,
+          fullConversationMetricsMeta: METRICS_META,
         },
       },
       "supported",
@@ -697,10 +698,10 @@ describe("migration never looks like a conversation change", () => {
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
     const beforeA = session(store, "s1");
-    const metricsA = beforeA.contextMetrics;
-    const metaA = beforeA.contextMetricsMeta;
-    const metricsB = session(store, "s2").contextMetrics;
-    const metaB = session(store, "s2").contextMetricsMeta;
+    const metricsA = beforeA.fullConversationMetrics;
+    const metaA = beforeA.fullConversationMetricsMeta;
+    const metricsB = session(store, "s2").fullConversationMetrics;
+    const metaB = session(store, "s2").fullConversationMetricsMeta;
 
     await run(store, scheduleMessageIdMigrationIfSafe({ sessionId: "s1" }));
 
@@ -708,31 +709,31 @@ describe("migration never looks like a conversation change", () => {
       state: "succeeded",
     });
     // Same references, not just equal values: the circle must not blink.
-    expect(session(store, "s1").contextMetrics).toBe(metricsA);
-    expect(session(store, "s1").contextMetricsMeta).toBe(metaA);
-    expect(session(store, "s2").contextMetrics).toBe(metricsB);
-    expect(session(store, "s2").contextMetricsMeta).toBe(metaB);
+    expect(session(store, "s1").fullConversationMetrics).toBe(metricsA);
+    expect(session(store, "s1").fullConversationMetricsMeta).toBe(metaA);
+    expect(session(store, "s2").fullConversationMetrics).toBe(metricsB);
+    expect(session(store, "s2").fullConversationMetricsMeta).toBe(metaB);
     expect(session(store, "s1").contextPercentage).toBe(
       beforeA.contextPercentage,
     );
     // No recompute, and no write: the migration is not a conversation change.
-    expect(needsContextMetricsRecompute(store.getState() as any, "s1")).toBe(
-      false,
-    );
-    expect(needsContextMetricsRecompute(store.getState() as any, "s2")).toBe(
-      false,
-    );
+    expect(
+      needsFullConversationMetricsRecompute(store.getState() as any, "s1"),
+    ).toBe(false);
+    expect(
+      needsFullConversationMetricsRecompute(store.getState() as any, "s2"),
+    ).toBe(false);
     expect((store.getState() as any).sessions.activeSessionId).toBe("s2");
     expect(requestTypes(store, request)).not.toContain("llm/compileChat");
     expect(requestTypes(store, request)).not.toContain("history/save");
   });
 
-  it("does not advance historyRevision or dirty the session on success", async () => {
+  it("does not advance conversationRevision or dirty the session on success", async () => {
     const store = makeStore(
       {
         s1: {
-          contextMetrics: METRICS_SNAPSHOT,
-          contextMetricsMeta: METRICS_META,
+          fullConversationMetrics: METRICS_SNAPSHOT,
+          fullConversationMetricsMeta: METRICS_META,
         },
       },
       "supported",
@@ -743,22 +744,22 @@ describe("migration never looks like a conversation change", () => {
     };
 
     const before = session(store);
-    const historyRevision = before.historyRevision;
+    const conversationRevision = before.conversationRevision;
     const historyReference = before.history;
     const persistenceRevision = before.persistence?.revision;
 
     await run(store, scheduleMessageIdMigrationIfSafe({ sessionId: "s1" }));
 
     const after = session(store);
-    expect(after.historyRevision).toBe(historyRevision);
+    expect(after.conversationRevision).toBe(conversationRevision);
     expect(after.history).toBe(historyReference);
     expect(after.dirty).toBe(false);
     expect(after.persistence?.revision).toBe(persistenceRevision);
-    expect(needsContextMetricsRecompute(store.getState() as any, "s1")).toBe(
-      false,
-    );
-    expect(after.contextMetrics).toBe(METRICS_SNAPSHOT);
-    expect(after.contextMetricsMeta).toBe(METRICS_META);
+    expect(
+      needsFullConversationMetricsRecompute(store.getState() as any, "s1"),
+    ).toBe(false);
+    expect(after.fullConversationMetrics).toBe(METRICS_SNAPSHOT);
+    expect(after.fullConversationMetricsMeta).toBe(METRICS_META);
   });
 
   it("keeps the snapshot through failure, unsupported and timeout", async () => {
@@ -818,8 +819,8 @@ describe("migration never looks like a conversation change", () => {
       const store = makeStore(
         {
           s1: {
-            contextMetrics: METRICS_SNAPSHOT,
-            contextMetricsMeta: METRICS_META,
+            fullConversationMetrics: METRICS_SNAPSHOT,
+            fullConversationMetricsMeta: METRICS_META,
           },
         },
         testCase.capability,
@@ -833,15 +834,19 @@ describe("migration never looks like a conversation change", () => {
         testCase.expected,
       );
       // Not cleared, not reset to zero, no error surfaced here.
-      expect(after.contextMetrics, testCase.name).toBe(METRICS_SNAPSHOT);
-      expect(after.contextMetricsMeta, testCase.name).toBe(METRICS_META);
+      expect(after.fullConversationMetrics, testCase.name).toBe(
+        METRICS_SNAPSHOT,
+      );
+      expect(after.fullConversationMetricsMeta, testCase.name).toBe(
+        METRICS_META,
+      );
       expect(after.contextPercentage, testCase.name).toBeUndefined();
       expect(
         (after as any).messageIdMigration.error,
         testCase.name,
       ).toBeUndefined();
       expect(
-        needsContextMetricsRecompute(store.getState() as any, "s1"),
+        needsFullConversationMetricsRecompute(store.getState() as any, "s1"),
         testCase.name,
       ).toBe(false);
     }

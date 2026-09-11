@@ -27,7 +27,7 @@ import { saveSession } from "./sessionPersistence";
  *
  * The two things this file pins:
  *   1. a fallback is a normal, silent, non-error path — it must not fail a load,
- *      mark the session dirty, advance `historyRevision`, or flip the migration
+ *      mark the session dirty, advance `conversationRevision`, or flip the migration
  *      state to `succeeded` (fallback ≠ migrated);
  *   2. the report appears on all four paths — initial load, loadMore, loadFull
  *      and the save response's first turn — and only when something was minted.
@@ -196,7 +196,7 @@ describe("message-id fallback reporting", () => {
     // A minted id is runtime-only: the load must not be recorded as persisted,
     // not look modified, and not claim the disk identity was migrated.
     expect(session.dirty).toBe(false);
-    expect(session.historyRevision).toBe(0);
+    expect(session.conversationRevision).toBe(0);
     expect(session.persistence).toBeUndefined();
     expect(session.messageIdMigration.state).not.toBe("succeeded");
     // An undeclared capability means the migration request is never sent at all
@@ -260,25 +260,26 @@ describe("message-id fallback reporting", () => {
     expect(sessionOf(store)!.history.map((item) => item.message.id)).toEqual(
       idsAfterLoad,
     );
-    expect(sessionOf(store)!.historyRevision).toBe(0);
+    expect(sessionOf(store)!.conversationRevision).toBe(0);
     expect(sessionOf(store)!.dirty).toBe(false);
   });
 
   it("reports loadMore and changes nothing else", async () => {
     const store = runtimeStore({
-      contextMetrics: {
-        didPrune: false,
-        contextPercentage: 0.5,
+      fullConversationMetrics: {
         inputTokens: 1,
         contextLength: 2,
+        availableTokens: 1,
+        contextPercentage: 0.5,
+        exceedsContext: false,
       },
-      contextMetricsMeta: {
-        modelIdentity: "",
-        historyRevision: 0,
+      fullConversationMetricsMeta: {
+        constructionIdentity: "",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
     });
-    const metrics = sessionOf(store)!.contextMetrics;
+    const metrics = sessionOf(store)!.fullConversationMetrics;
     store.mockIdeMessenger.responses["history/loadPage"] = {
       items: [diskItem("user", "older-1"), diskItem("assistant", "older-2")],
       hasMore: false,
@@ -299,25 +300,30 @@ describe("message-id fallback reporting", () => {
     );
     // Diagnostics only: the fallback itself neither frees nor invalidates the
     // metrics snapshot, and never makes the session look user-modified.
-    expect(session.contextMetrics).toBe(metrics);
+    expect(session.fullConversationMetrics).toBe(metrics);
     expect(session.dirty).toBe(false);
   });
 
   it("differs from a no-fallback load only by the minted ids", async () => {
     const METRICS = {
-      didPrune: false,
-      contextPercentage: 0.33,
       inputTokens: 7,
       contextLength: 21,
+      availableTokens: 14,
+      contextPercentage: 0.33,
+      exceedsContext: false,
     };
-    const META = { modelIdentity: "", historyRevision: 0, schemaVersion: 1 };
+    const META = {
+      constructionIdentity: "",
+      conversationRevision: 0,
+      schemaVersion: 1,
+    };
 
     // Two identical loads; the only difference is whether the disk page carried
     // ids. Everything else a fallback could plausibly disturb must match.
     async function loadMore(items: ChatHistoryItem[]) {
       const store = runtimeStore({
-        contextMetrics: METRICS,
-        contextMetricsMeta: META,
+        fullConversationMetrics: METRICS,
+        fullConversationMetricsMeta: META,
       });
       store.mockIdeMessenger.responses["history/loadPage"] = {
         items,
@@ -326,7 +332,7 @@ describe("message-id fallback reporting", () => {
         session: { title: "Chat 1", workspaceDirectory: "", mode: "chat" },
       };
       const before = sessionOf(store)!;
-      const metricsBefore = before.contextMetrics;
+      const metricsBefore = before.fullConversationMetrics;
       const persistenceBefore = before.persistence;
       await run(store, loadMoreHistory({ sessionId: "s1" }));
       const after = sessionOf(store)!;
@@ -342,18 +348,18 @@ describe("message-id fallback reporting", () => {
       diskItem("assistant", "older-2", "o2"),
     ]);
 
-    // `prependSessionHistory` bumps `historyRevision` by design; the point is
+    // `prependSessionHistory` bumps `conversationRevision` by design; the point is
     // that minting adds nothing on top of it.
-    expect(minted.after.historyRevision).toBe(
-      alreadyIdentified.after.historyRevision,
+    expect(minted.after.conversationRevision).toBe(
+      alreadyIdentified.after.conversationRevision,
     );
     expect(minted.after.dirty).toBe(alreadyIdentified.after.dirty);
     expect(minted.after.dirty).toBe(false);
     expect(minted.after.persistence).toBe(alreadyIdentified.after.persistence);
     expect(minted.after.persistence).toBe(minted.persistenceBefore);
     // The snapshot is neither freed nor replaced.
-    expect(minted.after.contextMetrics).toBe(minted.metricsBefore);
-    expect(minted.after.contextMetricsMeta).toBe(META);
+    expect(minted.after.fullConversationMetrics).toBe(minted.metricsBefore);
+    expect(minted.after.fullConversationMetricsMeta).toBe(META);
     // The request-relevant content is identical; only the ids differ.
     expect(minted.after.history.map((item) => item.message.content)).toEqual(
       alreadyIdentified.after.history.map((item) => item.message.content),

@@ -960,6 +960,7 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     store.dispatch(
       setSessionHistory({
         sessionId: "s1",
+        origin: "hydration",
         history: [
           item("u1", "user", "hi"),
           merged("a1", "re-shaped", [...M1_MEMBERS]),
@@ -990,6 +991,7 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     store.dispatch(
       setSessionHistory({
         sessionId: "s1",
+        origin: "hydration",
         history: [
           item("u1", "user", "hi"),
           merged("a1", "body", ["t0", "a1", "a2"]),
@@ -1021,6 +1023,7 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     store.dispatch(
       setSessionHistory({
         sessionId: "s1",
+        origin: "hydration",
         history: [
           item("u1", "user", "hi"),
           merged("a9", "another bubble", ["a9", "a10"]),

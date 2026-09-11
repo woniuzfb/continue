@@ -22,14 +22,15 @@ import { SessionScope } from "./TipTapEditor/SessionScope";
  */
 
 const METRICS_SNAPSHOT = {
-  didPrune: false,
-  contextPercentage: 0.42,
   inputTokens: 1_234,
   contextLength: 100_000,
+  availableTokens: 98_766,
+  contextPercentage: 0.42,
+  exceedsContext: false,
 };
 const METRICS_META = {
-  modelIdentity: "",
-  historyRevision: 0,
+  constructionIdentity: "",
+  conversationRevision: 0,
   schemaVersion: 1,
 };
 
@@ -47,8 +48,8 @@ function makeStore(
   const sessionsById: Record<string, SessionRuntimeState> = {};
   for (const [id, override] of Object.entries(overrides)) {
     sessionsById[id] = initialSessionRuntime(id, id, {
-      contextMetrics: METRICS_SNAPSHOT,
-      contextMetricsMeta: METRICS_META,
+      fullConversationMetrics: METRICS_SNAPSHOT,
+      fullConversationMetricsMeta: METRICS_META,
       ...override,
     });
   }
@@ -239,15 +240,15 @@ describe("MessageIdMigrationErrorBanner", () => {
     });
     const request = vi.spyOn(store.mockIdeMessenger, "request");
     const before = (store.getState() as any).sessions.sessionsById.s1;
-    const metrics = before.contextMetrics;
-    const meta = before.contextMetricsMeta;
+    const metrics = before.fullConversationMetrics;
+    const meta = before.fullConversationMetricsMeta;
 
     const { unmount } = renderFor(store, "s1");
     unmount();
 
     const after = (store.getState() as any).sessions.sessionsById.s1;
-    expect(after.contextMetrics).toBe(metrics);
-    expect(after.contextMetricsMeta).toBe(meta);
+    expect(after.fullConversationMetrics).toBe(metrics);
+    expect(after.fullConversationMetricsMeta).toBe(meta);
     expect(after.dirty).toBe(false);
     expect(after.contextPercentage).toBeUndefined();
     const types = request.mock.calls.map((call) => call[0]);

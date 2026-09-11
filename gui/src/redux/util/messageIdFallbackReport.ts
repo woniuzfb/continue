@@ -10,8 +10,8 @@ import type { MessageIdMigrationCapability } from "../slices/runtimeCapabilities
  *
  * Hence a plain module-level reporter instead of store state:
  *   · it never touches the session runtime, so it cannot mark a session dirty,
- *     advance `historyRevision`, move `persistence.revision` or invalidate
- *     `contextMetrics`;
+ *     advance `conversationRevision`, move `persistence.revision` or invalidate
+ *     `fullConversationMetrics`;
  *   · tests swap it for a capture function and assert on the reports;
  *   · nothing here is a telemetry endpoint (P5 decides the event schema).
  */

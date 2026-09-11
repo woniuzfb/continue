@@ -13,9 +13,13 @@ import {
 import type { SessionPersistenceErrorCode } from "core/util/sessionPersistenceError";
 import { type InlineErrorMessageType } from "../../components/mainInput/InlineErrorMessage";
 import { type AttachedFile } from "../../components/mainInput/types";
+import type {
+  FullConversationMetricsMeta,
+  FullConversationMetricsResult,
+  FullConversationMetricsSnapshot,
+} from "../util/fullConversationMetrics";
 import {
   ChatHistoryItemWithMessageId,
-  ContextMetricsSnapshot,
   SavedMergedProvenance,
   applyStreamUpdatesToHistory,
   mergeSplitReplies,
@@ -114,16 +118,6 @@ export type SessionStreamState = {
   hasConversationMutation?: boolean;
 };
 
-/**
- * Identity of a context-metrics snapshot (方案.md §五.16). A snapshot may only
- * be reused when the model, the history revision and the schema all match.
- */
-export type ContextMetricsMeta = {
-  modelIdentity: string;
-  historyRevision: number;
-  schemaVersion: number;
-};
-
 /** Persistence defaults shared by the reducers below (方案.md §七.1). */
 function initialPersistenceState(): SessionPersistenceState {
   return {
@@ -138,8 +132,9 @@ function initialPersistenceState(): SessionPersistenceState {
  * Per-session state of the legacy message-ID migration (P4a, 方案.md §九.13).
  *
  * Runtime-only: this describes a maintenance side effect on the **disk** file,
- * never the conversation. Writing it must not touch `dirty`, `historyRevision`,
- * `persistence.revision`, `history` or `contextMetrics` — a migration changes
+ * never the conversation. Writing it must not touch `dirty`, `conversationRevision`,
+ * `persistence.revision`, `history` or `fullConversationMetrics` — a migration
+ * changes
  * nothing about the request history, so it must not invalidate the metrics
  * snapshot or make the session look modified.
  *
@@ -176,7 +171,7 @@ export type SessionRuntimeState = {
 
   history: ChatHistoryItemWithMessageId[];
   /** Bumped by every request-relevant mutation; gates metrics recomputation. */
-  historyRevision: number;
+  conversationRevision: number;
   firstTurnItems: ChatHistoryItemWithMessageId[];
   latestConversationSummary?: {
     sourceMessageId: string;
@@ -202,12 +197,24 @@ export type SessionRuntimeState = {
   };
   newestToolbarPreviewForInput: Record<string, string>;
 
+  /**
+   * 完整逻辑会话指标 + 快照身份（方案.md §五.16.5）。runtime-only，独立于
+   * Local Provider 的缩减发送载荷；trim / prepend / bubble merge / 保存状态
+   * 变化都不得改变它们。
+   */
+  fullConversationMetrics?: FullConversationMetricsSnapshot;
+  fullConversationMetricsMeta?: FullConversationMetricsMeta;
+
+  /**
+   * 过渡兼容投影（方案.md §五.16.5）：迁移期间由 reducer 从
+   * `fullConversationMetrics` 同步写入，供尚未迁移的组件（ContextStatus /
+   * ResponseActions）继续读取。Stage 2E 之后组件只读 `fullConversationMetrics`，
+   * 这几个零散字段随之删除。
+   */
   isPruned?: boolean;
   contextPercentage?: number;
   contextInputTokens?: number;
   contextLength?: number;
-  contextMetrics?: ContextMetricsSnapshot;
-  contextMetricsMeta?: ContextMetricsMeta;
 
   inlineErrorMessage?: InlineErrorMessageType;
   compactionLoading: Record<string, boolean>;
@@ -269,7 +276,7 @@ export function initialSessionRuntime(
     id: sessionId,
     title,
     history: [],
-    historyRevision: 0,
+    conversationRevision: 0,
     firstTurnItems: [],
     mode: "chat",
     symbols: {},
@@ -342,22 +349,13 @@ function findItemByMessageId(
   return session.history.find((item) => item.message.id === messageId);
 }
 
-function invalidateContextMetrics(session: SessionRuntimeState): void {
-  session.isPruned = false;
-  session.contextPercentage = undefined;
-  session.contextInputTokens = undefined;
-  session.contextLength = undefined;
-  session.contextMetrics = undefined;
-  session.contextMetricsMeta = undefined;
-}
-
 /**
  * Every mutation that changes the request history (messages, context items,
  * applied rules, summary, mode) marks the session dirty and advances
- * `historyRevision`, which is what the metrics recompute gate compares.
+ * `conversationRevision`, which is what the metrics recompute gate compares.
  */
 /**
- * Every request-relevant content mutation bumps `historyRevision` (metrics
+ * Every request-relevant content mutation bumps `conversationRevision` (metrics
  * staleness) *and* `persistence.revision` (save staleness, 方案.md §七.3/§七.6).
  *
  * The persistence counter used to move only on submit/title, so a save that
@@ -403,7 +401,7 @@ function markPersistenceChanged(session: SessionRuntimeState): void {
 
 function markHistoryChanged(session: SessionRuntimeState): void {
   markPersistenceChanged(session);
-  session.historyRevision += 1;
+  session.conversationRevision += 1;
 }
 
 /**
@@ -412,19 +410,18 @@ function markHistoryChanged(session: SessionRuntimeState): void {
  * the conversation moved on, and a consumer decides freshness by comparing the
  * identity (missing identity = stale, recompute when the gate allows).
  */
-function markContextMetricsStale(session: SessionRuntimeState): void {
-  session.contextMetricsMeta = undefined;
+function markFullConversationMetricsStale(session: SessionRuntimeState): void {
+  session.fullConversationMetricsMeta = undefined;
 }
 
 /**
- * Terminal commit (方案.md §五.16.4; transitional name until the
- * conversationRevision rename). The assistant turn is now final, so the
- * conversation revision advances exactly once — the individual chunks and the
+ * Terminal commit (方案.md §五.16.4): the assistant turn is final, so
+ * `conversationRevision` advances exactly once — the individual chunks and the
  * tool writes inside the turn only advanced the persistence revision.
  */
 function markConversationCommitted(session: SessionRuntimeState): void {
-  session.historyRevision += 1;
-  markContextMetricsStale(session);
+  session.conversationRevision += 1;
+  markFullConversationMetricsStale(session);
 }
 
 /**
@@ -597,27 +594,32 @@ export const sessionsSlice = createSlice({
 
     // ── History / Message identity ────────────────────────────────────────
     /**
-     * Whole-array replacement with **two different meanings** (方案.md §七.3):
+     * Whole-array replacement with **two different meanings** (方案.md §七.3),
+     * which the caller must now state explicitly:
      *
-     * - hydration (loadFullHistory / disk merge): must NOT mark the session
-     *   dirty, because the content already matches disk;
-     * - user content change (submit / retry): the caller must immediately
-     *   `markSessionDirty`, which is what advances `persistence.revision`.
-     *
-     * Only `historyRevision` is bumped here, so a caller that forgets
-     * `markSessionDirty` produces a change the save queue cannot see.
+     * - `origin: "hydration"` (loadFullHistory / disk merge): the window is
+     *   replaced by the authoritative disk content of the *same* logical
+     *   conversation, so it must NOT mark the session dirty and must NOT advance
+     *   the content revision (方案.md §五.16.1: hydration / paging must not);
+     * - `origin: "content"` (submit / retry): the caller must immediately
+     *   `markSessionDirty` (persistence.revision), and this write is a new
+     *   content version.
      */
     setSessionHistory: (
       state,
       action: PayloadAction<{
         sessionId: string;
         history: ChatHistoryItemWithMessageId[];
+        origin: "hydration" | "content";
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.history = action.payload.history;
-        session.historyRevision += 1;
+        if (action.payload.origin === "content") {
+          session.conversationRevision += 1;
+          markFullConversationMetricsStale(session);
+        }
       }
     },
     setContextItemsByMessageId: (
@@ -688,7 +690,7 @@ export const sessionsSlice = createSlice({
         }
         // Content changed, so the snapshot is no longer fresh — but its value is
         // still the last-known one and stays displayed (方案.md §五.16).
-        markContextMetricsStale(session);
+        markFullConversationMetricsStale(session);
       } else {
         // promptLogs / reasoning / editorState bookkeeping: must be saved, but
         // must NOT invalidate the context metrics — otherwise the ring drops to
@@ -760,7 +762,9 @@ export const sessionsSlice = createSlice({
       }
       session.history.splice(start, end - start);
       markHistoryChanged(session);
-      invalidateContextMetrics(session);
+      // 方案.md §五.16: the snapshot's VALUE is the last-known one and stays
+      // visible; only its freshness identity is dropped.
+      markFullConversationMetricsStale(session);
       session.pendingApprovalCount = countAwaitingApprovalToolCalls(
         session.history,
       );
@@ -794,7 +798,9 @@ export const sessionsSlice = createSlice({
       });
       session.inlineErrorMessage = undefined;
       markHistoryChanged(session);
-      invalidateContextMetrics(session);
+      // 方案.md §五.16: the snapshot's VALUE is the last-known one and stays
+      // visible; only its freshness identity is dropped.
+      markFullConversationMetricsStale(session);
       session.pendingApprovalCount = 0;
     },
 
@@ -805,9 +811,8 @@ export const sessionsSlice = createSlice({
      * history they just read. It only feeds the Local Provider's reduced send
      * payload — the full-conversation metrics are built from the full history —
      * and every change of its source (history edit, compact, delete, hydration)
-     * advances the conversation revision by itself. Echoing the same items back
-     * must therefore not advance it again (方案.md §五.16.1: hydration / prepend
-     * / paging must not increment).
+     * advances the conversation revision by itself. Hydration / save echo must
+     * therefore never advance it (方案.md §五.16.1 / 已知限制 #64).
      */
     setSessionFirstTurn: (
       state,
@@ -818,18 +823,11 @@ export const sessionsSlice = createSlice({
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
-        const { firstTurnItems } = action.payload;
-        const unchanged =
-          session.firstTurnItems.length === firstTurnItems.length &&
-          session.firstTurnItems.every(
-            (item, index) =>
-              item.message.id === firstTurnItems[index]?.message.id,
-          );
-        // The response stays authoritative even when nothing moved.
-        session.firstTurnItems = firstTurnItems;
-        if (!unchanged) {
-          session.historyRevision += 1;
-        }
+        // 方案.md §五.16.1: 首轮是磁盘头部的派生缓存，只服务 Local Provider 的
+        // 缩减发送载荷；完整会话 metrics 以完整 history 构造，因此 hydration /
+        // 保存回灌都**不拥有**内容版本（真正的内容变化由 edit/delete/compact
+        // 等 action 自己推进）。响应仍是权威值，直接写入。
+        session.firstTurnItems = action.payload.firstTurnItems;
       }
     },
     setSessionConversationSummary: (
@@ -861,7 +859,7 @@ export const sessionsSlice = createSlice({
         return;
       }
       session.latestConversationSummary = summary;
-      session.historyRevision += 1;
+      session.conversationRevision += 1;
     },
     clearSessionConversationSummary: (
       state,
@@ -873,7 +871,7 @@ export const sessionsSlice = createSlice({
       // advance the content revision (方案.md §五.16.1).
       if (session && session.latestConversationSummary !== undefined) {
         session.latestConversationSummary = undefined;
-        session.historyRevision += 1;
+        session.conversationRevision += 1;
       }
     },
 
@@ -1065,8 +1063,9 @@ export const sessionsSlice = createSlice({
       session.pagination.totalCount = totalCount;
       session.pagination.truncated = hasMore;
       session.pagination.loading = false;
-      // Prepending older history changes the request history.
-      session.historyRevision += 1;
+      // 方案.md §五.16.1: prepending older history changes the WINDOW, not the
+      // logical conversation (the metrics measure the full history), so it must
+      // not advance the content revision.
     },
     setSessionHistoryLoading: (
       state,
@@ -1103,10 +1102,10 @@ export const sessionsSlice = createSlice({
         retainedDiskItemCount,
       } = action.payload;
       if (keepCount < session.history.length) {
+        // 方案.md §五.16.1: trim 改变的是窗口，不是完整逻辑会话内容。
         session.history = session.history.slice(
           session.history.length - keepCount,
         );
-        session.historyRevision += 1;
       }
       const pagination = session.pagination;
       pagination.truncated = removedDiskItems > 0;
@@ -1141,7 +1140,7 @@ export const sessionsSlice = createSlice({
      * which is always the safe direction (the fallback is an explicit abort, never
      * a wrong write).
      *
-     * Pure: never marks dirty, never advances `historyRevision` or
+     * Pure: never marks dirty, never advances `conversationRevision` or
      * `persistence.revision`, and leaves the `history` array reference untouched
      * when no fingerprint matches.
      */
@@ -1297,8 +1296,8 @@ export const sessionsSlice = createSlice({
      * P4a: record the legacy message-ID migration state for one session.
      *
      * This reducer touches exactly one field. It must never mark the session
-     * dirty, advance `historyRevision`, move `persistence.revision` or clear
-     * `contextMetrics` / `contextMetricsMeta`: the migration rewrites
+     * dirty, advance `conversationRevision`, move `persistence.revision` or clear
+     * `fullConversationMetrics` / `fullConversationMetricsMeta`: the migration rewrites
      * `message.id` on disk only — content, order, roles, first turn, summary and
      * the request history are unchanged, so the metrics snapshot is still
      * valid and its circle must neither flash nor recompute.
@@ -1353,7 +1352,7 @@ export const sessionsSlice = createSlice({
      * two fields are only the reducer-readable mirror, so a config change must
      * never leave a hidden session on a stale value.
      *
-     * Pure runtime write: no dirty, no `historyRevision` /
+     * Pure runtime write: no dirty, no `conversationRevision` /
      * `persistence.revision` bump, no save, no IPC, no runtime creation, and no
      * change to `activeSessionId` / descriptors.
      */
@@ -1559,7 +1558,8 @@ export const sessionsSlice = createSlice({
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.mode = action.payload.mode;
-        session.historyRevision += 1;
+        // 方案.md §五.16.1/§五.16.2: mode 只改变 constructionIdentity（由门禁
+        // 比较后触发重算），不是新的内容版本。
         const descriptor = state.tabDescriptors[action.payload.sessionId];
         if (descriptor) {
           descriptor.mode = action.payload.mode;
@@ -1652,26 +1652,39 @@ export const sessionsSlice = createSlice({
         session.inlineErrorMessage = action.payload.error;
       }
     },
-    setSessionContextMetrics: (
+    /**
+     * Accepts an already-validated full-conversation metrics result
+     * (方案.md §五.16.5). The thunk owns the expensive validation (complete
+     * identity: revision + construction identity + schema); the reducer repeats
+     * the cheap one — the snapshot may only describe the conversation revision
+     * the session is on right now, otherwise the freshness identity would claim
+     * more than it can prove.
+     *
+     * The legacy per-field projections are written here as well, so the
+     * not-yet-migrated UI keeps working while it reads them (Stage 2E moves the
+     * consumers to `fullConversationMetrics`).
+     */
+    setSessionFullConversationMetrics: (
       state,
       action: PayloadAction<{
         sessionId: string;
-        metrics?: ContextMetricsSnapshot;
-        meta?: ContextMetricsMeta;
+        result: FullConversationMetricsResult;
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (!session) {
         return;
       }
-      session.contextMetrics = action.payload.metrics;
-      session.contextMetricsMeta = action.payload.metrics
-        ? action.payload.meta
-        : undefined;
-      session.isPruned = action.payload.metrics?.didPrune;
-      session.contextPercentage = action.payload.metrics?.contextPercentage;
-      session.contextInputTokens = action.payload.metrics?.inputTokens;
-      session.contextLength = action.payload.metrics?.contextLength;
+      const { result } = action.payload;
+      if (result.meta.conversationRevision !== session.conversationRevision) {
+        return;
+      }
+      session.fullConversationMetrics = result.metrics;
+      session.fullConversationMetricsMeta = result.meta;
+      session.isPruned = result.metrics.exceedsContext;
+      session.contextPercentage = result.metrics.contextPercentage;
+      session.contextInputTokens = result.metrics.inputTokens;
+      session.contextLength = result.metrics.contextLength;
     },
     setSessionScrollState: (
       state,
@@ -1750,7 +1763,7 @@ export const {
   setSessionNewestToolbarPreviewForInput,
   setSessionSymbols,
   setSessionInlineError,
-  setSessionContextMetrics,
+  setSessionFullConversationMetrics,
   setSessionScrollState,
 } = sessionsSlice.actions;
 

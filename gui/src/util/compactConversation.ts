@@ -210,8 +210,8 @@ export const useCompactConversation = () => {
             }),
           );
         }
-        // 清除 stale 的 contextMetrics（compact 改变了上下文结构）
-        // updateHistoryItemByMessageId reducer 已自动清除 contextMetrics
+        // 清除 stale 的 fullConversationMetrics（compact 改变了上下文结构）
+        // updateHistoryItemByMessageId reducer 已自动清除它
         void dispatch(
           enqueueSessionSave({
             sessionId: sessionId,

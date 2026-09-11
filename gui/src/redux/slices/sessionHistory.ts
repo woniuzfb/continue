@@ -229,13 +229,6 @@ export type ChatHistoryItemWithMessageId = ChatHistoryItem & {
  * context 指标快照（用于持久化到 session 文件 / LRU 缓存）。
  * 不含 compiledChatMessages，避免 session 文件体积膨胀和重复持久化文件内容。
  */
-export type ContextMetricsSnapshot = {
-  didPrune: boolean;
-  contextPercentage: number;
-  inputTokens?: number;
-  contextLength?: number;
-};
-
 /**
  * 正在进行的流式请求的 AbortController 注册表。
  * 切换会话不再 abort 旧流的 controller（旧流转入后台继续跑）；

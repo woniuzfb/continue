@@ -5,6 +5,7 @@ import { EMPTY_CONFIG } from "../slices/configSlice";
 import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
+import { sessionConstructionIdentity } from "./sessionMetrics";
 import { buildRequestHistoryForSession } from "../util/requestHistory";
 import { getSessionPage } from "./session";
 import {
@@ -219,11 +220,12 @@ describe("loadSessionRuntime", () => {
         title: "Chat 1",
         mode: "chat",
         workspaceDirectory: "ws",
+        // 方案.md §五.16.5: 磁盘字段仍是 legacy didPrune 形状，由适配器映射。
         contextMetrics: {
           didPrune: false,
-          contextPercentage: 0.25,
           inputTokens: 25,
           contextLength: 100,
+          contextPercentage: 0.25,
         },
       },
     } as any;
@@ -233,7 +235,7 @@ describe("loadSessionRuntime", () => {
     await run(store, loadSessionRuntime({ sessionId: "s1" }));
 
     const session = selectSessionById(store.getState() as any, "s1")!;
-    expect(session.contextMetrics?.contextPercentage).toBe(0.25);
+    expect(session.fullConversationMetrics?.contextPercentage).toBe(0.25);
     expect(request).not.toHaveBeenCalledWith(
       "llm/compileChat",
       expect.anything(),
@@ -250,7 +252,12 @@ describe("loadSessionRuntime", () => {
     });
     await vi.waitFor(() => {
       const after = selectSessionById(store.getState() as any, "s1")!;
-      expect(after.contextMetricsMeta?.modelIdentity).toBe("model-a");
+      // 方案.md §五.16.2: model identity is an input of the construction
+      // identity, not a field of its own. The stored identity must be the one
+      // computed from this session's own resolved inputs.
+      expect(sessionConstructionIdentity(store.getState() as any, "s1")).toBe(
+        after.fullConversationMetricsMeta?.constructionIdentity,
+      );
     });
   });
 
@@ -319,7 +326,7 @@ describe("activateSessionTab", () => {
           s1: { sessionId: "s1", title: "One", loadState: "loaded" },
         },
         sessionsById: {
-          // No contextMetrics snapshot: the gate must recompile on activation.
+          // No fullConversationMetrics snapshot: the gate must recompile on activation.
           s1: initialSessionRuntime("s1", "One", {
             history: [item("u1", "user", "hi")],
           }),
@@ -642,10 +649,11 @@ describe("activateSessionTab does not save", () => {
     const store = twoTabStore();
     // The activation pipeline may recompute context metrics; that is not a save.
     store.mockIdeMessenger.responses["llm/compileChat"] = {
-      didPrune: false,
-      contextPercentage: 0,
       inputTokens: 1,
       contextLength: 100,
+      availableTokens: 99,
+      contextPercentage: 0,
+      exceedsContext: false,
     } as any;
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 

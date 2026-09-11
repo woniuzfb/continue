@@ -4,7 +4,7 @@ import { useCompactConversation } from "../../util/compactConversation";
 import { carrierMessageIdOf } from "../../redux/util/historyTarget";
 import { ToolTip } from "../gui/Tooltip";
 import {
-  useSessionContextMetricsFields,
+  useSessionFullConversationMetricsFields,
   useSessionHistory,
 } from "../../redux/selectors/sessionView";
 import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
@@ -20,7 +20,8 @@ function formatTokens(tokens: number): string {
 
 const ContextStatus = () => {
   const dispatch = useAppDispatch();
-  const { contextPercentage, isPruned } = useSessionContextMetricsFields();
+  const { contextPercentage, isPruned } =
+    useSessionFullConversationMetricsFields();
   const selectedChatModel = useAppSelector(
     (state) => state.config.config.selectedModelByRole.chat?.model,
   );
@@ -30,7 +31,7 @@ const ContextStatus = () => {
   const percent = Math.round((contextPercentage ?? 0) * 100);
 
   const { contextInputTokens, contextLength } =
-    useSessionContextMetricsFields();
+    useSessionFullConversationMetricsFields();
 
   const isDifferentModelAndSameHistory = useMemo(() => {
     if (!selectedChatModel) return false;

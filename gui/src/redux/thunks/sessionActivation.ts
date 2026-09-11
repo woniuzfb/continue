@@ -1,6 +1,7 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { NEW_SESSION_TITLE } from "core/util/constants";
 import { v4 as uuidv4 } from "uuid";
+import { fullConversationMetricsFromLegacyDisk } from "../util/fullConversationMetrics";
 import { selectSessionById, selectTabDescriptor } from "../selectors/sessions";
 import { setActiveSessionModelProjection } from "../slices/configSlice";
 import {
@@ -26,8 +27,8 @@ import { extractFirstTurnItems } from "core/util/firstTurn";
 import { latestSummaryOf } from "../slices/sessionHistory";
 import type { ChatHistoryItem } from "core";
 import {
-  compileSessionChatForContextMetrics,
-  needsContextMetricsRecompute,
+  compileFullConversationForMetrics,
+  needsFullConversationMetricsRecompute,
 } from "./sessionMetrics";
 import { getSession, getSessionPage } from "./session";
 import { hasUnresumableTurn } from "./sessionInterruption";
@@ -158,7 +159,11 @@ export const loadSessionRuntime = createAsyncThunk<
         // a full load derives it from the complete history (same rule as Core).
         latestConversationSummary:
           pageLatestSummary ?? latestSummaryOf(history),
-        contextMetrics: session.contextMetrics,
+        // 方案.md §五.16.5: 磁盘仍是 legacy didPrune 形状（Result 持久化属 Stage
+        // 2D），恢复出的数值没有构造身份 ⇒ 一律 stale，首次门禁检查会重算。
+        fullConversationMetrics: fullConversationMetricsFromLegacyDisk(
+          session.contextMetrics,
+        ),
         ...mergeSettings(getState()),
         pagination: {
           truncated: hasMore,
@@ -230,7 +235,7 @@ export const completeSessionActivation = createAsyncThunk<
     // 方案.md §五.16: a missing or stale metrics snapshot is recomputed on
     // activation. The thunk owns the gate (model identity + history revision +
     // schema version), so an already valid loaded tab never recompiles.
-    void dispatch(ensureSessionContextMetrics({ sessionId }));
+    void dispatch(ensureFullConversationMetrics({ sessionId }));
   },
 );
 
@@ -350,7 +355,7 @@ export const closeSessionTab = createAsyncThunk<
   }
 });
 
-export const ensureSessionContextMetrics = createAsyncThunk<
+export const ensureFullConversationMetrics = createAsyncThunk<
   void,
   { sessionId: string },
   ThunkApiType
@@ -360,9 +365,9 @@ export const ensureSessionContextMetrics = createAsyncThunk<
     // Recompute only when the stored snapshot cannot be trusted for this
     // session (方案.md §五.16 重算门禁): missing, different model, different
     // history revision or incompatible schema. Switching tabs must not compile.
-    if (!needsContextMetricsRecompute(getState(), sessionId)) {
+    if (!needsFullConversationMetricsRecompute(getState(), sessionId)) {
       return;
     }
-    await dispatch(compileSessionChatForContextMetrics({ sessionId }));
+    await dispatch(compileFullConversationForMetrics({ sessionId }));
   },
 );

@@ -17,10 +17,16 @@ import {
   selectSessionToolCalls,
 } from "../selectors/sessionToolCalls";
 import {
+  buildFullConversationConstructionInputs,
   buildSessionCompletionOptions,
   resolveNativeTooling,
   resolveSessionActiveTools,
 } from "../util/sessionRequestOptions";
+import {
+  FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+  fullConversationConstructionIdentity,
+  fullConversationMetricsFromCompileResult,
+} from "../util/fullConversationMetrics";
 import {
   selectSessionById,
   selectSessionChatModel,
@@ -33,7 +39,7 @@ import {
   commitSessionConversationTurn,
   pauseSessionStream,
   setSessionFirstTurn,
-  setSessionContextMetrics,
+  setSessionFullConversationMetrics,
   setSessionInlineError,
   setSessionStreamError,
   updateHistoryItemByMessageId,
@@ -61,7 +67,6 @@ import {
 import { generateSessionTitle } from "./sessionTitle";
 import { loadFullHistory } from "./sessionPaging";
 import { isLocalConversationModel } from "core/llm/localConversation";
-import { CONTEXT_METRICS_SCHEMA_VERSION } from "./sessionMetrics";
 import {
   approveToolCalls,
   continueToolLoop,
@@ -639,17 +644,32 @@ async function streamModelTurn(
   } = precompiledRes.content;
 
   if (!requestUsesReducedHistory) {
+    // Same construction-identity helper as the compile path (方案.md §五.16.2),
+    // built from the values this request actually resolved.
+    const constructionInputs = buildFullConversationConstructionInputs({
+      state: getState(),
+      session,
+      model: selectedChatModel,
+      activeTools,
+      completionOptions,
+      systemMessage,
+    });
+    const current = selectSessionById(getState(), sessionId);
     dispatch(
-      setSessionContextMetrics({
+      setSessionFullConversationMetrics({
         sessionId,
-        metrics: { didPrune, contextPercentage, inputTokens, contextLength },
-        // Identity of this snapshot (方案.md §五.16): the gate only recompiles
-        // when the model, the history revision or the schema moved on.
-        meta: {
-          modelIdentity: selectedChatModel.title,
-          historyRevision:
-            selectSessionById(getState(), sessionId)?.historyRevision ?? 0,
-          schemaVersion: CONTEXT_METRICS_SCHEMA_VERSION,
+        result: {
+          metrics: fullConversationMetricsFromCompileResult(
+            precompiledRes.content,
+          ),
+          // Identity of this snapshot (方案.md §五.16.5): the gate only
+          // recompiles when the complete identity moved on.
+          meta: {
+            conversationRevision: current?.conversationRevision ?? 0,
+            constructionIdentity:
+              fullConversationConstructionIdentity(constructionInputs),
+            schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+          },
         },
       }),
     );

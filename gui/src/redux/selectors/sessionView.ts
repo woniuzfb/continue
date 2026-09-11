@@ -104,8 +104,8 @@ export const selectActiveContextInputTokens = (state: RootState) =>
 export const selectActiveContextLength = (state: RootState) =>
   activeRuntime(state)?.contextLength;
 
-export const selectActiveContextMetrics = (state: RootState) =>
-  activeRuntime(state)?.contextMetrics;
+export const selectActiveFullConversationMetrics = (state: RootState) =>
+  activeRuntime(state)?.fullConversationMetrics;
 
 export const selectActiveHasReasoningEnabled = (state: RootState) =>
   activeRuntime(state)?.hasReasoningEnabled;
@@ -261,7 +261,7 @@ export function useSessionInlineErrorMessage() {
   );
 }
 
-export function useSessionContextMetricsFields() {
+export function useSessionFullConversationMetricsFields() {
   const sessionId = useSessionId();
   return useAppSelector((state) => {
     const session = activeRuntimeOf(state, sessionId);
@@ -270,7 +270,8 @@ export function useSessionContextMetricsFields() {
       contextPercentage: session?.contextPercentage,
       contextInputTokens: session?.contextInputTokens,
       contextLength: session?.contextLength,
-      contextMetrics: session?.contextMetrics,
+      // 过渡投影：组件仍读零散字段（Stage 2E 改读 fullConversationMetrics）。
+      fullConversationMetrics: session?.fullConversationMetrics,
     };
   });
 }

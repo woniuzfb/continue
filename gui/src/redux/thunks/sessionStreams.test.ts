@@ -14,6 +14,7 @@ import {
   stopSessionStream,
 } from "./sessionStreams";
 import { resetSessionStreamRunner } from "./sessionTools";
+import { needsFullConversationMetricsRecompute } from "./sessionMetrics";
 
 const CHAT_MODEL = {
   title: "gpt-4o",
@@ -53,8 +54,8 @@ type StoreOptions = {
   loadedOffset?: number;
   firstTurnItems?: ChatHistoryItemWithMessageId[];
   persistence?: any;
-  contextMetrics?: any;
-  contextMetricsMeta?: any;
+  fullConversationMetrics?: any;
+  fullConversationMetricsMeta?: any;
   history?: ChatHistoryItemWithMessageId[];
 };
 
@@ -70,8 +71,8 @@ function makeStore(options: StoreOptions = {}) {
     loadedOffset = 0,
     firstTurnItems,
     persistence,
-    contextMetrics,
-    contextMetricsMeta,
+    fullConversationMetrics,
+    fullConversationMetricsMeta,
     history = [user("u1")],
   } = options;
 
@@ -82,8 +83,8 @@ function makeStore(options: StoreOptions = {}) {
     stream: stream as any,
     ...(firstTurnItems ? { firstTurnItems } : {}),
     ...(persistence ? { persistence } : {}),
-    ...(contextMetrics ? { contextMetrics } : {}),
-    ...(contextMetricsMeta ? { contextMetricsMeta } : {}),
+    ...(fullConversationMetrics ? { fullConversationMetrics } : {}),
+    ...(fullConversationMetricsMeta ? { fullConversationMetricsMeta } : {}),
     pagination: {
       truncated,
       loadedOffset,
@@ -175,8 +176,8 @@ describe("sessionStreams", () => {
     expect(target.stream).toEqual({ status: "idle" });
     // Terminal commit: the reply is final, so the snapshot is stale — its
     // freshness identity is cleared while the last-known value stays visible.
-    expect(target.contextMetricsMeta).toBeUndefined();
-    expect(target.contextMetrics).toBeDefined();
+    expect(target.fullConversationMetricsMeta).toBeUndefined();
+    expect(target.fullConversationMetrics).toBeDefined();
     expect(request).toHaveBeenCalledWith("llm/compileChat", expect.anything());
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(
@@ -199,10 +200,11 @@ describe("sessionStreams", () => {
       underlyingProviderName: "continue-local",
     } as ModelDescription;
     const sentinel = {
-      didPrune: false,
-      contextPercentage: 0.99,
       inputTokens: 199149,
       contextLength: 200000,
+      availableTokens: 851,
+      contextPercentage: 0.99,
+      exceedsContext: false,
     };
     const store = makeStore({
       models: [localModel],
@@ -216,10 +218,10 @@ describe("sessionStreams", () => {
         persistedRevision: 0,
         hasPersistedBaseline: true,
       },
-      contextMetrics: sentinel,
-      contextMetricsMeta: {
-        modelIdentity: "local",
-        historyRevision: 0,
+      fullConversationMetrics: sentinel,
+      fullConversationMetricsMeta: {
+        constructionIdentity: "local",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
     });
@@ -228,7 +230,7 @@ describe("sessionStreams", () => {
 
     // The reduced request did not overwrite the full-conversation snapshot,
     // and no bookkeeping update invalidated it either.
-    expect(session(store).contextMetrics).toEqual(sentinel);
+    expect(session(store).fullConversationMetrics).toEqual(sentinel);
   });
 
   it("does not overwrite the metrics when a non-truncated Local Provider still reduces", async () => {
@@ -242,10 +244,11 @@ describe("sessionStreams", () => {
       underlyingProviderName: "continue-local",
     } as ModelDescription;
     const sentinel = {
-      didPrune: false,
-      contextPercentage: 0.99,
       inputTokens: 199149,
       contextLength: 200000,
+      availableTokens: 851,
+      contextPercentage: 0.99,
+      exceedsContext: false,
     };
     const store = makeStore({
       models: [localModel],
@@ -263,10 +266,10 @@ describe("sessionStreams", () => {
         persistedRevision: 0,
         hasPersistedBaseline: true,
       },
-      contextMetrics: sentinel,
-      contextMetricsMeta: {
-        modelIdentity: "local",
-        historyRevision: 0,
+      fullConversationMetrics: sentinel,
+      fullConversationMetricsMeta: {
+        constructionIdentity: "local",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
     });
@@ -284,7 +287,7 @@ describe("sessionStreams", () => {
     expect(sent).toContain("current current");
     expect(sent).not.toContain("middle middle");
     // ...so it must not have overwritten the full-conversation snapshot.
-    expect(session(store).contextMetrics).toEqual(sentinel);
+    expect(session(store).fullConversationMetrics).toEqual(sentinel);
   });
 
   it("protects every message of a Local Provider request from pruning", async () => {
@@ -338,13 +341,19 @@ describe("sessionStreams", () => {
 
   it("reports out-of-context as an inline error and stops the stream", async () => {
     const meta = {
-      modelIdentity: "gpt-4o",
-      historyRevision: 0,
+      constructionIdentity: "gpt-4o",
+      conversationRevision: 0,
       schemaVersion: 1,
     };
     const store = makeStore({
-      contextMetrics: { didPrune: false, contextPercentage: 0.4 },
-      contextMetricsMeta: meta,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.4,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: meta,
     });
     store.mockIdeMessenger.request = vi.fn(async (type: string) => {
       if (type === "llm/compileChat") {
@@ -352,7 +361,7 @@ describe("sessionStreams", () => {
       }
       return { status: "success", content: undefined, done: true };
     }) as any;
-    const revisionBefore = session(store).historyRevision;
+    const revisionBefore = session(store).conversationRevision;
 
     await run(store, runSessionStream({ sessionId: "s1" }));
 
@@ -362,42 +371,48 @@ describe("sessionStreams", () => {
     // 方案.md §五.16.4 step 2: the model never wrote anything, so the terminal
     // must not advance the conversation revision nor drop the freshness
     // identity the user's submit had produced.
-    expect(target.historyRevision).toBe(revisionBefore);
-    expect(target.contextMetricsMeta).toBe(meta);
+    expect(target.conversationRevision).toBe(revisionBefore);
+    expect(target.fullConversationMetricsMeta).toBe(meta);
   });
 
   it("marks the stream failed when no model is selected", async () => {
     const meta = {
-      modelIdentity: "gpt-4o",
-      historyRevision: 0,
+      constructionIdentity: "gpt-4o",
+      conversationRevision: 0,
       schemaVersion: 1,
     };
     const store = makeStore({
       chatModelTitle: undefined,
       models: [],
-      contextMetricsMeta: meta,
+      fullConversationMetricsMeta: meta,
     });
-    const revisionBefore = session(store).historyRevision;
+    const revisionBefore = session(store).conversationRevision;
 
     await run(store, runSessionStream({ sessionId: "s1" }));
 
     expect(session(store).stream.status).toBe("failed");
     expect(session(store).stream.error).toBe("No chat model selected");
-    expect(session(store).historyRevision).toBe(revisionBefore);
-    expect(session(store).contextMetricsMeta).toBe(meta);
+    expect(session(store).conversationRevision).toBe(revisionBefore);
+    expect(session(store).fullConversationMetricsMeta).toBe(meta);
   });
 
   it("does not commit a turn that was stopped before its first token", async () => {
     const meta = {
-      modelIdentity: "gpt-4o",
-      historyRevision: 0,
+      constructionIdentity: "gpt-4o",
+      conversationRevision: 0,
       schemaVersion: 1,
     };
     const store = makeStore({
-      contextMetrics: { didPrune: false, contextPercentage: 0.4 },
-      contextMetricsMeta: meta,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.4,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: meta,
     });
-    const revisionBefore = session(store).historyRevision;
+    const revisionBefore = session(store).conversationRevision;
     // The user hits Stop while the request is still waiting for the first chunk.
     store.mockIdeMessenger.llmStreamChat = async function* () {
       session(store).stream.aborter!.abort();
@@ -407,23 +422,32 @@ describe("sessionStreams", () => {
 
     const target = session(store);
     expect(target.stream.status).toBe("failed");
-    expect(target.historyRevision).toBe(revisionBefore);
-    // The send path's own accepted compile is a fresh but equal snapshot (same
-    // model, same revision, same schema), so the turn is still measured — only
-    // identity of the object differs, which is not what freshness means.
-    expect(target.contextMetricsMeta).toEqual(meta);
+    expect(target.conversationRevision).toBe(revisionBefore);
+    // The send path's own accepted compile is a fresh snapshot for this turn
+    // (same model, same revision, same schema): a turn that wrote nothing must
+    // leave it reusable, even though the meta object is a new one.
+    expect(target.fullConversationMetricsMeta).toBeDefined();
+    expect(
+      needsFullConversationMetricsRecompute(store.getState() as any, "s1"),
+    ).toBe(false);
   });
 
   it("commits a turn that streamed partial output before it was stopped", async () => {
     const store = makeStore({
-      contextMetrics: { didPrune: false, contextPercentage: 0.4 },
-      contextMetricsMeta: {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.4,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: {
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
     });
-    const revisionBefore = session(store).historyRevision;
+    const revisionBefore = session(store).conversationRevision;
     store.mockIdeMessenger.llmStreamChat = async function* () {
       yield [textChunk("partial")];
       session(store).stream.aborter!.abort();
@@ -436,22 +460,28 @@ describe("sessionStreams", () => {
     expect(target.history.at(-1).message.content).toBe("partial");
     // Preserved partial output is a completed logical turn: exactly one revision
     // for the whole stream, whatever the number of chunks was.
-    expect(target.historyRevision).toBe(revisionBefore + 1);
-    expect(target.contextMetricsMeta).toBeUndefined();
-    expect(target.contextMetrics).toBeDefined();
+    expect(target.conversationRevision).toBe(revisionBefore + 1);
+    expect(target.fullConversationMetricsMeta).toBeUndefined();
+    expect(target.fullConversationMetrics).toBeDefined();
   });
 
   it("commits a tool-call turn exactly once, at its continuation's terminal", async () => {
     const store = makeStore({
       toolPolicies: { run_terminal_cmd: "allowedWithoutPermission" },
-      contextMetrics: { didPrune: false, contextPercentage: 0.4 },
-      contextMetricsMeta: {
-        modelIdentity: "gpt-4o",
-        historyRevision: 0,
+      fullConversationMetrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.4,
+        exceedsContext: false,
+      },
+      fullConversationMetricsMeta: {
+        constructionIdentity: "gpt-4o",
+        conversationRevision: 0,
         schemaVersion: 1,
       },
     });
-    const revisionBeforeTurn = session(store).historyRevision;
+    const revisionBeforeTurn = session(store).conversationRevision;
     let turn = 0;
     let revisionBeforeTerminal = -1;
     store.mockIdeMessenger.llmStreamChat = async function* () {
@@ -462,7 +492,7 @@ describe("sessionStreams", () => {
       }
       // The continuation fails before writing a token: everything this logical
       // turn produced was written by the *previous* request (tool call + result).
-      revisionBeforeTerminal = session(store).historyRevision;
+      revisionBeforeTerminal = session(store).conversationRevision;
       throw new Error("provider failed before the first token");
     } as any;
 
@@ -474,9 +504,9 @@ describe("sessionStreams", () => {
     const target = session(store);
     // The whole logical turn — tool call, tool result and the failed
     // continuation — is exactly one conversation version.
-    expect(target.historyRevision).toBe(revisionBeforeTurn + 1);
+    expect(target.conversationRevision).toBe(revisionBeforeTurn + 1);
     expect(revisionBeforeTerminal).toBe(revisionBeforeTurn);
-    expect(target.contextMetricsMeta).toBeUndefined();
+    expect(target.fullConversationMetricsMeta).toBeUndefined();
   });
 
   it("keeps the request live while a tool call awaits approval", async () => {

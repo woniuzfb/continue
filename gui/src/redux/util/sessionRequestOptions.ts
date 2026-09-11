@@ -3,7 +3,12 @@ import { modelSupportsNativeTools } from "core/llm/toolSupport";
 import { SystemMessageToolCodeblocksFramework } from "core/tools/systemMessageTools/toolCodeblocks";
 import { applyToolOverrides } from "core/tools/applyToolOverrides";
 import { selectSessionActiveTools } from "../selectors/sessionToolCalls";
+import type { SessionRuntimeState } from "../slices/sessionsSlice";
 import type { RootState } from "../store";
+import {
+  CONVERSATION_SUMMARY_SEMANTICS_VERSION,
+  type FullConversationConstructionInputs,
+} from "./fullConversationMetrics";
 
 /**
  * 方案.md §五.16 / §十三: the context-metrics compile and the real send must
@@ -98,4 +103,46 @@ function buildReasoningCompletionOptions(
       model.completionOptions?.reasoningBudgetTokens ?? 2048;
   }
   return reasoningOptions;
+}
+
+/**
+ * 完整会话构造身份的全部输入（方案.md §五.16.2），由**已经解析好的**请求输入组装 ——
+ * 调用方（发送路径与计量路径）本来就必须解析同一批值，这里只做投影，不重新解析、
+ * 不读 active session。
+ *
+ * `systemMessage` 是渲染后的 system message（base system + 生效规则 + system-tools 框架），
+ * 因此它已经覆盖 §五.16.2 的 `effectiveRules` / `systemMessage inputs`；这里仍把原始
+ * 规则与规则设置一并带入，避免"渲染结果相同但输入不同"被误判为同一身份。
+ */
+export function buildFullConversationConstructionInputs({
+  state,
+  session,
+  model,
+  activeTools,
+  completionOptions,
+  systemMessage,
+}: {
+  state: RootState;
+  session: SessionRuntimeState;
+  model: ModelDescription;
+  activeTools: Tool[];
+  completionOptions: LLMFullCompletionOptions;
+  systemMessage: string;
+}): FullConversationConstructionInputs {
+  return {
+    modelIdentity: model.title,
+    mode: session.mode,
+    reasoningEnabled: session.hasReasoningEnabled,
+    effectiveRules: state.config.config.rules ?? [],
+    ruleSettings: state.ui.ruleSettings,
+    effectiveTools: activeTools,
+    systemMessageInputs: systemMessage,
+    completionOptionsInputsAffectingMeasurement: {
+      // LLMFullCompletionOptions.model 可选；缺失时就是这次请求解析出的模型。
+      model: completionOptions.model ?? model.model,
+      maxTokens: completionOptions.maxTokens,
+      contextLength: model.contextLength,
+    },
+    conversationSummarySemanticsVersion: CONVERSATION_SUMMARY_SEMANTICS_VERSION,
+  };
 }

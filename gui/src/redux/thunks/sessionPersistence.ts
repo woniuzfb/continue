@@ -1,5 +1,6 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { Session } from "core";
+import { legacyDiskContextMetricsFromFullConversation } from "../util/fullConversationMetrics";
 import { selectSessionById } from "../selectors/sessions";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
 import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
@@ -115,7 +116,11 @@ function buildSessionPayload(
     // 懒加载合并保存：把分页标记传给后端，save 时保留未加载的头部。
     historyTruncated: session.pagination.truncated,
     historyLoadedOffset: session.pagination.loadedOffset,
-    contextMetrics: session.contextMetrics,
+    // 过渡：磁盘字段名与形状在 Stage 2A 保持不变（Core 侧零改动）；
+    // Core 锁内计量 + Result 持久化属 Stage 2D。
+    contextMetrics: legacyDiskContextMetricsFromFullConversation(
+      session.fullConversationMetrics,
+    ),
     // 方案.md §七.8: the reasoning preference is per-session state and must
     // round-trip through history/save, otherwise a reload silently reverts to
     // the derived default.
@@ -207,7 +212,7 @@ async function performSave(
   ) {
     // P4b-2: the same fallback report as the load paths. The dispatch below is
     // unchanged — only the reporting helper variant is new, so nothing about
-    // dirty / historyRevision / persistence moves because of the report.
+    // dirty / conversationRevision / persistence moves because of the report.
     const firstTurnReport = ensureMessageIdsWithReport(
       result.content.firstTurnItems,
     );

@@ -5,72 +5,155 @@ import {
   selectSessionChatModel,
 } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
-import { setSessionContextMetrics } from "../slices/sessionsSlice";
+import { setSessionFullConversationMetrics } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { constructMessages } from "../util/constructMessages";
 import { isLocalConversationModel } from "core/llm/localConversation";
 import { getBaseSystemMessage } from "../util/getBaseSystemMessage";
+export { FULL_CONVERSATION_METRICS_SCHEMA_VERSION };
 import {
+  FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+  fullConversationConstructionIdentity,
+  fullConversationMetricsFromCompileResult,
+  type FullConversationMetricsMeta,
+} from "../util/fullConversationMetrics";
+import {
+  buildFullConversationConstructionInputs,
   buildSessionCompletionOptions,
   resolveNativeTooling,
   resolveSessionActiveTools,
 } from "../util/sessionRequestOptions";
+import type { SessionRuntimeState } from "../slices/sessionsSlice";
+import type { RootState } from "../store";
 
 /**
- * Phase 1 session-scoped context metrics (方案.md §五.16).
+ * Session-scoped full-conversation metrics (方案.md §五.16).
  *
  * The legacy `compileChatForContextMetrics` can only measure the visible
  * session and always recompiles. This module owns the recompute gate: a
- * snapshot is reused only while its model identity, history revision and schema
- * version all still match, so switching tabs never triggers `llm/compileChat`.
+ * snapshot is reused only while its **complete identity** — conversation
+ * revision, construction identity and schema version — still matches, so
+ * switching tabs never triggers `llm/compileChat`.
  */
 
-/** Bump when the snapshot shape or its meaning changes. */
-export const CONTEXT_METRICS_SCHEMA_VERSION = 1;
+function resolveConstructionInputs(
+  state: RootState,
+  session: SessionRuntimeState,
+  model: NonNullable<ReturnType<typeof selectSessionChatModel>>,
+) {
+  const activeTools = resolveSessionActiveTools(state, session.id, model);
+  const { useNativeTools, systemToolsFramework } = resolveNativeTooling(
+    state,
+    model,
+    activeTools,
+  );
+  const completionOptions = buildSessionCompletionOptions({
+    activeTools,
+    useNativeTools,
+    hasReasoningEnabled: session.hasReasoningEnabled,
+    model,
+  });
+  const baseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
+    ? ""
+    : getBaseSystemMessage(session.mode, model, activeTools);
+  const systemMessage = systemToolsFramework
+    ? addSystemMessageToolsToSystemMessage(
+        systemToolsFramework,
+        baseSystemMessage,
+        activeTools,
+      )
+    : baseSystemMessage;
+  return buildFullConversationConstructionInputs({
+    state,
+    session,
+    model,
+    activeTools,
+    completionOptions,
+    systemMessage,
+  });
+}
 
-/** Model the snapshot was taken with; empty when the session inherits one. */
-export function sessionModelIdentity(
-  state: Parameters<typeof selectSessionChatModel>[0],
+/**
+ * The current construction identity (方案.md §五.16.2), computed from the same
+ * resolved inputs the real compile uses, so the identity describes that prompt.
+ * Returns `undefined` when the session is not loaded or has no model.
+ */
+export function sessionConstructionIdentity(
+  state: RootState,
   sessionId: string,
-): string {
-  return selectSessionChatModel(state, sessionId)?.title ?? "";
+): string | undefined {
+  const session = selectSessionById(state, sessionId);
+  const model = selectSessionChatModel(state, sessionId);
+  if (!session || !model) {
+    return undefined;
+  }
+  return fullConversationConstructionIdentity(
+    resolveConstructionInputs(state, session, model),
+  );
 }
 
 /**
  * True when the stored snapshot can no longer be trusted for this session
- * (方案.md §五.16 重算门禁): missing snapshot/meta, incompatible schema,
- * different model, or a history change since the snapshot.
+ * (方案.md §五.16.5): missing snapshot/meta, incompatible schema, an identity
+ * that no longer matches the current construction environment, or a new
+ * conversation revision. Comparing the whole identity is what makes the model
+ * identity an input of it instead of a separate gate field.
  */
-export function needsContextMetricsRecompute(
-  state: Parameters<typeof selectSessionById>[0],
+export function needsFullConversationMetricsRecompute(
+  state: RootState,
   sessionId: string,
 ): boolean {
   const session = selectSessionById(state, sessionId);
   if (!session) {
     return false;
   }
-  if (!session.contextMetrics) {
+  if (!session.fullConversationMetrics) {
     return true;
   }
-  const meta = session.contextMetricsMeta;
+  const meta = session.fullConversationMetricsMeta;
   if (!meta) {
     return true;
   }
-  if (meta.schemaVersion !== CONTEXT_METRICS_SCHEMA_VERSION) {
+  if (meta.schemaVersion !== FULL_CONVERSATION_METRICS_SCHEMA_VERSION) {
     return true;
   }
-  if (meta.modelIdentity !== sessionModelIdentity(state, sessionId)) {
+  if (meta.conversationRevision !== session.conversationRevision) {
     return true;
   }
-  return meta.historyRevision !== session.historyRevision;
+  const currentIdentity = sessionConstructionIdentity(state, sessionId);
+  if (currentIdentity === undefined) {
+    // No resolvable construction environment (no chat model): we cannot prove
+    // the identity moved, and a measurement is impossible in that state anyway
+    // (the compile thunk returns early), so the last-known snapshot stays
+    // reusable — the same outcome as the previous `modelIdentity === ""`
+    // comparison. `unavailable` is a Stage 2E freshness state, not this gate.
+    return false;
+  }
+  return meta.constructionIdentity !== currentIdentity;
+}
+
+/** The identity a snapshot would carry if it were taken right now. */
+export function currentFullConversationMetricsMeta(
+  state: RootState,
+  sessionId: string,
+): FullConversationMetricsMeta | undefined {
+  const session = selectSessionById(state, sessionId);
+  if (!session) {
+    return undefined;
+  }
+  return {
+    conversationRevision: session.conversationRevision,
+    constructionIdentity: sessionConstructionIdentity(state, sessionId) ?? "",
+    schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+  };
 }
 
 /**
- * Recompute one session's context metrics and store the snapshot plus its
- * identity. Lazy-loaded sessions read the full history from disk for the
+ * Recompute one session's full-conversation metrics and store the snapshot plus
+ * its identity. Lazy-loaded sessions read the full history from disk for the
  * compile only — the window state is left untouched (方案.md §五.12).
  */
-export const compileSessionChatForContextMetrics = createAsyncThunk<
+export const compileFullConversationForMetrics = createAsyncThunk<
   void,
   { sessionId: string },
   ThunkApiType
@@ -86,9 +169,13 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
     if (!selectedChatModel) {
       return;
     }
-    // Capture the revision of the input we are about to measure. A stale async
-    // result must never be labelled with a newer revision (方案.md §五.16).
-    const metricsHistoryRevision = session.historyRevision;
+    // Capture the identity of the input we are about to measure (方案.md
+    // §五.16.5): a stale async result must never be labelled with a newer
+    // revision or a newer construction environment.
+    const requestedMeta = currentFullConversationMetricsMeta(state, sessionId);
+    if (!requestedMeta) {
+      return;
+    }
 
     // 方案.md §五.16: metrics describe the COMPLETE logical conversation. Do NOT
     // reuse the send-path request builder — for a Local Provider it returns the
@@ -103,7 +190,7 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
         });
         if (result.status === "error") {
           console.warn(
-            "compileSessionChatForContextMetrics: history/load failed",
+            "compileFullConversationForMetrics: history/load failed",
             result.error,
           );
           return;
@@ -112,7 +199,7 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
           .history as ChatHistoryItemWithMessageId[];
       } catch (e) {
         console.warn(
-          "compileSessionChatForContextMetrics: history/load failed",
+          "compileFullConversationForMetrics: history/load failed",
           e,
         );
         return;
@@ -173,29 +260,37 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
     });
     if (precompiledRes.status === "error") {
       console.warn(
-        "compileSessionChatForContextMetrics failed:",
+        "compileFullConversationForMetrics failed:",
         precompiledRes.error,
       );
       return;
     }
 
-    const { didPrune, contextPercentage, inputTokens, contextLength } =
-      precompiledRes.content;
-
-    // Reject a result whose input has been superseded while compiling: writing
-    // the CURRENT revision onto the older result would make it look fresh.
-    const current = selectSessionById(getState(), sessionId);
-    if (!current || current.historyRevision !== metricsHistoryRevision) {
+    // Reject a result whose input was superseded while compiling: the complete
+    // identity (revision + construction environment + schema) must still match,
+    // otherwise the snapshot would claim a freshness it cannot prove.
+    const currentMeta = currentFullConversationMetricsMeta(
+      getState(),
+      sessionId,
+    );
+    if (
+      !currentMeta ||
+      currentMeta.conversationRevision !== requestedMeta.conversationRevision ||
+      currentMeta.constructionIdentity !== requestedMeta.constructionIdentity ||
+      // Compared explicitly even though both sides use the same module constant
+      // today: the contract is "the complete identity", not "two of three".
+      currentMeta.schemaVersion !== requestedMeta.schemaVersion
+    ) {
       return;
     }
     dispatch(
-      setSessionContextMetrics({
+      setSessionFullConversationMetrics({
         sessionId,
-        metrics: { didPrune, contextPercentage, inputTokens, contextLength },
-        meta: {
-          modelIdentity: sessionModelIdentity(getState(), sessionId),
-          historyRevision: metricsHistoryRevision,
-          schemaVersion: CONTEXT_METRICS_SCHEMA_VERSION,
+        result: {
+          metrics: fullConversationMetricsFromCompileResult(
+            precompiledRes.content,
+          ),
+          meta: currentMeta,
         },
       }),
     );
