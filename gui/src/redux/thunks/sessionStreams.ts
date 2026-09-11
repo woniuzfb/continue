@@ -17,16 +17,10 @@ import {
   selectSessionToolCalls,
 } from "../selectors/sessionToolCalls";
 import {
-  buildFullConversationConstructionInputs,
   buildSessionCompletionOptions,
   resolveNativeTooling,
   resolveSessionActiveTools,
 } from "../util/sessionRequestOptions";
-import {
-  FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
-  fullConversationConstructionIdentity,
-} from "core/util/fullConversationMetrics";
-import { fullConversationMetricsFromCompileResult } from "../util/fullConversationMetrics";
 import {
   selectSessionById,
   selectSessionChatModel,
@@ -39,7 +33,6 @@ import {
   commitSessionConversationTurn,
   pauseSessionStream,
   setSessionFirstTurn,
-  setSessionFullConversationMetrics,
   setSessionInlineError,
   setSessionStreamError,
   updateHistoryItemByMessageId,
@@ -643,38 +636,9 @@ async function streamModelTurn(
     contextLength,
   } = precompiledRes.content;
 
-  if (!requestUsesReducedHistory) {
-    // Same construction-identity helper as the compile path (方案.md §五.16.2),
-    // built from the values this request actually resolved.
-    const constructionInputs = buildFullConversationConstructionInputs({
-      state: getState(),
-      session,
-      model: selectedChatModel,
-      activeTools,
-      completionOptions,
-      systemMessage,
-    });
-    const current = selectSessionById(getState(), sessionId);
-    dispatch(
-      setSessionFullConversationMetrics({
-        sessionId,
-        result: {
-          metrics: fullConversationMetricsFromCompileResult(
-            precompiledRes.content,
-          ),
-          // Identity of this snapshot (方案.md §五.16.5): the gate only
-          // recompiles when the complete identity moved on.
-          meta: {
-            conversationRevision: current?.conversationRevision ?? 0,
-            constructionIdentity:
-              fullConversationConstructionIdentity(constructionInputs),
-            schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
-          },
-        },
-      }),
-    );
-  }
-
+  // 指标不再由发送路径的 compile 结果写入（方案.md §五.16.4）：完整会话指标的权威来源
+  // 是 `history/save` 锁内计量（terminal 后立即保存并回传 Result）与只读的
+  // `history/measureConversation`。这里的 compile 结果只服务发送决策。
   try {
     let gen = ideMessenger.llmStreamChat(
       {

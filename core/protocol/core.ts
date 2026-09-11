@@ -118,6 +118,22 @@ export type SaveHistoryRequest = Session & {
 };
 
 /**
+ * 方案.md §五.16.5/§九.7.1：**只读**的完整会话计量重算。
+ *
+ * 用途：构造身份（model / mode / reasoning / rules / tools / system / completion
+ * options / summary 语义 / 计量输入）变化但内容没有变化时，不必为了刷新指标而保存一次。
+ * Core 读**磁盘上的完整 history**（不是 GUI 窗口），用请求里显式给出的构造与计量输入
+ * 计量，**不修改磁盘**。
+ *
+ * 与 `history/save` 的计量共用同一套实现（`measureFullConversation`）与同一份契约，
+ * 因此两条路径不会漂移。
+ */
+export interface MeasureConversationRequest {
+  sessionId: string;
+  measurement: FullConversationMeasurementRequest;
+}
+
+/**
  * 方案.md §七.8.1: `history/save` returns the authoritative post-merge data.
  * GUI 只在 success 后更新，绝不从 truncated window 重算。
  */
@@ -230,6 +246,10 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   "history/loadPage": [LoadPageHistoryRequest, LoadPageHistoryResponse];
   "history/searchContent": [{ query: string }, HistorySearchResult[]];
   "history/save": [SaveHistoryRequest, SaveHistoryResponse];
+  "history/measureConversation": [
+    MeasureConversationRequest,
+    FullConversationMetricsResult,
+  ];
   "history/migrateIds": [MigrateMessageIdsRequest, MigrateMessageIdsResponse];
   "history/share": [{ id: string; outputDir?: string }, void];
   "history/clear": [undefined, void];

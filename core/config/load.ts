@@ -618,6 +618,11 @@ function llmToSerializedModelDescription(llm: ILLM): ModelDescription {
     promptTemplates: serializePromptTemplates(llm.promptTemplates),
     capabilities: llm.capabilities,
     roles: llm.roles,
+    // 计量输入（方案.md §7.1.3 C.3）：GUI 只有拿到这两个值才能把它们纳入
+    // constructionIdentity —— 它们改变 token 计数却不改变任何消息内容。
+    excludeToolOutputsFromTokenCount: llm.excludeToolOutputsFromTokenCount,
+    excludeToolOutputsFromTokenCountMinTokens:
+      llm.excludeToolOutputsFromTokenCountMinTokens,
     configurationStatus: llm.getConfigurationStatus(),
     apiKeyLocation: llm.apiKeyLocation,
     envSecretLocations: llm.envSecretLocations,

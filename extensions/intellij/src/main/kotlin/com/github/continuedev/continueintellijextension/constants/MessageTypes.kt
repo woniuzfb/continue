@@ -82,6 +82,7 @@ class MessageTypes {
             // dropped here (no response at all), so a host that does not list
             // it must NOT advertise the capability.
             "history/migrateIds",
+            "history/measureConversation",
             "history/loadRemote",
             "history/clear",
             "devdata/log",

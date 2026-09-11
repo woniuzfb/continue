@@ -27,7 +27,7 @@ import { extractFirstTurnItems } from "core/util/firstTurn";
 import { latestSummaryOf } from "../slices/sessionHistory";
 import type { ChatHistoryItem } from "core";
 import {
-  compileFullConversationForMetrics,
+  measureFullConversationForMetrics,
   needsFullConversationMetricsRecompute,
 } from "./sessionMetrics";
 import { getSession, getSessionPage } from "./session";
@@ -369,6 +369,6 @@ export const ensureFullConversationMetrics = createAsyncThunk<
     if (!needsFullConversationMetricsRecompute(getState(), sessionId)) {
       return;
     }
-    await dispatch(compileFullConversationForMetrics({ sessionId }));
+    await dispatch(measureFullConversationForMetrics({ sessionId }));
   },
 );

@@ -809,6 +809,13 @@ export interface LLMOptions {
   capabilities?: ModelCapability;
   roles?: ModelRole[];
 
+  /**
+   * 方案.md §7.1.3（C.3）：只影响 token 计量的模型配置，必须一起进入
+   * `constructionIdentity`，否则同一份会话在开关切换后会显示旧值。
+   */
+  excludeToolOutputsFromTokenCount?: boolean;
+  excludeToolOutputsFromTokenCountMinTokens?: number;
+
   useLegacyCompletionsEndpoint?: boolean;
   useResponsesApi?: boolean;
 

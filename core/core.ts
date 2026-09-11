@@ -14,6 +14,7 @@ import { DataLogger } from "./data/log";
 import { CodebaseIndexer } from "./indexing/CodebaseIndexer";
 import DocsService from "./indexing/docs/DocsService";
 import { countTokens } from "./llm/countTokens";
+import type { ChatMessage, LLMFullCompletionOptions } from "./index.js";
 import Lemonade from "./llm/llms/Lemonade";
 import { fetchModels } from "./llm/fetchModels";
 import Ollama from "./llm/llms/Ollama";
@@ -26,7 +27,7 @@ import { searchSessionContent } from "./util/historySearch";
 import { GlobalContext } from "./util/GlobalContext";
 import historyManager from "./util/history";
 import {
-  measureFullConversationForSave,
+  measureFullConversation,
   measurementSchemaMatches,
 } from "./util/fullConversationMeasurement.js";
 import { FULL_CONVERSATION_METRICS_SCHEMA_VERSION } from "./util/fullConversationMetrics.js";
@@ -333,6 +334,21 @@ export class Core {
       return searchSessionContent(msg.data.query);
     });
 
+    /**
+     * 方案.md §五.16.7：按 title 显式解析聊天模型，供保存锁内计量与只读计量共用。
+     *
+     * 刻意不回退 `selectedModelByRole.chat`（那是 profile 级全局选择，可能属于另一个 tab，
+     * §七.10 的同一条教训）。匹配用 `title ?? model`，因为
+     * `llmToSerializedModelDescription` 就是那么投影的，而 `ILLM.title` 可选。
+     */
+    const resolveMeasurementModel = async (modelTitle: string) => {
+      const { config } = await this.configHandler.loadConfig();
+      const targetModel = config?.modelsByRole.chat.find(
+        (model) => (model.title ?? model.model) === modelTitle,
+      );
+      return targetModel;
+    };
+
     on("history/save", async (msg) => {
       // 异步保存；错误向上传播（gui 侧 await request("history/save")）。
       const { fullConversationMeasurement: measurement } = msg.data;
@@ -345,16 +361,9 @@ export class Core {
       // 方案.md §五.16.7 / §7.1.2: 计量输入里 GUI 不可见的那部分（tokenizer 键、解析后的
       // 窗口、图片能力、tool-output 排除规则）来自**按标题显式解析**的模型。
       //
-      // 刻意不回退 `selectedModelByRole.chat`：那是 profile 级全局选择，可能属于另一个
-      // tab（§七.10 的同一条教训）。匹配用 `title ?? model`，因为
-      // `llmToSerializedModelDescription` 就是这么投影的，而 `ILLM.title` 可选。
-      //
       // 解析失败 / schema 不一致都**不阻断保存**：保存是数据完整性路径，计量只是派生值。
       // 此时不写 metrics、不回传 Result，GUI 保留 last-known 数值并等待下一次计量。
-      const { config } = await this.configHandler.loadConfig();
-      const targetModel = config?.modelsByRole.chat.find(
-        (model) => (model.title ?? model.model) === measurement.modelTitle,
-      );
+      const targetModel = await resolveMeasurementModel(measurement.modelTitle);
       if (!targetModel) {
         console.warn(
           `[history/save] full-conversation measurement skipped: model not found for title "${measurement.modelTitle}"`,
@@ -370,12 +379,46 @@ export class Core {
 
       return historyManager.save(msg.data, {
         measureFullConversation: (finalHistory) =>
-          measureFullConversationForSave({
+          measureFullConversation({
             history: finalHistory,
             request: measurement,
-            measure: (messages, options) =>
-              targetModel.measureChatMessagesNoPrune(messages, options),
+            measure: (
+              messages: ChatMessage[],
+              options: LLMFullCompletionOptions,
+            ) => targetModel.measureChatMessagesNoPrune(messages, options),
           }),
+      });
+    });
+
+    /**
+     * 方案.md §五.16.5/§九.7.1：**只读**计量重算。读磁盘上的完整 history（不是 GUI 窗口），
+     * 用请求里显式的构造与计量输入计量，返回 Result，**不修改磁盘**。
+     *
+     * 与保存路径的差别只在失败语义：这里是纯粹的计量请求，没有"必须成功"的数据完整性职责，
+     * 所以模型解析失败 / schema 不一致一律抛出 —— GUI 会保留 last-known 数值并保持 stale，
+     * 而不是拿到一个用错输入算出来的"新鲜"值。
+     */
+    on("history/measureConversation", async (msg) => {
+      const { sessionId, measurement } = msg.data;
+
+      if (!measurementSchemaMatches(measurement)) {
+        throw new Error(
+          `history/measureConversation: unsupported measurement schema ${measurement.schemaVersion}`,
+        );
+      }
+      const targetModel = await resolveMeasurementModel(measurement.modelTitle);
+      if (!targetModel) {
+        throw new Error(
+          `history/measureConversation: model not found for title "${measurement.modelTitle}"`,
+        );
+      }
+
+      const session = historyManager.load(sessionId);
+      return measureFullConversation({
+        history: session.history,
+        request: measurement,
+        measure: (messages: ChatMessage[], options: LLMFullCompletionOptions) =>
+          targetModel.measureChatMessagesNoPrune(messages, options),
       });
     });
 

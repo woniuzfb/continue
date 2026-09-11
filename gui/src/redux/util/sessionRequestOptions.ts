@@ -1,5 +1,10 @@
 import { LLMFullCompletionOptions, ModelDescription, Tool } from "core";
 import { modelSupportsNativeTools } from "core/llm/toolSupport";
+import { modelSupportsImages } from "core/llm/autodetect";
+import { DEFAULT_MAX_TOKENS } from "core/llm/constants";
+import { measurementInputsAffectingTokens } from "core/llm/countTokens";
+import { addSystemMessageToolsToSystemMessage } from "core/tools/systemMessageTools/buildToolsSystemMessage";
+import { getBaseSystemMessage } from "./getBaseSystemMessage";
 import { SystemMessageToolCodeblocksFramework } from "core/tools/systemMessageTools/toolCodeblocks";
 import { applyToolOverrides } from "core/tools/applyToolOverrides";
 import { selectSessionActiveTools } from "../selectors/sessionToolCalls";
@@ -8,6 +13,7 @@ import type { RootState } from "../store";
 import {
   CONVERSATION_SUMMARY_SEMANTICS_VERSION,
   type FullConversationConstructionInputs,
+  type FullConversationMeasurementRequest,
 } from "core/util/fullConversationMetrics";
 
 /**
@@ -129,6 +135,8 @@ export function buildFullConversationConstructionInputs({
   completionOptions: LLMFullCompletionOptions;
   systemMessage: string;
 }): FullConversationConstructionInputs {
+  const modelName = completionOptions.model ?? model.model;
+  const maxTokens = completionOptions.maxTokens ?? DEFAULT_MAX_TOKENS;
   return {
     modelIdentity: model.title,
     mode: session.mode,
@@ -139,10 +147,100 @@ export function buildFullConversationConstructionInputs({
     systemMessageInputs: systemMessage,
     completionOptionsInputsAffectingMeasurement: {
       // LLMFullCompletionOptions.model 可选；缺失时就是这次请求解析出的模型。
-      model: completionOptions.model ?? model.model,
+      model: modelName,
       maxTokens: completionOptions.maxTokens,
       contextLength: model.contextLength,
     },
+    // 方案.md §7.1.3 (C.3)：只影响 token 计数、不影响消息内容的输入。用 Core 的
+    // 同一份投影（`measurementInputsAffectingTokens`），因此派生量（输出预留、
+    // 计数安全缓冲）的口径变化也会改变身份 —— 不会出现「公式变了、快照还 fresh」。
+    measurementInputs: measurementInputsAffectingTokens({
+      modelName,
+      knownContextLength: model.contextLength,
+      maxTokens,
+      supportsImages: modelSupportsImages(
+        model.provider,
+        model.model,
+        model.title,
+        model.capabilities,
+      ),
+      tools: activeTools,
+      excludeToolOutputsFromTokenCount: model.excludeToolOutputsFromTokenCount,
+      excludeToolOutputsFromTokenCountMinTokens:
+        model.excludeToolOutputsFromTokenCountMinTokens,
+    }),
     conversationSummarySemanticsVersion: CONVERSATION_SUMMARY_SEMANTICS_VERSION,
+  };
+}
+
+/**
+ * 一条会话的**计量输入**：既用于组装 `history/save` / `history/measureConversation`
+ * 的请求，也用于算同一份 `constructionIdentity`。
+ *
+ * 两者必须来自**同一次解析**，否则请求描述的环境与身份描述的环境可能不是一个东西
+ * （那正是「看起来 fresh 的错值」的来源）。
+ */
+export type SessionMeasurementInputs = {
+  request: Omit<
+    FullConversationMeasurementRequest,
+    "conversationRevision" | "constructionIdentity" | "schemaVersion"
+  >;
+  identityInputs: FullConversationConstructionInputs;
+};
+
+export function resolveSessionMeasurementInputs({
+  state,
+  session,
+  model,
+}: {
+  state: RootState;
+  session: SessionRuntimeState;
+  model: ModelDescription;
+}): SessionMeasurementInputs {
+  const activeTools = resolveSessionActiveTools(state, session.id, model);
+  const { useNativeTools, systemToolsFramework } = resolveNativeTooling(
+    state,
+    model,
+    activeTools,
+  );
+  const completionOptions = buildSessionCompletionOptions({
+    activeTools,
+    useNativeTools,
+    hasReasoningEnabled: session.hasReasoningEnabled,
+    model,
+  });
+  const baseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
+    ? ""
+    : getBaseSystemMessage(session.mode, model, activeTools);
+  const systemMessage = systemToolsFramework
+    ? addSystemMessageToolsToSystemMessage(
+        systemToolsFramework,
+        baseSystemMessage,
+        activeTools,
+      )
+    : baseSystemMessage;
+
+  return {
+    request: {
+      modelTitle: model.title,
+      mode: session.mode,
+      systemMessage,
+      rules: state.config.config.rules ?? [],
+      ruleSettings: state.ui.ruleSettings,
+      tools: activeTools,
+      reasoning: session.hasReasoningEnabled,
+      completionOptions,
+      // 注意：**不传** conversationSummaryOverride —— 计量对象是完整逻辑会话，
+      // 摘要 carrier 本来就在完整 history 里；override 只服务 Local Provider 的
+      // 缩减发送载荷（§十三.0）。
+    },
+    identityInputs: buildFullConversationConstructionInputs({
+      state,
+      session,
+      model,
+      activeTools,
+      completionOptions,
+      systemMessage,
+    }),
   };
 }

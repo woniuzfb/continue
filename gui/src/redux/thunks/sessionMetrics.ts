@@ -16,13 +16,7 @@ import {
   fullConversationConstructionIdentity,
   type FullConversationMetricsMeta,
 } from "core/util/fullConversationMetrics";
-import { fullConversationMetricsFromCompileResult } from "../util/fullConversationMetrics";
-import {
-  buildFullConversationConstructionInputs,
-  buildSessionCompletionOptions,
-  resolveNativeTooling,
-  resolveSessionActiveTools,
-} from "../util/sessionRequestOptions";
+import { resolveSessionMeasurementInputs } from "../util/sessionRequestOptions";
 import type { SessionRuntimeState } from "../slices/sessionsSlice";
 import type { RootState } from "../store";
 
@@ -35,43 +29,6 @@ import type { RootState } from "../store";
  * revision, construction identity and schema version — still matches, so
  * switching tabs never triggers `llm/compileChat`.
  */
-
-function resolveConstructionInputs(
-  state: RootState,
-  session: SessionRuntimeState,
-  model: NonNullable<ReturnType<typeof selectSessionChatModel>>,
-) {
-  const activeTools = resolveSessionActiveTools(state, session.id, model);
-  const { useNativeTools, systemToolsFramework } = resolveNativeTooling(
-    state,
-    model,
-    activeTools,
-  );
-  const completionOptions = buildSessionCompletionOptions({
-    activeTools,
-    useNativeTools,
-    hasReasoningEnabled: session.hasReasoningEnabled,
-    model,
-  });
-  const baseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
-    ? ""
-    : getBaseSystemMessage(session.mode, model, activeTools);
-  const systemMessage = systemToolsFramework
-    ? addSystemMessageToolsToSystemMessage(
-        systemToolsFramework,
-        baseSystemMessage,
-        activeTools,
-      )
-    : baseSystemMessage;
-  return buildFullConversationConstructionInputs({
-    state,
-    session,
-    model,
-    activeTools,
-    completionOptions,
-    systemMessage,
-  });
-}
 
 /**
  * The current construction identity (方案.md §五.16.2), computed from the same
@@ -87,8 +44,10 @@ export function sessionConstructionIdentity(
   if (!session || !model) {
     return undefined;
   }
+  // Same single resolution the measurement request is built from, so the identity
+  // always describes the environment the request asks Core to measure in.
   return fullConversationConstructionIdentity(
-    resolveConstructionInputs(state, session, model),
+    resolveSessionMeasurementInputs({ state, session, model }).identityInputs,
   );
 }
 
@@ -153,145 +112,70 @@ export function currentFullConversationMetricsMeta(
  * its identity. Lazy-loaded sessions read the full history from disk for the
  * compile only — the window state is left untouched (方案.md §五.12).
  */
-export const compileFullConversationForMetrics = createAsyncThunk<
+/**
+ * 方案.md §五.16.5/§九.7.1：只读重算完整会话指标（**不再**用发送路径的
+ * `llm/compileChat`）。Core 从磁盘读完整 history，用请求里显式给出的构造与计量输入计量，
+ * 不写盘、不裁剪、不抛 `Not enough context`。
+ *
+ * 接受条件（三项一起比，缺一不可）：返回的 `conversationRevision` 与当前一致、
+ * `constructionIdentity` 与当前构造环境一致、`schemaVersion` 一致；reducer 还会再校验一次
+ * revision。任何一项不匹配都**丢弃**结果 —— 宁可继续显示 last-known 数值，也不要一个
+ * 看起来 fresh 的错值。
+ */
+export const measureFullConversationForMetrics = createAsyncThunk<
   void,
   { sessionId: string },
   ThunkApiType
 >(
-  "sessions/compileMetrics",
+  "sessions/measureConversation",
   async ({ sessionId }, { getState, dispatch, extra }) => {
     const state = getState();
     const session = selectSessionById(state, sessionId);
-    if (!session || session.history.length === 0) {
-      return;
-    }
     const selectedChatModel = selectSessionChatModel(state, sessionId);
-    if (!selectedChatModel) {
+    if (!session || !selectedChatModel || session.history.length === 0) {
       return;
     }
-    // Capture the identity of the input we are about to measure (方案.md
-    // §五.16.5): a stale async result must never be labelled with a newer
-    // revision or a newer construction environment.
     const requestedMeta = currentFullConversationMetricsMeta(state, sessionId);
     if (!requestedMeta) {
       return;
     }
-
-    // 方案.md §五.16: metrics describe the COMPLETE logical conversation. Do NOT
-    // reuse the send-path request builder — for a Local Provider it returns the
-    // reduced `firstTurnItems + currentTurnItems` payload, which is a different
-    // quantity. Always measure the full history.
-    let historyForCompile: ChatHistoryItemWithMessageId[] = session.history;
-    const localConversation = isLocalConversationModel(selectedChatModel);
-    if (session.pagination.truncated) {
-      try {
-        const result = await extra.ideMessenger.request("history/load", {
-          id: sessionId,
-        });
-        if (result.status === "error") {
-          console.warn(
-            "compileFullConversationForMetrics: history/load failed",
-            result.error,
-          );
-          return;
-        }
-        historyForCompile = result.content
-          .history as ChatHistoryItemWithMessageId[];
-      } catch (e) {
-        console.warn(
-          "compileFullConversationForMetrics: history/load failed",
-          e,
-        );
-        return;
-      }
-    }
-
-    // Same tool resolution and completion options as the real send
-    // (方案.md §五.16): otherwise the metrics describe a different prompt.
-    const activeTools = resolveSessionActiveTools(
+    const { request } = resolveSessionMeasurementInputs({
       state,
-      sessionId,
-      selectedChatModel,
-    );
-    const { useNativeTools, systemToolsFramework } = resolveNativeTooling(
-      state,
-      selectedChatModel,
-      activeTools,
-    );
-    const completionOptions = buildSessionCompletionOptions({
-      activeTools,
-      useNativeTools,
-      hasReasoningEnabled: session.hasReasoningEnabled,
+      session,
       model: selectedChatModel,
     });
 
-    const baseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
-      ? ""
-      : getBaseSystemMessage(session.mode, selectedChatModel, activeTools);
-    const systemMessage = systemToolsFramework
-      ? addSystemMessageToolsToSystemMessage(
-          systemToolsFramework,
-          baseSystemMessage,
-          activeTools,
-        )
-      : baseSystemMessage;
-
-    // The full history carries the summary carrier itself, so no override is
-    // needed here (the override exists only for the reduced Local Provider send).
-    const { messages } = constructMessages(
-      historyForCompile,
-      systemMessage,
-      state.config.config.rules,
-      state.ui.ruleSettings,
-      systemToolsFramework,
+    const response = await extra.ideMessenger.request(
+      "history/measureConversation",
+      {
+        sessionId,
+        measurement: { ...request, ...requestedMeta },
+      },
     );
-
-    // Temporary compatibility path (方案.md §五.16): during Step 1 the metrics
-    // still go through compileChat, so an over-budget full conversation fails
-    // with "Not enough context" and simply yields no new snapshot — the
-    // last-known value is kept. The authoritative no-prune measurement
-    // (`measureChatMessagesNoPrune`, `exceedsContext`) is a later Core stage.
-    const precompiledRes = await extra.ideMessenger.request("llm/compileChat", {
-      messages,
-      options: completionOptions,
-      protectedMessageIndexes: localConversation
-        ? messages.map((_, index) => index)
-        : undefined,
-    });
-    if (precompiledRes.status === "error") {
-      console.warn(
-        "compileFullConversationForMetrics failed:",
-        precompiledRes.error,
-      );
+    if (response.status === "error") {
+      console.warn("measureFullConversationForMetrics failed:", response.error);
       return;
     }
 
-    // Reject a result whose input was superseded while compiling: the complete
-    // identity (revision + construction environment + schema) must still match,
-    // otherwise the snapshot would claim a freshness it cannot prove.
+    // The complete identity must still describe the conversation we measured.
     const currentMeta = currentFullConversationMetricsMeta(
       getState(),
       sessionId,
     );
     if (
       !currentMeta ||
-      currentMeta.conversationRevision !== requestedMeta.conversationRevision ||
-      currentMeta.constructionIdentity !== requestedMeta.constructionIdentity ||
-      // Compared explicitly even though both sides use the same module constant
-      // today: the contract is "the complete identity", not "two of three".
-      currentMeta.schemaVersion !== requestedMeta.schemaVersion
+      currentMeta.conversationRevision !==
+        response.content.meta.conversationRevision ||
+      currentMeta.constructionIdentity !==
+        response.content.meta.constructionIdentity ||
+      currentMeta.schemaVersion !== response.content.meta.schemaVersion
     ) {
       return;
     }
     dispatch(
       setSessionFullConversationMetrics({
         sessionId,
-        result: {
-          metrics: fullConversationMetricsFromCompileResult(
-            precompiledRes.content,
-          ),
-          meta: currentMeta,
-        },
+        result: response.content,
       }),
     );
   },

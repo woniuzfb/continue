@@ -1,7 +1,16 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { Session } from "core";
-import { legacyDiskContextMetricsFromFullConversation } from "../util/fullConversationMetrics";
-import { selectSessionById } from "../selectors/sessions";
+import {
+  FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+  fullConversationConstructionIdentity,
+  type FullConversationMeasurementRequest,
+} from "core/util/fullConversationMetrics";
+import { resolveSessionMeasurementInputs } from "../util/sessionRequestOptions";
+import { currentFullConversationMetricsMeta } from "./sessionMetrics";
+import {
+  selectSessionById,
+  selectSessionChatModel,
+} from "../selectors/sessions";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
 import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
 import { emitLegacyFallbackMintedEvent } from "../util/legacyMessageIdObservability";
@@ -22,6 +31,7 @@ import {
   clearSessionConversationSummary,
   setSessionConversationSummary,
   setSessionFirstTurn,
+  setSessionFullConversationMetrics,
   setSessionPagination,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
@@ -89,9 +99,37 @@ function stripHistoryRuntimeFields(history: ChatHistoryItemWithMessageId[]): {
   return { wireHistory, savedMergedProvenance };
 }
 
+/**
+ * 方案.md §五.16.7：哪些保存建立了**新的完整会话内容版本** —— 只有它们携带
+ * `fullConversationMeasurement`，Core 才会在锁内重新计量并把 metrics 与 history 一起写盘。
+ *
+ * 这里的判据是 GUI 自己的保存语义（§七.2 的边界），**不是** Core 的控制逻辑：Core 只看
+ * 请求里有没有这个字段。刻意排除的几类：
+ * - `STREAM_CHECKPOINT:*`：流式中途的簿记保存（§五.16.1：流式期间沿用请求前的 last-known
+ *   数值，terminal 才刷新）；
+ * - `MODE_CHANGED` / `MODEL_CHANGED` / `REASONING_CHANGED` / `TITLE_CHANGED`：构造环境或标题，
+ *   不是内容版本（构造环境变化由身份比较触发**只读**重算）；
+ * - `STREAM_OUT_OF_CONTEXT`：本回合没有任何输出；
+ * - flush / retry / 未知 reason：安全默认是不计量，下一次边界或门禁会补上。
+ */
+const CONTENT_VERSION_SAVE_REASONS: ReadonlySet<string> = new Set([
+  "USER_SUBMITTED",
+  "TURN_DELETED",
+  "HISTORY_TRUNCATED",
+  "COMPACTION_CHANGED",
+  "COMPACTION_DELETED",
+  "TOOL_CALL_APPROVED",
+  "TOOL_CALL_REJECTED",
+  "TOOL_SEQUENCE_COMPLETED",
+  "STREAM_COMPLETED",
+  "STREAM_ABORTED",
+  "STREAM_FAILED",
+]);
+
 function buildSessionPayload(
   sessionId: string,
   getState: () => any,
+  reason: SaveReason,
 ):
   | {
       payload: Session;
@@ -102,6 +140,28 @@ function buildSessionPayload(
   const session = selectSessionById(state, sessionId);
   if (!session) {
     return undefined;
+  }
+  // 方案.md §五.16.4: the request carries the environment + the identity of the
+  // conversation this save establishes; Core measures the finalHistory in-lock.
+  let fullConversationMeasurement:
+    | FullConversationMeasurementRequest
+    | undefined;
+  if (CONTENT_VERSION_SAVE_REASONS.has(reason)) {
+    const model = selectSessionChatModel(state, sessionId);
+    if (model) {
+      const { request, identityInputs } = resolveSessionMeasurementInputs({
+        state,
+        session,
+        model,
+      });
+      fullConversationMeasurement = {
+        ...request,
+        conversationRevision: session.conversationRevision,
+        constructionIdentity:
+          fullConversationConstructionIdentity(identityInputs),
+        schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+      };
+    }
   }
   const { wireHistory, savedMergedProvenance } = stripHistoryRuntimeFields(
     session.history,
@@ -116,11 +176,10 @@ function buildSessionPayload(
     // 懒加载合并保存：把分页标记传给后端，save 时保留未加载的头部。
     historyTruncated: session.pagination.truncated,
     historyLoadedOffset: session.pagination.loadedOffset,
-    // 过渡：磁盘字段名与形状在 Stage 2A 保持不变（Core 侧零改动）；
-    // Core 锁内计量 + Result 持久化属 Stage 2D。
-    contextMetrics: legacyDiskContextMetricsFromFullConversation(
-      session.fullConversationMetrics,
-    ),
+    // 磁盘 metrics 由 Core 掌管：携带计量时写新 Result，不携带时 Core 把磁盘上的原值
+    // 原样保留。GUI 因此**不再**发送 `contextMetrics`（那会让簿记保存把实测 Result
+    // 降级成 legacy 投影）。
+    ...(fullConversationMeasurement ? { fullConversationMeasurement } : {}),
     // 方案.md §七.8: the reasoning preference is per-session state and must
     // round-trip through history/save, otherwise a reload silently reverts to
     // the derived default.
@@ -135,7 +194,7 @@ async function performSave(
   request: PendingSave,
   { dispatch, getState, extra }: any,
 ): Promise<void> {
-  const built = buildSessionPayload(sessionId, getState);
+  const built = buildSessionPayload(sessionId, getState, request.reason);
   if (!built) {
     return;
   }
@@ -235,6 +294,30 @@ async function performSave(
       }),
     );
   }
+  // 方案.md §五.16.5: accept the measurement this save wrote **only** when the
+  // complete identity still describes this conversation. The identity is compared
+  // against the state as it is now (the revision may have moved on while the save
+  // was in flight), and the reducer re-checks the revision once more.
+  const savedMetrics = result.content?.fullConversationMetrics;
+  if (savedMetrics) {
+    const currentMeta = currentFullConversationMetricsMeta(
+      getState(),
+      sessionId,
+    );
+    if (
+      currentMeta &&
+      currentMeta.conversationRevision ===
+        savedMetrics.meta.conversationRevision &&
+      currentMeta.constructionIdentity ===
+        savedMetrics.meta.constructionIdentity &&
+      currentMeta.schemaVersion === savedMetrics.meta.schemaVersion
+    ) {
+      dispatch(
+        setSessionFullConversationMetrics({ sessionId, result: savedMetrics }),
+      );
+    }
+  }
+
   // Same authority for the summary: deleting a compaction makes the disk
   // response omit it, and a leftover summary would keep feeding
   // `conversationSummaryOverride` to the Local Provider (方案.md §七.8.1).

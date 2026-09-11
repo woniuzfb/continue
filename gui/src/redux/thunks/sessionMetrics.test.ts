@@ -10,7 +10,7 @@ import {
 } from "../slices/sessionsSlice";
 import {
   FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
-  compileFullConversationForMetrics,
+  measureFullConversationForMetrics,
   needsFullConversationMetricsRecompute,
   sessionConstructionIdentity,
 } from "./sessionMetrics";
@@ -222,18 +222,70 @@ describe("needsFullConversationMetricsRecompute", () => {
   });
 });
 
-describe("compileFullConversationForMetrics", () => {
-  it("stores the snapshot with its identity for the target session", async () => {
+describe("measureFullConversationForMetrics", () => {
+  const METRICS_RESULT = {
+    metrics: {
+      inputTokens: 40,
+      contextLength: 1000,
+      availableTokens: 800,
+      contextPercentage: 0.05,
+      exceedsContext: false,
+    },
+  };
+
+  /** Answer `history/measureConversation` with the identity the request carried. */
+  function answerWithOwnIdentity(store: ReturnType<typeof makeStore>) {
+    const original = store.mockIdeMessenger.request.bind(
+      store.mockIdeMessenger,
+    );
+    (store.mockIdeMessenger as any).request = vi.fn(
+      async (type: string, data: any) => {
+        if (type === "history/measureConversation") {
+          return {
+            status: "success",
+            content: {
+              ...METRICS_RESULT,
+              // Core echoes the identity triple it was asked to measure under.
+              meta: {
+                conversationRevision: data.measurement.conversationRevision,
+                constructionIdentity: data.measurement.constructionIdentity,
+                schemaVersion: data.measurement.schemaVersion,
+              },
+            },
+            done: true,
+          };
+        }
+        return original(type as any, data as any);
+      },
+    );
+  }
+
+  it("asks Core to measure the conversation and stores the accepted result", async () => {
     const store = makeStore({}, false);
+    answerWithOwnIdentity(store);
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
-    await run(store, compileFullConversationForMetrics({ sessionId: "s1" }));
+    await run(store, measureFullConversationForMetrics({ sessionId: "s1" }));
 
-    expect(request).toHaveBeenCalledWith("llm/compileChat", expect.anything());
-    expect(session(store).fullConversationMetrics).toMatchObject({
-      exceedsContext: false,
-      contextPercentage: 0.5,
+    const call = request.mock.calls.find(
+      ([type]) => type === "history/measureConversation",
+    );
+    expect(call).toBeDefined();
+    const payload = call![1] as any;
+    expect(payload.sessionId).toBe("s1");
+    // The request carries the construction inputs Core needs, plus the identity.
+    expect(payload.measurement).toMatchObject({
+      modelTitle: "gpt-4o",
+      mode: "agent",
+      conversationRevision: 3,
+      schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
     });
+    expect(typeof payload.measurement.systemMessage).toBe("string");
+    expect(Array.isArray(payload.measurement.tools)).toBe(true);
+
+    expect(session(store).fullConversationMetrics).toEqual(
+      METRICS_RESULT.metrics,
+    );
     expect(session(store).fullConversationMetricsMeta).toEqual({
       constructionIdentity: sessionConstructionIdentity(
         store.getState() as any,
@@ -242,11 +294,13 @@ describe("compileFullConversationForMetrics", () => {
       conversationRevision: 3,
       schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
     });
+    // Legacy projection is refreshed in the same transaction (Stage 2A contract).
+    expect(session(store).contextPercentage).toBe(0.05);
     // The active session is untouched.
     expect(session(store, "s2").fullConversationMetrics).toBeUndefined();
   });
 
-  it("rejects a metrics compile whose input was superseded", async () => {
+  it("rejects a result whose identity no longer matches the conversation", async () => {
     const store = makeStore();
     const valueBefore = session(store).fullConversationMetrics;
     const original = store.mockIdeMessenger.request.bind(
@@ -254,8 +308,8 @@ describe("compileFullConversationForMetrics", () => {
     );
     (store.mockIdeMessenger as any).request = vi.fn(
       async (type: string, data: any) => {
-        if (type === "llm/compileChat") {
-          // The history moves while the compile is in flight.
+        if (type === "history/measureConversation") {
+          // The history moves while the measurement is in flight.
           store.dispatch({
             type: "sessions/setSessionHistory",
             payload: {
@@ -267,12 +321,25 @@ describe("compileFullConversationForMetrics", () => {
               ],
             },
           } as any);
+          return {
+            status: "success",
+            content: {
+              ...METRICS_RESULT,
+              // Core echoes the identity triple it was asked to measure under.
+              meta: {
+                conversationRevision: data.measurement.conversationRevision,
+                constructionIdentity: data.measurement.constructionIdentity,
+                schemaVersion: data.measurement.schemaVersion,
+              },
+            },
+            done: true,
+          };
         }
         return original(type as any, data as any);
       },
     );
 
-    await run(store, compileFullConversationForMetrics({ sessionId: "s1" }));
+    await run(store, measureFullConversationForMetrics({ sessionId: "s1" }));
 
     // The stale result was not written: the snapshot is still the last-known
     // value and carries no freshness identity after the content change.
@@ -280,80 +347,125 @@ describe("compileFullConversationForMetrics", () => {
     expect(session(store).fullConversationMetricsMeta).toBeUndefined();
   });
 
-  it("keeps the last-known value when the compile cannot fit the conversation", async () => {
+  it("keeps the last-known value when the measurement fails", async () => {
     const store = makeStore();
     const metaBefore = session(store).fullConversationMetricsMeta;
     const valueBefore = session(store).fullConversationMetrics;
     (store.mockIdeMessenger as any).request = vi.fn(async (type: string) => {
-      if (type === "llm/compileChat") {
+      if (type === "history/measureConversation") {
         return {
           status: "error",
-          error:
-            "Not enough context available to include all protected messages",
+          error: "history/measureConversation: model not found",
           done: true,
         };
       }
       return { status: "success", content: {}, done: true };
     });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await run(store, compileFullConversationForMetrics({ sessionId: "s1" }));
+    await run(store, measureFullConversationForMetrics({ sessionId: "s1" }));
 
     expect(session(store).fullConversationMetrics).toBe(valueBefore);
     expect(session(store).fullConversationMetricsMeta).toBe(metaBefore);
+    warn.mockRestore();
   });
 
   it("is a no-op without a model or an empty history", async () => {
     const noModel = makeStore({ chatModelTitle: undefined });
     (noModel.getState() as any).config.config.modelsByRole.chat = [];
     const request = vi.spyOn(noModel.mockIdeMessenger, "request");
-    await run(noModel, compileFullConversationForMetrics({ sessionId: "s1" }));
-    expect(request).not.toHaveBeenCalled();
+    await run(noModel, measureFullConversationForMetrics({ sessionId: "s1" }));
+    expect(request).not.toHaveBeenCalledWith(
+      "history/measureConversation",
+      expect.anything(),
+    );
 
-    const empty = makeStore({ history: [] });
-    await run(empty, compileFullConversationForMetrics({ sessionId: "s1" }));
+    const empty = makeStore({ history: [] }, false);
+    const emptyRequest = vi.spyOn(empty.mockIdeMessenger, "request");
+    await run(empty, measureFullConversationForMetrics({ sessionId: "s1" }));
+    expect(emptyRequest).not.toHaveBeenCalledWith(
+      "history/measureConversation",
+      expect.anything(),
+    );
   });
 });
 
 describe("ensureFullConversationMetrics", () => {
-  it("skips the compile while the snapshot is valid", async () => {
+  function answerWithOwnIdentity(store: ReturnType<typeof makeStore>) {
+    const original = store.mockIdeMessenger.request.bind(
+      store.mockIdeMessenger,
+    );
+    (store.mockIdeMessenger as any).request = vi.fn(
+      async (type: string, data: any) => {
+        if (type === "history/measureConversation") {
+          return {
+            status: "success",
+            content: {
+              metrics: {
+                inputTokens: 40,
+                contextLength: 1000,
+                availableTokens: 800,
+                contextPercentage: 0.05,
+                exceedsContext: false,
+              },
+              meta: {
+                conversationRevision: data.measurement.conversationRevision,
+                constructionIdentity: data.measurement.constructionIdentity,
+                schemaVersion: data.measurement.schemaVersion,
+              },
+            },
+            done: true,
+          };
+        }
+        return original(type as any, data as any);
+      },
+    );
+  }
+
+  it("skips the measurement while the snapshot is valid", async () => {
     const store = makeStore();
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
     await run(store, ensureFullConversationMetrics({ sessionId: "s1" }));
 
     expect(request).not.toHaveBeenCalledWith(
-      "llm/compileChat",
+      "history/measureConversation",
       expect.anything(),
     );
   });
 
-  it("uses the same completion options as the real send", async () => {
+  it("passes the same completion options as the real send", async () => {
     const store = makeStore(
       { conversationRevision: 9, hasReasoningEnabled: true },
       false,
     );
+    answerWithOwnIdentity(store);
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
     await run(store, ensureFullConversationMetrics({ sessionId: "s1" }));
 
-    const compileCall = request.mock.calls.find(
-      ([messageType]) => messageType === "llm/compileChat",
+    const call = request.mock.calls.find(
+      ([type]) => type === "history/measureConversation",
     );
-    expect(compileCall).toBeDefined();
-    // The session's reasoning preference must reach the metrics compile,
-    // otherwise the reported context percentage describes another request.
-    expect((compileCall![1] as any).options).toMatchObject({
+    expect(call).toBeDefined();
+    // The session's reasoning preference must reach the measurement request,
+    // otherwise the reported context percentage describes another prompt.
+    expect((call![1] as any).measurement.completionOptions).toMatchObject({
       reasoning: true,
     });
   });
 
-  it("compiles a background session when its snapshot is stale", async () => {
+  it("measures a background session when its snapshot is stale", async () => {
     const store = makeStore({ conversationRevision: 9 }, false);
+    answerWithOwnIdentity(store);
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
     await run(store, ensureFullConversationMetrics({ sessionId: "s1" }));
 
-    expect(request).toHaveBeenCalledWith("llm/compileChat", expect.anything());
+    expect(request).toHaveBeenCalledWith(
+      "history/measureConversation",
+      expect.anything(),
+    );
     expect(
       session(store).fullConversationMetricsMeta?.conversationRevision,
     ).toBe(9);

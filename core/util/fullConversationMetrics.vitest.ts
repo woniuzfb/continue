@@ -46,6 +46,17 @@ function inputs(
       maxTokens: 2048,
       contextLength: 200000,
     },
+    measurementInputs: {
+      modelName: "gpt-4o",
+      contextLength: 200000,
+      maxTokens: 2048,
+      minOutputTokens: 1000,
+      countingSafetyBuffer: 1000,
+      supportsImages: true,
+      toolNames: ["read_file"],
+      excludeToolOutputsFromTokenCount: false,
+      excludeToolOutputsFromTokenCountMinTokens: 6000,
+    },
     conversationSummarySemanticsVersion: CONVERSATION_SUMMARY_SEMANTICS_VERSION,
     ...overrides,
   };
@@ -79,6 +90,38 @@ describe("fullConversationConstructionIdentity", () => {
     expect(identity).toContain('"systemMessageInputs":"You are an assistant."');
     expect(identity).toContain('"maxTokens":2048');
     expect(identity).toContain('"mode":"chat"');
+  });
+
+  it("changes when only a tool definition changes, not just its name", () => {
+    // 方案.md §7.1.3 (C.3)：tool 定义（description / parameters）决定 toolTokens，
+    // 因此它必须已经在身份输入里 —— 只记 tool names 是不够的。
+    const renamedOnly = { ...TOOL, displayTitle: "Another title" };
+    const sameNameDifferentSchema = {
+      ...TOOL,
+      function: {
+        ...TOOL.function,
+        description: "reads a file from a different universe",
+        parameters: {
+          type: "object" as const,
+          properties: {
+            path: { type: "string" as const, description: "other" },
+          },
+          required: ["path"],
+        },
+      },
+    };
+
+    const base = fullConversationConstructionIdentity(inputs());
+    expect(
+      fullConversationConstructionIdentity(
+        inputs({ effectiveTools: [renamedOnly] }),
+      ),
+    ).not.toBe(base);
+    expect(
+      fullConversationConstructionIdentity(
+        inputs({ effectiveTools: [sameNameDifferentSchema] }),
+      ),
+    ).not.toBe(base);
   });
 
   it("preserves array order, because tools and rules order is an input", () => {
@@ -117,6 +160,32 @@ describe("fullConversationConstructionIdentity", () => {
         },
       },
       { conversationSummarySemanticsVersion: 2 },
+      {
+        measurementInputs: {
+          modelName: "gpt-4o",
+          contextLength: 200000,
+          maxTokens: 2048,
+          minOutputTokens: 1000,
+          countingSafetyBuffer: 1000,
+          supportsImages: false,
+          toolNames: ["read_file"],
+          excludeToolOutputsFromTokenCount: false,
+          excludeToolOutputsFromTokenCountMinTokens: 6000,
+        },
+      },
+      {
+        measurementInputs: {
+          modelName: "gpt-4o",
+          contextLength: 200000,
+          maxTokens: 2048,
+          minOutputTokens: 1000,
+          countingSafetyBuffer: 1000,
+          supportsImages: true,
+          toolNames: ["read_file"],
+          excludeToolOutputsFromTokenCount: true,
+          excludeToolOutputsFromTokenCountMinTokens: 6000,
+        },
+      },
     ];
 
     for (const variant of variants) {

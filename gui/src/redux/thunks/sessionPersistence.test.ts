@@ -28,9 +28,17 @@ function item(
   };
 }
 
+const CHAT_MODEL = {
+  title: "gpt-4o",
+  provider: "openai",
+  model: "gpt-4o",
+  underlyingProviderName: "openai",
+} as any;
+
 function makeStore(
   overrides: Parameters<typeof initialSessionRuntime>[2] = {},
   ui: Record<string, unknown> = {},
+  models: any[] = [],
 ) {
   const session = initialSessionRuntime("s1", "Chat 1", {
     history: [item("u1", "user", "hi"), item("a1", "assistant", "yo")],
@@ -64,7 +72,14 @@ function makeStore(
     },
     config: {
       ...INITIAL_CONFIG_SLICE,
-      config: { ...INITIAL_CONFIG_SLICE.config, ui },
+      config: {
+        ...INITIAL_CONFIG_SLICE.config,
+        ui,
+        modelsByRole: {
+          ...INITIAL_CONFIG_SLICE.config.modelsByRole,
+          chat: models,
+        },
+      },
     } as any,
   });
 }
@@ -1229,5 +1244,154 @@ describe("sessionPersistence session catalog sync", () => {
     expect(selectSessionById(store.getState() as any, "s1")).toBeUndefined();
     // … and the catalog entry — written by this very save — survives it.
     expect(catalog(store)).toEqual([savedMetadata]);
+  });
+});
+
+describe("sessionPersistence — full-conversation measurement (Stage 2D-2)", () => {
+  beforeEach(() => resetSessionSaveQueues());
+
+  const METRICS = {
+    inputTokens: 40,
+    contextLength: 1000,
+    availableTokens: 800,
+    contextPercentage: 0.05,
+    exceedsContext: false,
+  };
+
+  /** Answer history/save with the identity the request carried. */
+  function answerSaveWithMeasurement(
+    store: ReturnType<typeof makeStore>,
+    overrides: Partial<{
+      constructionIdentity: string;
+      conversationRevision: number;
+    }> = {},
+  ) {
+    store.mockIdeMessenger.responses["history/save"] = undefined as any;
+    const original = store.mockIdeMessenger.request.bind(
+      store.mockIdeMessenger,
+    );
+    store.mockIdeMessenger.request = (async (type: string, data: any) => {
+      if (type === "history/save") {
+        const carried = data.fullConversationMeasurement;
+        return {
+          status: "success",
+          content: {
+            firstTurnItems: [],
+            totalHistoryCount: data.history.length,
+            ...(carried
+              ? {
+                  fullConversationMetrics: {
+                    metrics: METRICS,
+                    meta: {
+                      conversationRevision:
+                        overrides.conversationRevision ??
+                        carried.conversationRevision,
+                      constructionIdentity:
+                        overrides.constructionIdentity ??
+                        carried.constructionIdentity,
+                      schemaVersion: carried.schemaVersion,
+                    },
+                  },
+                }
+              : {}),
+          },
+          done: true,
+        };
+      }
+      return original(type as any, data as any);
+    }) as any;
+  }
+
+  it("carries the measurement for content-version saves only", async () => {
+    const contentSave = makeStore({ chatModelTitle: "gpt-4o" }, {}, [
+      CHAT_MODEL,
+    ]);
+    const contentRequest = vi.spyOn(contentSave.mockIdeMessenger, "request");
+    await run(
+      contentSave,
+      saveSession({ sessionId: "s1", reason: "USER_SUBMITTED" }),
+    );
+    const carried = (
+      contentRequest.mock.calls.find(
+        ([type]) => type === "history/save",
+      )![1] as any
+    ).fullConversationMeasurement;
+    expect(carried).toMatchObject({
+      mode: "chat",
+      conversationRevision: 0,
+      schemaVersion: 1,
+    });
+    expect(typeof carried.constructionIdentity).toBe("string");
+    expect(carried.constructionIdentity.length).toBeGreaterThan(0);
+    // The legacy projection is no longer sent: Core owns the disk metrics.
+    expect(
+      (
+        contentRequest.mock.calls.find(
+          ([type]) => type === "history/save",
+        )![1] as any
+      ).contextMetrics,
+    ).toBeUndefined();
+
+    for (const reason of [
+      "STREAM_CHECKPOINT:regular",
+      "MODE_CHANGED",
+      "TITLE_CHANGED",
+      "flush",
+    ]) {
+      const store = makeStore({ chatModelTitle: "gpt-4o" }, {}, [CHAT_MODEL]);
+      const request = vi.spyOn(store.mockIdeMessenger, "request");
+      await run(store, saveSession({ sessionId: "s1", reason }));
+      const payload = request.mock.calls.find(
+        ([type]) => type === "history/save",
+      )![1] as any;
+      expect(payload.fullConversationMeasurement, reason).toBeUndefined();
+    }
+  });
+
+  it("accepts the returned measurement and writes the snapshot", async () => {
+    const store = makeStore({ chatModelTitle: "gpt-4o" }, {}, [CHAT_MODEL]);
+    answerSaveWithMeasurement(store);
+
+    await run(
+      store,
+      saveSession({ sessionId: "s1", reason: "USER_SUBMITTED" }),
+    );
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.fullConversationMetrics).toEqual(METRICS);
+    expect(session.fullConversationMetricsMeta?.conversationRevision).toBe(0);
+    // Legacy projection refreshed in the same transaction.
+    expect(session.contextPercentage).toBe(0.05);
+  });
+
+  it("rejects a measurement whose identity no longer matches", async () => {
+    const store = makeStore(
+      {
+        chatModelTitle: "gpt-4o",
+        fullConversationMetrics: METRICS,
+        fullConversationMetricsMeta: {
+          constructionIdentity: "previous",
+          conversationRevision: 0,
+          schemaVersion: 1,
+        },
+      },
+      {},
+      [CHAT_MODEL],
+    );
+    answerSaveWithMeasurement(store, {
+      constructionIdentity: "stale-identity",
+    });
+
+    await run(
+      store,
+      saveSession({ sessionId: "s1", reason: "USER_SUBMITTED" }),
+    );
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    // The stale Result was not written; the last-known snapshot stays.
+    expect(session.fullConversationMetrics).toEqual(METRICS);
+    expect(session.fullConversationMetricsMeta?.constructionIdentity).toBe(
+      "previous",
+    );
   });
 });

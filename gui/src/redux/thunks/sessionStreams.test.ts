@@ -14,7 +14,6 @@ import {
   stopSessionStream,
 } from "./sessionStreams";
 import { resetSessionStreamRunner } from "./sessionTools";
-import { needsFullConversationMetricsRecompute } from "./sessionMetrics";
 
 const CHAT_MODEL = {
   title: "gpt-4o",
@@ -164,7 +163,21 @@ describe("sessionStreams", () => {
   });
 
   it("streams a reply into the target session and finishes completed", async () => {
-    const store = makeStore();
+    const metrics = {
+      inputTokens: 10,
+      contextLength: 100,
+      availableTokens: 90,
+      contextPercentage: 0.11,
+      exceedsContext: false,
+    };
+    const store = makeStore({
+      fullConversationMetrics: metrics,
+      fullConversationMetricsMeta: {
+        constructionIdentity: "identity",
+        conversationRevision: 0,
+        schemaVersion: 1,
+      },
+    });
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
     await run(store, runSessionStream({ sessionId: "s1" }));
@@ -176,8 +189,10 @@ describe("sessionStreams", () => {
     expect(target.stream).toEqual({ status: "idle" });
     // Terminal commit: the reply is final, so the snapshot is stale — its
     // freshness identity is cleared while the last-known value stays visible.
+    // (The send-path compile no longer writes metrics at all: the authoritative
+    // source is the save's in-lock measurement / `history/measureConversation`.)
     expect(target.fullConversationMetricsMeta).toBeUndefined();
-    expect(target.fullConversationMetrics).toBeDefined();
+    expect(target.fullConversationMetrics).toBe(metrics);
     expect(request).toHaveBeenCalledWith("llm/compileChat", expect.anything());
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(
@@ -423,13 +438,12 @@ describe("sessionStreams", () => {
     const target = session(store);
     expect(target.stream.status).toBe("failed");
     expect(target.conversationRevision).toBe(revisionBefore);
-    // The send path's own accepted compile is a fresh snapshot for this turn
-    // (same model, same revision, same schema): a turn that wrote nothing must
-    // leave it reusable, even though the meta object is a new one.
-    expect(target.fullConversationMetricsMeta).toBeDefined();
-    expect(
-      needsFullConversationMetricsRecompute(store.getState() as any, "s1"),
-    ).toBe(false);
+    // Nothing invalidated the snapshot: a turn that wrote nothing leaves the
+    // last-known value and its freshness identity exactly as they were.
+    expect(target.fullConversationMetricsMeta).toBe(meta);
+    // (The gate itself would still ask for a recompute here: the fixture's
+    // identity is a placeholder, not a real construction identity. That path is
+    // covered by `sessionMetrics.test.ts` with identities computed from state.)
   });
 
   it("commits a turn that streamed partial output before it was stopped", async () => {

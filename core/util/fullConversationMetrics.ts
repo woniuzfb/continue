@@ -67,6 +67,25 @@ export type FullConversationConstructionInputs = {
     /** 影响可用预算的模型上下文长度（若选项里显式给出）。 */
     contextLength?: number;
   };
+  /**
+   * 只影响 **token 计数**、不影响消息内容的输入（方案.md §7.1.3 C.3 的
+   * `measurementInputsAffectingTokens`）：图片能力、tool-output 排除规则、
+   * 解析后的窗口、输出预留与计数安全缓冲。
+   *
+   * 这些值 GUI 看不到"消息层面"的差异，却是同一份会话显示不同占用的原因；
+   * 不纳入身份就会出现「开关变了、数字没变」的陈旧快照。
+   */
+  measurementInputs: {
+    modelName: string;
+    contextLength: number;
+    maxTokens: number;
+    minOutputTokens: number;
+    countingSafetyBuffer: number;
+    supportsImages: boolean;
+    toolNames: string[];
+    excludeToolOutputsFromTokenCount: boolean;
+    excludeToolOutputsFromTokenCountMinTokens: number;
+  };
   conversationSummarySemanticsVersion: number;
 };
 

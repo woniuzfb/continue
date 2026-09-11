@@ -13,7 +13,7 @@ import {
   type FullConversationMetricsResult,
 } from "./fullConversationMetrics";
 import {
-  measureFullConversationForSave,
+  measureFullConversation,
   measurementSchemaMatches,
 } from "./fullConversationMeasurement";
 import { getSessionFilePath } from "./paths";
@@ -50,7 +50,7 @@ function measurement(
   };
 }
 
-/** 注入给 `measureFullConversationForSave` 的计量实现：真实 no-prune 计量 + 记录入参。 */
+/** 注入给 `measureFullConversation` 的计量实现：真实 no-prune 计量 + 记录入参。 */
 function realMeasure(sink?: { messages: ChatMessage[] }) {
   return (messages: ChatMessage[]) => {
     if (sink) {
@@ -112,7 +112,7 @@ describe("history/save with a full-conversation measurement", () => {
       sessionWith(sessionId, history()),
       {
         measureFullConversation: (finalHistory) =>
-          measureFullConversationForSave({
+          measureFullConversation({
             history: finalHistory,
             request,
             measure: realMeasure(),
@@ -141,7 +141,7 @@ describe("history/save with a full-conversation measurement", () => {
 
     const response = await historyManager.save(sessionWith(sessionId, full), {
       measureFullConversation: (finalHistory) =>
-        measureFullConversationForSave({
+        measureFullConversation({
           history: finalHistory,
           request: measurement(),
           measure: realMeasure(),
@@ -194,7 +194,7 @@ describe("history/save with a full-conversation measurement", () => {
     const response = await historyManager.save(sessionWith(sessionId, fat), {
       measureFullConversation: (finalHistory) => {
         bodyAtMeasureTime = String(finalHistory[1].message.content);
-        return measureFullConversationForSave({
+        return measureFullConversation({
           history: finalHistory,
           request: measurement(),
           measure: realMeasure(),
@@ -234,7 +234,7 @@ describe("history/save with a full-conversation measurement", () => {
       }),
       {
         measureFullConversation: (finalHistory) =>
-          measureFullConversationForSave({
+          measureFullConversation({
             history: finalHistory,
             request: measurement(),
             measure: realMeasure(seen),
@@ -258,7 +258,7 @@ describe("history/save with a full-conversation measurement", () => {
       sessionWith(sessionId, history()),
       {
         measureFullConversation: (finalHistory) =>
-          measureFullConversationForSave({
+          measureFullConversation({
             history: finalHistory,
             request: measurement(),
             measure: realMeasure(),
@@ -313,7 +313,7 @@ describe("history/save with a full-conversation measurement", () => {
       sessionWith(sessionId, history()),
       {
         measureFullConversation: (finalHistory) =>
-          measureFullConversationForSave({
+          measureFullConversation({
             history: finalHistory,
             request: measurement(),
             measure: realMeasure(),
@@ -332,7 +332,7 @@ describe("history/save with a full-conversation measurement", () => {
       await expect(
         historyManager.save(sessionWith(sessionId, history(5)), {
           measureFullConversation: (finalHistory) =>
-            measureFullConversationForSave({
+            measureFullConversation({
               history: finalHistory,
               request: measurement({
                 constructionIdentity: "identity-should-not-land",
@@ -373,7 +373,7 @@ describe("history/save with a full-conversation measurement", () => {
   });
 });
 
-describe("measureFullConversationForSave — construction parity with the send path", () => {
+describe("measureFullConversation — construction parity with the send path", () => {
   const historyItems: Session["history"] = [
     {
       message: { role: "user", content: "hello", id: "u1" },
@@ -386,7 +386,7 @@ describe("measureFullConversationForSave — construction parity with the send p
       messages: [],
       options: undefined,
     };
-    const result = measureFullConversationForSave({
+    const result = measureFullConversation({
       history: historyItems,
       request: measurement({
         systemMessage: "BASE SYSTEM",
@@ -425,7 +425,7 @@ describe("measureFullConversationForSave — construction parity with the send p
   it("derives the system-tools framework from the completion options", () => {
     // Native tools present ⇒ no framework (assistant tool calls stay as-is).
     const nativeCalls: ChatMessage[][] = [];
-    measureFullConversationForSave({
+    measureFullConversation({
       history: [
         {
           message: {

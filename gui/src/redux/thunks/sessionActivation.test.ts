@@ -80,6 +80,38 @@ async function run(store: ReturnType<typeof makeStore>, thunk: any) {
   return (action as any).unwrap();
 }
 
+/**
+ * Answer `history/measureConversation` with a result whose identity is exactly the
+ * one the request carried — i.e. the GUI's acceptance path (revision +
+ * constructionIdentity + schema) is satisfied.
+ */
+function answerMeasureConversation(store: ReturnType<typeof makeStore>) {
+  const original = store.mockIdeMessenger.request.bind(store.mockIdeMessenger);
+  store.mockIdeMessenger.request = (async (type: string, data: any) => {
+    if (type === "history/measureConversation") {
+      return {
+        status: "success",
+        content: {
+          metrics: {
+            inputTokens: 25,
+            contextLength: 100,
+            availableTokens: 80,
+            contextPercentage: 0.31,
+            exceedsContext: false,
+          },
+          meta: {
+            conversationRevision: data.measurement.conversationRevision,
+            constructionIdentity: data.measurement.constructionIdentity,
+            schemaVersion: data.measurement.schemaVersion,
+          },
+        },
+        done: true,
+      };
+    }
+    return original(type as any, data as any);
+  }) as any;
+}
+
 describe("loadSessionRuntime", () => {
   it("creates a runtime from the lazy first page and marks the tab loaded", async () => {
     const store = makeStore(
@@ -229,24 +261,26 @@ describe("loadSessionRuntime", () => {
         },
       },
     } as any;
+    // Install the measurement responder before the spy so the spy wraps it.
+    answerMeasureConversation(store);
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
-    // Loading alone restores the persisted snapshot without compiling.
+    // Loading alone restores the persisted snapshot without measuring.
     await run(store, loadSessionRuntime({ sessionId: "s1" }));
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.fullConversationMetrics?.contextPercentage).toBe(0.25);
     expect(request).not.toHaveBeenCalledWith(
-      "llm/compileChat",
+      "history/measureConversation",
       expect.anything(),
     );
 
-    // Activation has no comparable snapshot meta yet, so the gate recomputes
-    // once and stores the identity for the next activation (方案.md §五.16).
+    // A legacy disk snapshot carries no identity, so activation measures once and
+    // stores the identity for the next activation (方案.md §五.16.5 / Stage 2D-2).
     await run(store, activateSessionTab({ sessionId: "s1" }));
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(
-        "llm/compileChat",
+        "history/measureConversation",
         expect.anything(),
       );
     });
@@ -340,7 +374,7 @@ describe("activateSessionTab", () => {
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(
-        "llm/compileChat",
+        "history/measureConversation",
         expect.anything(),
       );
     });

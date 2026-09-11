@@ -13,7 +13,12 @@ import {
 } from "./fullConversationMetrics";
 
 /**
- * 方案.md §五.16.4/§五.16.7：**保存锁内的完整会话计量**。
+ * 方案.md §五.16.4/§五.16.5/§五.16.7：**完整会话计量**（保存锁内与只读重算共用）。
+ *
+ * 两条调用路径：
+ * - `history/save` 携带计量 ⇒ 锁内、拿到 `finalHistory` 之后调用，结果与 history 一起原子写盘；
+ * - `history/measureConversation` ⇒ 只读路径，history 来自磁盘完整会话，不写盘。
+ *
  *
  * Core 在这里用与发送路径**同一个**共享纯构造核心（`core/util/constructMessages.ts`）构造
  * 请求消息，再用与 `compileChatMessages` **同一套**预算/计数口径做 no-prune 计量
@@ -26,7 +31,7 @@ import {
  * `measure` 由调用方注入（Core 的 `history/save` handler 用按标题解析出的模型构造），
  * 这样本模块不依赖 LLM 类，也不读 active model。
  */
-export function measureFullConversationForSave({
+export function measureFullConversation({
   history,
   request,
   measure,
