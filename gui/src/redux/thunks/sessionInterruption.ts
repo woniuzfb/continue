@@ -11,6 +11,7 @@ import {
   findSessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 import { runSessionStream } from "./sessionStreams";
 
 /**
@@ -75,7 +76,14 @@ export const dismissInterruptedSession = createAsyncThunk<
     }
     cancelStaleToolCalls({ dispatch, getState }, session);
     dispatch(setSessionInterrupted({ sessionId, interrupted: false }));
-    await dispatch(enqueueSessionSave({ sessionId, reason: "STREAM_ABORTED" }));
+    await dispatch(
+      enqueueSessionSave({
+        sessionId,
+        reason: "STREAM_ABORTED",
+        // dismiss 只关掉陈旧调用，不产生新的内容版本。
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
   },
 );
 

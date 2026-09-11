@@ -9,6 +9,7 @@ import { markSessionDirty, setSessionTitle } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { constructMessages } from "core/util/constructMessages";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 import { getAssistantResponseText, getChatTitleFromMessage } from "./session";
 
 /**
@@ -97,7 +98,14 @@ export const generateSessionTitle = createAsyncThunk<
     }
 
     // TITLE_CHANGED save boundary.
-    await dispatch(enqueueSessionSave({ sessionId, reason: "TITLE_CHANGED" }));
+    await dispatch(
+      enqueueSessionSave({
+        sessionId,
+        reason: "TITLE_CHANGED",
+        // 标题不是内容版本。
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     return title;
   },
 );

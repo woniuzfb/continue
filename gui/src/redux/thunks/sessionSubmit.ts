@@ -36,6 +36,7 @@ import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { ThunkApiType } from "../store";
 import { loadFullHistory, resolveHistoryMutationTarget } from "./sessionPaging";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 import { sessionStreamWrapper } from "./sessionStreamWrapper";
 import { runSessionStream } from "./sessionStreams";
 import { updateSessionFileSymbolsFromFiles } from "./updateFileSymbols";
@@ -346,7 +347,14 @@ export const submitSessionInput = createAsyncThunk<
 
         // 4. Immediate save boundary (方案.md §七.2/§七.3).
         void dispatch(
-          enqueueSessionSave({ sessionId, reason: "USER_SUBMITTED" }),
+          enqueueSessionSave({
+            sessionId,
+            reason: "USER_SUBMITTED",
+            // 方案.md §五.16.4：这里只有 user + **空** assistant placeholder，
+            // 不是权威的完整会话指标；保留 last-known（stale），由 terminal save 形成
+            // 新的 fresh 指标。
+            measurementIntent: NO_MEASUREMENT,
+          }),
         );
 
         // 5. Run the turn.

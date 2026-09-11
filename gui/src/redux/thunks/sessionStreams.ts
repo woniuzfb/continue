@@ -52,6 +52,10 @@ import {
 import { evaluateSessionToolPolicies } from "./evaluateToolPolicies";
 import { preprocessSessionToolCalls } from "./preprocessToolCallArgs";
 import { enqueueSessionSave } from "./sessionPersistence";
+import {
+  NO_MEASUREMENT,
+  intentFromRevisionDelta,
+} from "../util/sessionSaveIntent";
 import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 import {
   buildRequestHistoryForSession,
@@ -163,6 +167,15 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
     // Chat terminal: commit the completed logical turn (方案.md §五.16.4) while
     // the request is still live, then end the stream lifecycle. Non-chat
     // streams (edit mode) never call this and must not invalidate the metrics.
+    //
+    // 方案.md §五.16.4「按显式开关，不按 reason」：计量意图来自**这次 commit 是否真的
+    // 建立了新内容版本**（Step 1 的 `hasConversationMutation` 门禁已经在 reducer 里决定
+    // 了这一点）。无输出 terminal（首 token 前 Stop/Failure、out-of-context）不推进
+    // revision，于是这里得到 `none`，磁盘 metrics 原样保留。
+    const revisionBefore = selectSessionById(
+      getState(),
+      sessionId,
+    )?.conversationRevision;
     dispatch(
       commitSessionConversationTurn({
         sessionId,
@@ -170,12 +183,20 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
         terminalStatus: status,
       }),
     );
+    const revisionAfter = selectSessionById(
+      getState(),
+      sessionId,
+    )?.conversationRevision;
     dispatch(finishSessionStream({ sessionId, requestId, status }));
     checkpointBaselines.delete(sessionId);
     await dispatch(
       enqueueSessionSave({
         sessionId,
         reason: reason ?? `STREAM_${status.toUpperCase()}`,
+        measurementIntent: intentFromRevisionDelta(
+          revisionBefore,
+          revisionAfter,
+        ),
       }),
     );
     // P4a: legacy message ID migration, "stream terminal" trigger. The save
@@ -220,7 +241,12 @@ export const checkpointSessionStream = createAsyncThunk<
     }
     checkpointBaselines.set(sessionId, { at: Date.now(), chars });
     await dispatch(
-      enqueueSessionSave({ sessionId, reason: `STREAM_CHECKPOINT:${reason}` }),
+      enqueueSessionSave({
+        sessionId,
+        reason: `STREAM_CHECKPOINT:${reason}`,
+        // 流式中途的簿记保存：本回合的内容版本边界仍是 terminal。
+        measurementIntent: NO_MEASUREMENT,
+      }),
     );
     return true;
   },

@@ -16,9 +16,30 @@
  * reference to the queue.
  */
 
+/**
+ * 方案.md §五.16.4「保存边界（按显式开关，不按 reason）」：**调用方**声明本次保存是否
+ * 建立了一个新的完整会话内容版本，以及是哪一个版本。
+ *
+ * reason 只用于诊断/日志/测试描述，**不参与计量决策** —— 新增或重命名 reason 不得改变
+ * 计量语义，否则「真正推进了 revision 的新 action」会静默漏计量，而「名字像终态但没推进
+ * revision 的保存」会静默多计量。字段是必填的：编译器强制每个入队点表态。
+ */
+export type SessionSaveMeasurementIntent =
+  | { kind: "none" }
+  | {
+      /**
+       * 本次保存建立了新的完整会话内容版本，且当时的 `conversationRevision`
+       * 就是这个值。构造保存载荷时会再校验它与 session 当前值一致；
+       * 不一致（保存期间又变了）则**不携带** measurement，磁盘 metrics 保持原状。
+       */
+      kind: "conversation-version";
+      conversationRevision: number;
+    };
+
 export type PendingSave = {
   revision: number;
   reason: string;
+  measurementIntent: SessionSaveMeasurementIntent;
 };
 
 const pendingSaves = new Map<string, PendingSave>();

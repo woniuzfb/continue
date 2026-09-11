@@ -509,3 +509,33 @@ describe("sessionTools", () => {
     expect(toolMessages(store, "t1")).toHaveLength(0);
   });
 });
+
+describe("tool saves never carry a measurement (Stage 2D 收口)", () => {
+  it("keeps the mid-turn tool save measurement-free", async () => {
+    // 方案.md §五.16.4「按显式开关，不按 reason」+ Step 1：live 回合内的工具写入只推进
+    // persistence revision 并 arm 终态提交；内容版本边界是 terminal，不是这次中间保存。
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(
+      store,
+      approveToolCall({
+        sessionId: "s1",
+        requestId: "req-1",
+        toolCallId: "t1",
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "history/save",
+        expect.objectContaining({ sessionId: "s1" }),
+      );
+    });
+    for (const call of request.mock.calls) {
+      if (call[0] === "history/save") {
+        expect((call[1] as any).fullConversationMeasurement).toBeUndefined();
+      }
+    }
+  });
+});

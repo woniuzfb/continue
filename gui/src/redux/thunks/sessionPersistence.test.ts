@@ -16,6 +16,7 @@ import {
   retrySessionSave,
   saveSession,
 } from "./sessionPersistence";
+import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 
 function item(
   id: string,
@@ -96,7 +97,14 @@ describe("sessionPersistence.saveSession", () => {
     const store = makeStore();
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     expect(request).toHaveBeenCalledWith(
       "history/save",
@@ -128,7 +136,14 @@ describe("sessionPersistence.saveSession", () => {
     }) as any;
 
     await expect(
-      run(store, saveSession({ sessionId: "s1", reason: "test" })),
+      run(
+        store,
+        saveSession({
+          sessionId: "s1",
+          reason: "test",
+          measurementIntent: NO_MEASUREMENT,
+        }),
+      ),
     ).rejects.toThrow("frozen head missing");
 
     const session = selectSessionById(store.getState() as any, "s1")!;
@@ -152,7 +167,14 @@ describe("sessionPersistence.saveSession", () => {
       done: true,
     }) as any;
     await expect(
-      run(store, saveSession({ sessionId: "s1", reason: "test" })),
+      run(
+        store,
+        saveSession({
+          sessionId: "s1",
+          reason: "test",
+          measurementIntent: NO_MEASUREMENT,
+        }),
+      ),
     ).rejects.toThrow("disk full");
     expect(
       selectSessionById(store.getState() as any, "s1")!.persistence?.state,
@@ -185,8 +207,22 @@ describe("sessionPersistence.saveSession", () => {
     });
     store.mockIdeMessenger.request = request as any;
 
-    const first = run(store, saveSession({ sessionId: "s1", reason: "a" }));
-    const second = run(store, saveSession({ sessionId: "s1", reason: "b" }));
+    const first = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "a",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
+    const second = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "b",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     release();
     await Promise.all([first, second]);
 
@@ -214,7 +250,14 @@ describe("sessionPersistence.saveSession", () => {
         }),
     ) as any;
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await vi.waitFor(() => {
       expect(resolveSave).toBeDefined();
     });
@@ -254,7 +297,14 @@ describe("sessionPersistence.saveSession", () => {
         }),
     ) as any;
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await vi.waitFor(() => {
       expect(resolveSave).toBeDefined();
     });
@@ -303,7 +353,14 @@ describe("sessionPersistence.saveSession", () => {
         }),
     ) as any;
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await vi.waitFor(() => {
       expect(resolveSave).toBeDefined();
     });
@@ -345,7 +402,14 @@ describe("sessionPersistence.saveSession", () => {
     const store = makeStore();
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
-    await run(store, saveSession({ sessionId: "missing", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "missing",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     expect(request).not.toHaveBeenCalled();
   });
@@ -379,7 +443,14 @@ describe("sessionPersistence.saveSession response handling", () => {
       done: true,
     }) as any;
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.pagination.totalCount).toBe(42);
@@ -413,7 +484,11 @@ describe("sessionPersistence.saveSession response handling", () => {
     }) as any;
     await run(
       store,
-      saveSession({ sessionId: "s1", reason: "USER_SUBMITTED" }),
+      saveSession({
+        sessionId: "s1",
+        reason: "USER_SUBMITTED",
+        measurementIntent: NO_MEASUREMENT,
+      }),
     );
     expect(
       selectSessionById(store.getState() as any, "s1")!.firstTurnItems.map(
@@ -442,7 +517,14 @@ describe("sessionPersistence.saveSession response handling", () => {
       done: true,
     }) as any;
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.firstTurnItems).toEqual([]);
@@ -513,7 +595,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     const store = trimStore();
     saveOk(store);
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.history.map((i) => i.message.id)).toEqual([
@@ -560,7 +649,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     });
     saveOk(store, 7);
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.history.map((i) => i.message.id)).toEqual([
@@ -584,7 +680,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     }) as any;
 
     await expect(
-      run(store, saveSession({ sessionId: "s1", reason: "test" })),
+      run(
+        store,
+        saveSession({
+          sessionId: "s1",
+          reason: "test",
+          measurementIntent: NO_MEASUREMENT,
+        }),
+      ),
     ).rejects.toThrow("disk full");
 
     const session = selectSessionById(store.getState() as any, "s1")!;
@@ -603,7 +706,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
         }),
     ) as any;
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await vi.waitFor(() => expect(resolveSave).toBeDefined());
 
     // A stream chunk / tool result lands while the request is in flight.
@@ -628,7 +738,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     });
     saveOk(store);
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     expect(
       selectSessionById(store.getState() as any, "s1")!.history.length,
@@ -639,7 +756,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     const store = trimStore({ pendingApprovalCount: 2 });
     saveOk(store);
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     expect(
       selectSessionById(store.getState() as any, "s1")!.history.length,
@@ -650,7 +774,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     const store = trimStore({}, {});
     saveOk(store);
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     expect(
       selectSessionById(store.getState() as any, "s1")!.history.length,
@@ -675,7 +806,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     });
     saveOk(store, 10);
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.history.length).toBe(4);
@@ -710,7 +848,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
       },
     );
     saveOk(store, 10);
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.history.length).toBe(6);
@@ -754,7 +899,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     // 4 (frozen head) + 6 (window) = 10, so 13 means the mapping is untrusted.
     saveOk(store, 13);
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     expect(
       selectSessionById(store.getState() as any, "s1")!.history.length,
@@ -764,7 +916,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
   it("pages from the trimmed cursor instead of the dropped head", async () => {
     const store = trimStore();
     saveOk(store);
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     const request = vi.fn().mockResolvedValue({
       status: "success",
@@ -797,7 +956,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
   it("keeps the frozen head intact on the save after a trim", async () => {
     const store = trimStore();
     saveOk(store);
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     // The next save must describe the trimmed window against the *new* frozen
     // head, otherwise Core would rewrite the file with the tail only.
@@ -808,7 +974,14 @@ describe("sessionPersistence send-time trim reconciliation", () => {
     });
     store.mockIdeMessenger.request = request as any;
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     expect(request).toHaveBeenCalledWith(
       "history/save",
@@ -899,7 +1072,14 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     const store = provenanceStore();
     const request = vi.spyOn(store.mockIdeMessenger, "request");
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     const call = request.mock.calls.find((c) => c[0] === "history/save")!;
     const wire = (call[1] as any).history as ChatHistoryItemWithMessageId[];
@@ -916,7 +1096,14 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     const before = session(store).history[1];
     const request = deferredSave(store);
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await request.started();
     request.fail();
     await expect(save).rejects.toThrow("disk full");
@@ -949,7 +1136,14 @@ describe("sessionPersistence merged provenance lifecycle", () => {
       const userBefore = session(store).history[0];
       const revisionBefore = session(store).persistence?.revision;
 
-      await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+      await run(
+        store,
+        saveSession({
+          sessionId: "s1",
+          reason: "test",
+          measurementIntent: NO_MEASUREMENT,
+        }),
+      );
 
       const after = session(store);
       // The merged shape is now on disk, so the item's own id is the disk identity.
@@ -968,7 +1162,14 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     const store = provenanceStore();
     const request = deferredSave(store);
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await request.started();
 
     // Equivalent shape, brand-new objects: the comparison must look at the ids.
@@ -992,7 +1193,14 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     const store = provenanceStore();
     const request = deferredSave(store);
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await request.started();
 
     // The id alone is not a complete saved-shape fingerprint. If the current
@@ -1028,7 +1236,14 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     const store = provenanceStore();
     const request = deferredSave(store);
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await request.started();
 
     // A prepend+merge during the flight rebuilds the bubble: the new page's first
@@ -1058,7 +1273,14 @@ describe("sessionPersistence merged provenance lifecycle", () => {
     const store = provenanceStore();
     const request = deferredSave(store);
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await request.started();
 
     // A stream chunk / new user message bumps the revision without touching this
@@ -1113,7 +1335,14 @@ describe("sessionPersistence session catalog sync", () => {
       sessionMetadata: savedMetadata,
     };
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     // The metadata is Core's, verbatim: no `Date.now()` substitute for
     // `dateCreated`, no messageCount estimated from the lazy window.
@@ -1141,7 +1370,14 @@ describe("sessionPersistence session catalog sync", () => {
       sessionMetadata: { ...savedMetadata, title: "Fresh", messageCount: 9 },
     };
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     expect(request).toHaveBeenCalledWith("history/save", expect.anything());
     // One upsert, never a rebuild: high-frequency saves must not rescan the whole
@@ -1179,7 +1415,14 @@ describe("sessionPersistence session catalog sync", () => {
         }),
     ) as any;
 
-    const save = run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    const save = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
     await vi.waitFor(() => {
       expect(resolveSave).toBeDefined();
     });
@@ -1238,7 +1481,14 @@ describe("sessionPersistence session catalog sync", () => {
       sessionMetadata: savedMetadata,
     };
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     // The closed, now-clean owner is released …
     expect(selectSessionById(store.getState() as any, "s1")).toBeUndefined();
@@ -1302,50 +1552,86 @@ describe("sessionPersistence — full-conversation measurement (Stage 2D-2)", ()
     }) as any;
   }
 
-  it("carries the measurement for content-version saves only", async () => {
-    const contentSave = makeStore({ chatModelTitle: "gpt-4o" }, {}, [
-      CHAT_MODEL,
-    ]);
-    const contentRequest = vi.spyOn(contentSave.mockIdeMessenger, "request");
+  it("carries the measurement only when the caller states a content version", async () => {
+    // 方案.md §五.16.4「按显式开关，不按 reason」：这里的 reason 故意用
+    // 「看起来像终态」和「随便什么名字」两种，证明它不参与计量决策。
+    const store = makeStore({ chatModelTitle: "gpt-4o" }, {}, [CHAT_MODEL]);
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
     await run(
-      contentSave,
-      saveSession({ sessionId: "s1", reason: "USER_SUBMITTED" }),
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "SOME_FUTURE_REASON",
+        measurementIntent: {
+          kind: "conversation-version",
+          conversationRevision: selectSessionById(
+            store.getState() as any,
+            "s1",
+          )!.conversationRevision,
+        },
+      }),
     );
-    const carried = (
-      contentRequest.mock.calls.find(
-        ([type]) => type === "history/save",
-      )![1] as any
-    ).fullConversationMeasurement;
-    expect(carried).toMatchObject({
+
+    const payload = request.mock.calls.find(
+      ([type]) => type === "history/save",
+    )![1] as any;
+    expect(payload.fullConversationMeasurement).toMatchObject({
       mode: "chat",
       conversationRevision: 0,
       schemaVersion: 1,
     });
-    expect(typeof carried.constructionIdentity).toBe("string");
-    expect(carried.constructionIdentity.length).toBeGreaterThan(0);
-    // The legacy projection is no longer sent: Core owns the disk metrics.
     expect(
-      (
-        contentRequest.mock.calls.find(
-          ([type]) => type === "history/save",
-        )![1] as any
-      ).contextMetrics,
-    ).toBeUndefined();
+      typeof payload.fullConversationMeasurement.constructionIdentity,
+    ).toBe("string");
+    // The legacy projection is no longer sent: Core owns the disk metrics.
+    expect(payload.contextMetrics).toBeUndefined();
+  });
 
-    for (const reason of [
-      "STREAM_CHECKPOINT:regular",
-      "MODE_CHANGED",
-      "TITLE_CHANGED",
-      "flush",
-    ]) {
-      const store = makeStore({ chatModelTitle: "gpt-4o" }, {}, [CHAT_MODEL]);
-      const request = vi.spyOn(store.mockIdeMessenger, "request");
-      await run(store, saveSession({ sessionId: "s1", reason }));
-      const payload = request.mock.calls.find(
-        ([type]) => type === "history/save",
-      )![1] as any;
-      expect(payload.fullConversationMeasurement, reason).toBeUndefined();
-    }
+  it("never measures for a terminal-looking reason with a `none` intent", async () => {
+    const store = makeStore({ chatModelTitle: "gpt-4o" }, {}, [CHAT_MODEL]);
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "STREAM_COMPLETED",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
+
+    const payload = request.mock.calls.find(
+      ([type]) => type === "history/save",
+    )![1] as any;
+    expect(payload.fullConversationMeasurement).toBeUndefined();
+  });
+
+  it("drops the measurement when the stated revision is no longer current", async () => {
+    const store = makeStore({ chatModelTitle: "gpt-4o" }, {}, [CHAT_MODEL]);
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const staleRevision =
+      selectSessionById(store.getState() as any, "s1")!.conversationRevision -
+      1;
+
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "USER_SUBMITTED",
+        measurementIntent: {
+          kind: "conversation-version",
+          conversationRevision: staleRevision,
+        },
+      }),
+    );
+
+    const payload = request.mock.calls.find(
+      ([type]) => type === "history/save",
+    )![1] as any;
+    // The content moved on since the intent was formed: keep the disk metrics as
+    // they are (stale) instead of writing a fresh-looking value for an old state.
+    expect(payload.fullConversationMeasurement).toBeUndefined();
   });
 
   it("accepts the returned measurement and writes the snapshot", async () => {
@@ -1354,7 +1640,17 @@ describe("sessionPersistence — full-conversation measurement (Stage 2D-2)", ()
 
     await run(
       store,
-      saveSession({ sessionId: "s1", reason: "USER_SUBMITTED" }),
+      saveSession({
+        sessionId: "s1",
+        reason: "STREAM_COMPLETED",
+        measurementIntent: {
+          kind: "conversation-version",
+          conversationRevision: selectSessionById(
+            store.getState() as any,
+            "s1",
+          )!.conversationRevision,
+        },
+      }),
     );
 
     const session = selectSessionById(store.getState() as any, "s1")!;
@@ -1384,7 +1680,17 @@ describe("sessionPersistence — full-conversation measurement (Stage 2D-2)", ()
 
     await run(
       store,
-      saveSession({ sessionId: "s1", reason: "USER_SUBMITTED" }),
+      saveSession({
+        sessionId: "s1",
+        reason: "STREAM_COMPLETED",
+        measurementIntent: {
+          kind: "conversation-version",
+          conversationRevision: selectSessionById(
+            store.getState() as any,
+            "s1",
+          )!.conversationRevision,
+        },
+      }),
     );
 
     const session = selectSessionById(store.getState() as any, "s1")!;

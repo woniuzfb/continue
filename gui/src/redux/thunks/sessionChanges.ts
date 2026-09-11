@@ -12,6 +12,10 @@ import {
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { enqueueSessionSave } from "./sessionPersistence";
+import {
+  NO_MEASUREMENT,
+  conversationVersionIntent,
+} from "../util/sessionSaveIntent";
 
 /**
  * Phase 2 change saves (方案.md §七.2/§七.8).
@@ -28,7 +32,14 @@ export const setSessionModeAndSave = createAsyncThunk<
   ThunkApiType
 >("sessions/setModeAndSave", async ({ sessionId, mode }, { dispatch }) => {
   dispatch(setSessionMode({ sessionId, mode }));
-  void dispatch(enqueueSessionSave({ sessionId, reason: "MODE_CHANGED" }));
+  // mode 是构造环境，不是内容版本：只保存，由身份比较触发只读重算。
+  void dispatch(
+    enqueueSessionSave({
+      sessionId,
+      reason: "MODE_CHANGED",
+      measurementIntent: NO_MEASUREMENT,
+    }),
+  );
 });
 
 export const setSessionReasoningAndSave = createAsyncThunk<
@@ -44,7 +55,11 @@ export const setSessionReasoningAndSave = createAsyncThunk<
       setSessionReasoningEnabled({ sessionId, enabled, source: "explicit" }),
     );
     void dispatch(
-      enqueueSessionSave({ sessionId, reason: "REASONING_CHANGED" }),
+      enqueueSessionSave({
+        sessionId,
+        reason: "REASONING_CHANGED",
+        measurementIntent: NO_MEASUREMENT,
+      }),
     );
   },
 );
@@ -69,7 +84,13 @@ export const setSessionChatModelAndSave = createAsyncThunk<
         : null;
       dispatch(setActiveSessionModelProjection({ model }));
     }
-    void dispatch(enqueueSessionSave({ sessionId, reason: "MODEL_CHANGED" }));
+    void dispatch(
+      enqueueSessionSave({
+        sessionId,
+        reason: "MODEL_CHANGED",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
   },
 );
 
@@ -116,9 +137,16 @@ export const deleteSessionTurn = createAsyncThunk<
   ThunkApiType
 >(
   "sessions/deleteTurnAndSave",
-  async ({ sessionId, messageId }, { dispatch }) => {
+  async ({ sessionId, messageId }, { dispatch, getState }) => {
     dispatch(deleteTurnByMessageId({ sessionId, messageId }));
-    void dispatch(enqueueSessionSave({ sessionId, reason: "TURN_DELETED" }));
+    // 删除回合推进了内容版本 ⇒ 这次保存携带计量（revision 取 mutation 之后的值）。
+    void dispatch(
+      enqueueSessionSave({
+        sessionId,
+        reason: "TURN_DELETED",
+        measurementIntent: conversationVersionIntent(getState(), sessionId),
+      }),
+    );
   },
 );
 
@@ -128,7 +156,7 @@ export const truncateSessionHistoryAfter = createAsyncThunk<
   ThunkApiType
 >(
   "sessions/truncateHistoryAndSave",
-  async ({ sessionId, messageId }, { dispatch }) => {
+  async ({ sessionId, messageId }, { dispatch, getState }) => {
     // 方案.md §六: new ids are generated in the thunk, never by the reducer —
     // without this the regenerated assistant placeholder would carry an empty
     // id and be unreachable by every byMessageId write.
@@ -140,7 +168,11 @@ export const truncateSessionHistoryAfter = createAsyncThunk<
       }),
     );
     void dispatch(
-      enqueueSessionSave({ sessionId, reason: "HISTORY_TRUNCATED" }),
+      enqueueSessionSave({
+        sessionId,
+        reason: "HISTORY_TRUNCATED",
+        measurementIntent: conversationVersionIntent(getState(), sessionId),
+      }),
     );
   },
 );

@@ -442,7 +442,14 @@ describe("message-id fallback reporting", () => {
     };
     const reports = captureReports();
 
-    await run(store, saveSession({ sessionId: "s1", reason: "test" }));
+    await run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "test",
+        measurementIntent: { kind: "none" },
+      }),
+    );
 
     expect(reports).toEqual([
       { sessionId: "s1", mintedCount: 1, hostCapability: "supported" },

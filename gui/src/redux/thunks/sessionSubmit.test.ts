@@ -554,3 +554,33 @@ describe("submitSessionInput", () => {
     expect(session(store).stream.status).toBe("idle");
   });
 });
+
+describe("submitSessionInput — measurement intent (Stage 2D 收口)", () => {
+  it("does not carry a measurement for USER_SUBMITTED", async () => {
+    // 方案.md §五.16.4: the immediate save holds the user message plus an EMPTY
+    // assistant placeholder — not an authoritative full-conversation state. It must
+    // keep the last-known metrics (stale) and let the terminal save form the new one.
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "history/save",
+        expect.objectContaining({ sessionId: "s1" }),
+      );
+    });
+    const payload = request.mock.calls.find(
+      ([type]) => type === "history/save",
+    )![1] as any;
+    expect(payload.fullConversationMeasurement).toBeUndefined();
+  });
+});

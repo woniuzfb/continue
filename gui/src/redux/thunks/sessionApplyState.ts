@@ -26,6 +26,7 @@ import {
 } from "../util/applyOrigins";
 import { exitEdit } from "./edit";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 import { continueToolLoop } from "./sessionTools";
 
 /**
@@ -269,7 +270,14 @@ export const handleSessionApplyStateUpdate = createAsyncThunk<
     }
 
     // EDIT_COMMITTED save boundary (方案.md §七.2).
-    void dispatch(enqueueSessionSave({ sessionId, reason: "EDIT_COMMITTED" }));
+    void dispatch(
+      enqueueSessionSave({
+        sessionId,
+        reason: "EDIT_COMMITTED",
+        // edit apply 不改变聊天内容版本。
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
 
     // The turn continues on the same request that produced the edit.
     const requestId = selectSessionById(getState(), sessionId)?.stream

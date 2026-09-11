@@ -259,7 +259,11 @@ describe("useSessionSyntheticSummary", () => {
       // `as any` mirrors the other thunk-driven tests: the mock store's
       // `dispatch` is typed for plain actions.
       await (store.dispatch(
-        saveSession({ sessionId: "A", reason: "test" }) as any,
+        saveSession({
+          sessionId: "A",
+          reason: "test",
+          measurementIntent: { kind: "none" },
+        }) as any,
       ) as any);
     });
 

@@ -19,6 +19,7 @@ import {
   type SessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
 import { enqueueSessionSave } from "./sessionPersistence";
+import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 
 /**
  * Phase 1 tool loop (方案.md §五.20, §六 `sessionTools.ts`).
@@ -343,7 +344,12 @@ async function runApproveToolCall(
     output,
   );
   void dispatch(
-    enqueueSessionSave({ sessionId, reason: "TOOL_CALL_APPROVED" }),
+    enqueueSessionSave({
+      sessionId,
+      reason: "TOOL_CALL_APPROVED",
+      // 工具中间态：terminal 才是本回合的内容版本边界。
+      measurementIntent: NO_MEASUREMENT,
+    }),
   );
 
   // A client tool that waits for its apply flow leaves the request live but
@@ -470,7 +476,11 @@ async function runRejectToolCall(
 
   // A rejection never executes the tool; it only closes the call.
   void dispatch(
-    enqueueSessionSave({ sessionId, reason: "TOOL_CALL_REJECTED" }),
+    enqueueSessionSave({
+      sessionId,
+      reason: "TOOL_CALL_REJECTED",
+      measurementIntent: NO_MEASUREMENT,
+    }),
   );
 
   let continuationRequested = false;
@@ -602,7 +612,11 @@ async function runContinueToolLoop(
   }
 
   void dispatch(
-    enqueueSessionSave({ sessionId, reason: "TOOL_SEQUENCE_COMPLETED" }),
+    enqueueSessionSave({
+      sessionId,
+      reason: "TOOL_SEQUENCE_COMPLETED",
+      measurementIntent: NO_MEASUREMENT,
+    }),
   );
 
   if (!sessionStreamRunner) {

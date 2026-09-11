@@ -12,6 +12,7 @@ import {
   resolveHistoryMutationTarget,
 } from "../redux/thunks/sessionPaging";
 import { enqueueSessionSave } from "../redux/thunks/sessionPersistence";
+import { conversationVersionIntent } from "../redux/util/sessionSaveIntent";
 import { windowToAbsoluteIndex } from "../redux/util/historyIndex";
 import {
   carrierMessageIdOf,
@@ -216,6 +217,11 @@ export const useCompactConversation = () => {
           enqueueSessionSave({
             sessionId: sessionId,
             reason: "COMPACTION_CHANGED",
+            // 摘要内容变化就是新的内容版本。
+            measurementIntent: conversationVersionIntent(
+              store.getState(),
+              sessionId,
+            ),
           }),
         );
       }
@@ -273,7 +279,14 @@ export const useDeleteCompaction = () => {
     // Update local state and save to persistence
     dispatch(deleteCompactionByMessageId({ sessionId, messageId }));
     void dispatch(
-      enqueueSessionSave({ sessionId, reason: "COMPACTION_DELETED" }),
+      enqueueSessionSave({
+        sessionId,
+        reason: "COMPACTION_DELETED",
+        measurementIntent: conversationVersionIntent(
+          store.getState(),
+          sessionId,
+        ),
+      }),
     );
   };
 };

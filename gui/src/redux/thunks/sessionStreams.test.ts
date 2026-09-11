@@ -680,3 +680,129 @@ describe("sessionStreams", () => {
     expect(request).not.toHaveBeenCalled();
   });
 });
+
+describe("sessionStreams — measurement intent follows the commit, not the reason", () => {
+  /**
+   * Every `history/save` payload's measurement field. The save request does not
+   * carry the reason (that is queue-level diagnostic metadata), which is exactly
+   * the point: the measurement must be decidable without looking at it.
+   */
+  function carriedMeasurements(request: { mock: { calls: any[][] } }) {
+    return request.mock.calls
+      .filter(([type]) => type === "history/save")
+      .map(([, payload]) => payload.fullConversationMeasurement);
+  }
+
+  async function waitForSave(
+    store: ReturnType<typeof makeStore>,
+    request: { mock: { calls: any[][] } },
+  ) {
+    await vi.waitFor(() => {
+      expect(request.mock.calls.some(([type]) => type === "history/save")).toBe(
+        true,
+      );
+    });
+    return carriedMeasurements(request);
+  }
+
+  it("carries a measurement for a completed turn that wrote output", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    const carried = (await waitForSave(store, request)).filter(Boolean);
+    expect(carried.length).toBeGreaterThan(0);
+    const last = carried.at(-1)!;
+    expect(last.conversationRevision).toBe(
+      (store.getState() as any).sessions.sessionsById.s1.conversationRevision,
+    );
+    expect(typeof last.constructionIdentity).toBe("string");
+  });
+
+  it("carries a measurement when preserved partial output was stopped", async () => {
+    const store = makeStore();
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      yield [textChunk("partial")];
+      session(store).stream.aborter!.abort();
+    } as any;
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    const carried = (await waitForSave(store, request)).filter(Boolean);
+    // The terminal committed the turn (partial output is preserved), so the intent
+    // names that revision — the terminal status string is irrelevant.
+    expect(carried.at(-1)?.conversationRevision).toBe(
+      (store.getState() as any).sessions.sessionsById.s1.conversationRevision,
+    );
+  });
+
+  it("carries no measurement when nothing was written before the failure", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      throw new Error("provider failed before the first token");
+    } as any;
+
+    await run(store, runSessionStream({ sessionId: "s1" })).catch(() => {});
+
+    const carried = await waitForSave(store, request);
+    expect(carried.every((entry) => entry === undefined)).toBe(true);
+  });
+
+  it("carries no measurement when the turn was stopped before the first token", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      session(store).stream.aborter!.abort();
+    } as any;
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    const carried = await waitForSave(store, request);
+    expect(carried.every((entry) => entry === undefined)).toBe(true);
+  });
+
+  it("never measures mid-stream checkpoints", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    // A checkpoint only saves while the named request is live.
+    store.dispatch(beginSessionStream({ sessionId: "s1", requestId: "r1" }));
+
+    await run(
+      store,
+      checkpointSessionStream({
+        sessionId: "s1",
+        requestId: "r1",
+        reason: "TEST",
+        force: true,
+      }),
+    );
+
+    const carried = carriedMeasurements(request);
+    expect(carried.length).toBeGreaterThan(0);
+    expect(carried.every((entry) => entry === undefined)).toBe(true);
+  });
+
+  it("carries exactly one measurement for a tool-loop turn", async () => {
+    const store = makeStore({
+      toolPolicies: { run_terminal_cmd: "allowedWithoutPermission" },
+    });
+    let turn = 0;
+    store.mockIdeMessenger.llmStreamChat = async function* () {
+      turn++;
+      yield turn === 1 ? [toolCallChunk()] : [textChunk("done")];
+    } as any;
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+    await vi.waitFor(() => {
+      expect(session(store).stream).toEqual({ status: "idle" });
+    });
+
+    const carried = await waitForSave(store, request);
+    // Mid-turn tool saves carry nothing; the terminal carries exactly one.
+    expect(carried.filter(Boolean)).toHaveLength(1);
+  });
+});

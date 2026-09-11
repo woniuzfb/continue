@@ -654,7 +654,11 @@ describe("canMigrateSessionMessageIds — gate", () => {
     // Redux state still says `clean`.
     const store = makeStore({ s1: {} }, "supported");
     const request = vi.spyOn(store.mockIdeMessenger, "request");
-    setPendingSave("s1", { revision: 0, reason: "test" });
+    setPendingSave("s1", {
+      revision: 0,
+      reason: "test",
+      measurementIntent: { kind: "none" },
+    });
 
     try {
       expect(can(store)).toBe(false);

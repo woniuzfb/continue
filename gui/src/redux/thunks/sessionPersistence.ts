@@ -45,6 +45,7 @@ import {
   setPendingSave,
   setRunningSave,
   type PendingSave,
+  type SessionSaveMeasurementIntent,
 } from "../util/sessionSaveQueue";
 import { reconcilePaginationAfterPersist } from "./sessionPaging";
 import { releaseClosingSessionIfClean } from "./sessionLifecycle";
@@ -99,37 +100,10 @@ function stripHistoryRuntimeFields(history: ChatHistoryItemWithMessageId[]): {
   return { wireHistory, savedMergedProvenance };
 }
 
-/**
- * 方案.md §五.16.7：哪些保存建立了**新的完整会话内容版本** —— 只有它们携带
- * `fullConversationMeasurement`，Core 才会在锁内重新计量并把 metrics 与 history 一起写盘。
- *
- * 这里的判据是 GUI 自己的保存语义（§七.2 的边界），**不是** Core 的控制逻辑：Core 只看
- * 请求里有没有这个字段。刻意排除的几类：
- * - `STREAM_CHECKPOINT:*`：流式中途的簿记保存（§五.16.1：流式期间沿用请求前的 last-known
- *   数值，terminal 才刷新）；
- * - `MODE_CHANGED` / `MODEL_CHANGED` / `REASONING_CHANGED` / `TITLE_CHANGED`：构造环境或标题，
- *   不是内容版本（构造环境变化由身份比较触发**只读**重算）；
- * - `STREAM_OUT_OF_CONTEXT`：本回合没有任何输出；
- * - flush / retry / 未知 reason：安全默认是不计量，下一次边界或门禁会补上。
- */
-const CONTENT_VERSION_SAVE_REASONS: ReadonlySet<string> = new Set([
-  "USER_SUBMITTED",
-  "TURN_DELETED",
-  "HISTORY_TRUNCATED",
-  "COMPACTION_CHANGED",
-  "COMPACTION_DELETED",
-  "TOOL_CALL_APPROVED",
-  "TOOL_CALL_REJECTED",
-  "TOOL_SEQUENCE_COMPLETED",
-  "STREAM_COMPLETED",
-  "STREAM_ABORTED",
-  "STREAM_FAILED",
-]);
-
 function buildSessionPayload(
   sessionId: string,
   getState: () => any,
-  reason: SaveReason,
+  measurementIntent: SessionSaveMeasurementIntent,
 ):
   | {
       payload: Session;
@@ -141,12 +115,19 @@ function buildSessionPayload(
   if (!session) {
     return undefined;
   }
-  // 方案.md §五.16.4: the request carries the environment + the identity of the
-  // conversation this save establishes; Core measures the finalHistory in-lock.
+  // 方案.md §五.16.4「保存边界（按显式开关，不按 reason）」：只有调用方声明本次保存
+  // 建立了新的完整会话内容版本、且该版本仍是当前版本时才携带计量。reason 不参与判断。
+  //
+  // revision 校验是最后一道防线：保存发起后、载荷构造前内容又变过（例如同一回合里
+  // 更晚的 mutation）就**不携带**，磁盘 metrics 保持原状并继续显示为 stale，
+  // 由下一次真正的边界补上 —— 而不是把一个已经过期的中间态写成 fresh 权威值。
   let fullConversationMeasurement:
     | FullConversationMeasurementRequest
     | undefined;
-  if (CONTENT_VERSION_SAVE_REASONS.has(reason)) {
+  if (
+    measurementIntent.kind === "conversation-version" &&
+    measurementIntent.conversationRevision === session.conversationRevision
+  ) {
     const model = selectSessionChatModel(state, sessionId);
     if (model) {
       const { request, identityInputs } = resolveSessionMeasurementInputs({
@@ -194,7 +175,11 @@ async function performSave(
   request: PendingSave,
   { dispatch, getState, extra }: any,
 ): Promise<void> {
-  const built = buildSessionPayload(sessionId, getState, request.reason);
+  const built = buildSessionPayload(
+    sessionId,
+    getState,
+    request.measurementIntent,
+  );
   if (!built) {
     return;
   }
@@ -427,20 +412,33 @@ function hasQueuedSave(sessionId: string): boolean {
 
 export const saveSession = createAsyncThunk<
   void,
-  { sessionId: string; reason: SaveReason },
+  {
+    sessionId: string;
+    reason: SaveReason;
+    /**
+     * 方案.md §五.16.4: the caller states whether this save established a new
+     * full-conversation content version (and which one). Required on purpose so a
+     * new content action cannot silently skip (or silently add) a measurement.
+     */
+    measurementIntent: SessionSaveMeasurementIntent;
+  },
   ThunkApiType
->("sessions/save", async ({ sessionId, reason }, thunkApi) => {
-  const session = selectSessionById(thunkApi.getState(), sessionId);
-  if (!session) {
-    return;
-  }
-  setPendingSave(sessionId, {
-    revision: session.persistence?.revision ?? 0,
-    reason,
-  });
-  const running = getRunningSave(sessionId);
-  await (running ?? startSaveLoop(sessionId, thunkApi));
-});
+>(
+  "sessions/save",
+  async ({ sessionId, reason, measurementIntent }, thunkApi) => {
+    const session = selectSessionById(thunkApi.getState(), sessionId);
+    if (!session) {
+      return;
+    }
+    setPendingSave(sessionId, {
+      revision: session.persistence?.revision ?? 0,
+      reason,
+      measurementIntent,
+    });
+    const running = getRunningSave(sessionId);
+    await (running ?? startSaveLoop(sessionId, thunkApi));
+  },
+);
 
 /** Explicit enqueue alias used by event-driven saves. */
 export const enqueueSessionSave = saveSession;
@@ -457,6 +455,9 @@ export const flushSessionSave = createAsyncThunk<
   setPendingSave(sessionId, {
     revision: session.persistence?.revision ?? 0,
     reason: "flush",
+    // Best-effort unload/reload flush: never the boundary that establishes a new
+    // content version (a real boundary already measured, or the gate will).
+    measurementIntent: { kind: "none" },
   });
   const running = getRunningSave(sessionId);
   await (running ?? startSaveLoop(sessionId, thunkApi));
@@ -481,6 +482,7 @@ export const flushAllPendingSessions = createAsyncThunk<
       setPendingSave(sessionId, {
         revision: session.persistence?.revision ?? 0,
         reason: "flush-all",
+        measurementIntent: { kind: "none" },
       });
       await (getRunningSave(sessionId) ?? startSaveLoop(sessionId, thunkApi));
     }),
@@ -499,6 +501,8 @@ export const retrySessionSave = createAsyncThunk<
   setPendingSave(sessionId, {
     revision: session.persistence?.revision ?? 0,
     reason: "retry",
+    // Retrying re-writes the same content; a boundary already measured it.
+    measurementIntent: { kind: "none" },
   });
   await (getRunningSave(sessionId) ?? startSaveLoop(sessionId, thunkApi));
 });
