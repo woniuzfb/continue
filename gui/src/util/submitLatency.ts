@@ -36,6 +36,8 @@ export type SubmitLatencyPhase =
   | "commit-turn"
   | "save-enqueue"
   | "save-payload"
+  | "save-request-sent"
+  | "save-response-received"
   | "stream-start"
   | "terminal-commit"
   | "terminal-identity"
@@ -62,6 +64,12 @@ export type SubmitLatencyEvent = {
   };
   /** Approximate size of a payload the phase built, in MB (cheap length sum, no copy). */
   payloadMB?: number;
+  /**
+   * Epoch milliseconds (same clock as the extension host). Durations alone cannot tell
+   * whether a slow save was waiting before Core's handler started, inside it, or after it
+   * answered; absolute timestamps on both sides can.
+   */
+  at?: number;
   /** Whether the resolved turn actually carried context items. */
   hadContext?: boolean;
   /** Submit shape, so append and edit/resend can be compared separately. */
@@ -133,6 +141,9 @@ export function recordSubmitLatency(event: SubmitLatencyEvent): void {
     }
     if (event.payloadMB !== undefined) {
       details.push(`payloadMB=${event.payloadMB.toFixed(1)}`);
+    }
+    if (event.at !== undefined) {
+      details.push(`at=${event.at}`);
     }
     if (event.insertion !== undefined) {
       details.push(event.insertion);

@@ -230,7 +230,28 @@ async function performSave(
   // (方案.md §七.5).
   dispatch(markSessionSaving({ sessionId }));
 
+  // Absolute timestamps (epoch ms, same clock as the extension host) around the request:
+  // the GUI's awaited span and Core's own breakdown can then be lined up to see whether the
+  // time is before Core's handler starts, inside it, or after it answered. Durations alone
+  // cannot answer that (方案.md §7.2.2).
+  const sentAt = Date.now();
+  const requestStartedAt = performance.now();
+  if (isSubmitLatencyLoggingEnabled()) {
+    recordSubmitLatency({
+      phase: "save-request-sent",
+      sessionId,
+      at: sentAt,
+    });
+  }
   const result = await extra.ideMessenger.request("history/save", payload);
+  if (isSubmitLatencyLoggingEnabled()) {
+    recordSubmitLatency({
+      phase: "save-response-received",
+      sessionId,
+      at: Date.now(),
+      durationMs: performance.now() - requestStartedAt,
+    });
+  }
 
   if (result.status === "error") {
     dispatch(

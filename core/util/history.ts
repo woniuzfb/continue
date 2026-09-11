@@ -510,6 +510,7 @@ export class HistoryManager {
       }
     };
     const totalStartedAt = performance.now();
+    const enteredAt = Date.now();
     const lockStartedAt = performance.now();
     const lockDir = await acquireSessionLock(
       getSessionFilePath(session.sessionId),
@@ -527,7 +528,7 @@ export class HistoryManager {
           `total=${(performance.now() - totalStartedAt).toFixed(0)}ms`,
         );
         console.log(
-          `[submit-latency] save ${session.sessionId} ${timings.join(" ")}`,
+          `[submit-latency] save ${session.sessionId} at=${enteredAt} doneAt=${Date.now()} ${timings.join(" ")}`,
         );
       }
     }
