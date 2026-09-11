@@ -7,7 +7,7 @@ import {
 import { upsertSessionMetadata } from "../slices/sessionCatalogSlice";
 import { markSessionDirty, setSessionTitle } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
-import { constructMessages } from "../util/constructMessages";
+import { constructMessages } from "core/util/constructMessages";
 import { enqueueSessionSave } from "./sessionPersistence";
 import { getAssistantResponseText, getChatTitleFromMessage } from "./session";
 

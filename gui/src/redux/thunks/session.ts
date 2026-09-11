@@ -12,7 +12,7 @@ import {
 } from "core/util/messageContent";
 import { IIdeMessenger } from "../../context/IdeMessenger";
 import { RootState, ThunkApiType } from "../store";
-import { constructMessages } from "../util/constructMessages";
+import { constructMessages } from "core/util/constructMessages";
 import { createAndActivateSession } from "./sessionActivation";
 import {
   bootstrapLastSession,

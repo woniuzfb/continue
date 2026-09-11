@@ -1,10 +1,5 @@
 import * as Icons from "@heroicons/react/24/outline";
-import {
-  ContextItem,
-  ContextItemWithId,
-  ToolCallState,
-  ToolStatus,
-} from "core";
+import { ToolCallState, ToolStatus } from "core";
 import { ComponentType, SVGProps } from "react";
 import { vscButtonBackground } from "../../../components";
 import Spinner from "../../../components/gui/Spinner";
@@ -82,28 +77,6 @@ export function getStatusIcon(state: ToolStatus) {
   }
 }
 
-export function toolCallStateToContextItems(
-  toolCallState: ToolCallState | undefined,
-): ContextItemWithId[] {
-  if (!toolCallState) {
-    return [];
-  }
-  return (
-    toolCallState.output?.map((ctxItem) =>
-      toolCallCtxItemToCtxItemWithId(ctxItem, toolCallState.toolCallId),
-    ) ?? []
-  );
-}
-
-export function toolCallCtxItemToCtxItemWithId(
-  ctxItem: ContextItem,
-  toolCallId: string,
-): ContextItemWithId {
-  return {
-    ...ctxItem,
-    id: {
-      providerTitle: "toolCall",
-      itemId: toolCallId,
-    },
-  };
-}
+// `toolCallStateToContextItems` / `toolCallCtxItemToCtxItemWithId` moved to
+// `core/util/toolCallContextItems.ts` (方案.md §7.1.3) so the shared pure message
+// constructor can use them without depending on this React module.

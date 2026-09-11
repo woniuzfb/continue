@@ -8,13 +8,13 @@ import {
   ToolCall,
   ToolResultChatMessage,
   UserChatMessage,
-} from "core";
-import { BuiltInToolNames } from "core/tools/builtIn";
+} from "..";
+import { BuiltInToolNames } from "../tools/builtIn";
 import {
   CANCELLED_TOOL_CALL_MESSAGE,
   NO_TOOL_CALL_OUTPUT_MESSAGE,
-} from "core/tools/constants";
-import { renderChatMessage } from "core/util/messageContent";
+} from "../tools/constants";
+import { renderChatMessage } from "./messageContent";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { constructMessages } from "./constructMessages";
 
@@ -34,7 +34,10 @@ const NORMAL_RULE: RuleWithSource = {
   rule: "Always apply rule",
 };
 
-vi.mock("core/llm/rules/getSystemMessageWithRules", async (importOriginal) => {
+// Mocked deterministically so rule triggering does not depend on globs/regex matching;
+// the id is resolved relative to this file (it used to be the "core/..." alias while the
+// test lived in gui/, which no longer resolves inside core).
+vi.mock("../llm/rules/getSystemMessageWithRules", async (importOriginal) => {
   const original = (await importOriginal()) as any;
   return {
     ...original,

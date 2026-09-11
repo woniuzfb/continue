@@ -8,7 +8,7 @@ import { IdeMessengerContext } from "../../../context/IdeMessenger";
 import { ToggleWithIcon } from "./ToggleWithIcon";
 import { ToolCallStatusMessage } from "./ToolCallStatusMessage";
 import { ToolTruncateHistoryIcon } from "./ToolTruncateHistoryIcon";
-import { toolCallStateToContextItems } from "./utils";
+import { toolCallStateToContextItems } from "core/util/toolCallContextItems";
 
 interface SimpleToolCallUIProps {
   toolCallState: ToolCallState;

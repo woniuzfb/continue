@@ -50,7 +50,7 @@ import {
   ThunkApiType,
   ThunkExtrasType,
 } from "../store";
-import { constructMessages } from "../util/constructMessages";
+import { constructMessages } from "core/util/constructMessages";
 import { getBaseSystemMessage } from "../util/getBaseSystemMessage";
 import {
   applySessionToolCallUpdate,

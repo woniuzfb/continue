@@ -3,7 +3,7 @@ import { useContext, useMemo } from "react";
 import { openContextItem } from "../../../components/mainInput/belowMainInput/ContextItemsPeek";
 import { IdeMessengerContext } from "../../../context/IdeMessenger";
 import { ToolCallStatusMessage } from "./ToolCallStatusMessage";
-import { toolCallStateToContextItems } from "./utils";
+import { toolCallStateToContextItems } from "core/util/toolCallContextItems";
 import { ToolTruncateHistoryIcon } from "./ToolTruncateHistoryIcon";
 
 interface ToolCallDisplayProps {

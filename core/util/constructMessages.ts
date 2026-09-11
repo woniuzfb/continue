@@ -7,19 +7,19 @@ import {
   TextMessagePart,
   ToolResultChatMessage,
   UserChatMessage,
-} from "core";
-import { chatMessageIsEmpty } from "core/llm/messages";
-import { getSystemMessageWithRules } from "core/llm/rules/getSystemMessageWithRules";
-import { RulePolicies } from "core/llm/rules/types";
-import { BuiltInToolNames } from "core/tools/builtIn";
+} from "..";
+import { chatMessageIsEmpty } from "../llm/messages";
+import { getSystemMessageWithRules } from "../llm/rules/getSystemMessageWithRules";
+import { RulePolicies } from "../llm/rules/types";
+import { BuiltInToolNames } from "../tools/builtIn";
 import {
   CANCELLED_TOOL_CALL_MESSAGE,
   ERRORED_TOOL_CALL_OUTPUT_MESSAGE,
   NO_TOOL_CALL_OUTPUT_MESSAGE,
-} from "core/tools/constants";
-import { convertToolCallStatesToSystemCallsAndOutput } from "core/tools/systemMessageTools/convertSystemTools";
-import { SystemMessageToolsFramework } from "core/tools/systemMessageTools/types";
-import { findLast, findLastIndex } from "core/util/findLast";
+} from "../tools/constants";
+import { convertToolCallStatesToSystemCallsAndOutput } from "../tools/systemMessageTools/convertSystemTools";
+import { SystemMessageToolsFramework } from "../tools/systemMessageTools/types";
+import { findLast, findLastIndex } from "./findLast";
 import {
   normalizeToMessageParts,
   renderContextItems,
@@ -27,11 +27,22 @@ import {
   replaceFileContentBlocks,
   stripInlineImageBase64,
   stripRuntimeMessageIdsForProvider,
-} from "core/util/messageContent";
-import { toolCallStateToContextItems } from "../../pages/gui/ToolCallDiv/utils";
+} from "./messageContent";
+import { toolCallStateToContextItems } from "./toolCallContextItems";
 
-// Helper function to render context items and append status information
-// Helper function to render context items and append status information
+/**
+ * 方案.md §7.1.3：**共享纯构造核心**。这里是唯一实现，GUI 发送路径与（Stage 2C/D 起的）
+ * Core 完整计量路径共同使用；不再有 GUI 侧副本，也不允许 Core 复制一套"等价实现"。
+ *
+ * 纯：不读 Redux store、不读 active session、不依赖 React、不发 IPC；全部输入显式。
+ * 两条路径只在 history 范围（完整 vs 首轮+当前轮）与 prune 策略上不同。
+ *
+ * Stage 2B 是**纯搬迁**（原文位于 `gui/src/redux/util/constructMessages.ts`，
+ * `toolCallStateToContextItems` 从 `gui/src/pages/gui/ToolCallDiv/utils.tsx` 下沉到
+ * `core/util/toolCallContextItems.ts`）；搬迁前的输出已录成
+ * `core/util/__fixtures__/constructMessages.golden.json`，由
+ * `constructMessages.golden.vitest.ts` 逐字比对。
+ */
 
 interface MessageWithContextItems {
   ctxItems: ContextItemWithId[];

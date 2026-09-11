@@ -7,7 +7,7 @@ import {
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { setSessionFullConversationMetrics } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
-import { constructMessages } from "../util/constructMessages";
+import { constructMessages } from "core/util/constructMessages";
 import { isLocalConversationModel } from "core/llm/localConversation";
 import { getBaseSystemMessage } from "../util/getBaseSystemMessage";
 export { FULL_CONVERSATION_METRICS_SCHEMA_VERSION };

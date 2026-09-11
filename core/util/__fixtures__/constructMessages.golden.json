@@ -1,0 +1,978 @@
+{
+  "recordedFrom": "gui pre-Stage-2B",
+  "cases": [
+    {
+      "name": "plain-history",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "hello",
+              "id": "u1"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "hi there",
+              "id": "a1"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "user",
+              "content": "what is 2+2?",
+              "id": "u2"
+            },
+            "contextItems": [
+              {
+                "id": {
+                  "providerTitle": "test",
+                  "itemId": "c1"
+                },
+                "content": "attached context\n",
+                "name": "c1",
+                "description": "c1"
+              }
+            ]
+          }
+        ],
+        "baseSystemMessage": "You are an assistant.",
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": false
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are an assistant."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "hi there"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "attached context\n\n"
+              },
+              {
+                "type": "text",
+                "text": "what is 2+2?"
+              }
+            ]
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u2"
+      }
+    },
+    {
+      "name": "empty-assistant-placeholder",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "ping",
+              "id": "u1"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "id": "a1"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "system",
+              "content": "system role item",
+              "id": "s1"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "tool",
+              "content": "orphan tool message",
+              "toolCallId": "orphan"
+            },
+            "contextItems": []
+          }
+        ],
+        "baseSystemMessage": "SYS",
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": false
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "SYS"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "ping"
+              }
+            ]
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u1"
+      }
+    },
+    {
+      "name": "summary-carrier",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "old question",
+              "id": "u-old"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "old answer",
+              "id": "a-old"
+            },
+            "contextItems": [],
+            "conversationSummary": "SUMMARY OF OLD TURNS"
+          },
+          {
+            "message": {
+              "role": "user",
+              "content": "new question",
+              "id": "u-new"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "new answer",
+              "id": "a-new"
+            },
+            "contextItems": []
+          }
+        ],
+        "baseSystemMessage": "SYS",
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": false
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "SYS\n\nPrevious conversation summary:\n\n SUMMARY OF OLD TURNS"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "new question"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "new answer"
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u-new"
+      }
+    },
+    {
+      "name": "summary-override-local-provider",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "old question",
+              "id": "u-old"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "old answer",
+              "id": "a-old"
+            },
+            "contextItems": [],
+            "conversationSummary": "CARRIER SUMMARY"
+          },
+          {
+            "message": {
+              "role": "user",
+              "content": "new question",
+              "id": "u-new"
+            },
+            "contextItems": []
+          }
+        ],
+        "baseSystemMessage": "SYS",
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": false,
+        "conversationSummaryOverride": "OVERRIDE SUMMARY"
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "SYS\n\nPrevious conversation summary:\n\n OVERRIDE SUMMARY"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "old question"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "old answer"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "new question"
+              }
+            ]
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u-new"
+      }
+    },
+    {
+      "name": "rules-matrix",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "look at this",
+              "id": "u-rules"
+            },
+            "contextItems": [
+              {
+                "id": {
+                  "providerTitle": "test",
+                  "itemId": "ts-file"
+                },
+                "content": "const SECRET = 1;\n",
+                "name": "ts-file",
+                "description": "ts-file",
+                "uri": {
+                  "type": "file",
+                  "value": "file:///workspace/src/app.ts"
+                }
+              },
+              {
+                "id": {
+                  "providerTitle": "test",
+                  "itemId": "py-file"
+                },
+                "content": "print(1)\n",
+                "name": "py-file",
+                "description": "py-file",
+                "uri": {
+                  "type": "file",
+                  "value": "file:///workspace/scripts/run.py"
+                }
+              }
+            ]
+          }
+        ],
+        "baseSystemMessage": "BASE SYSTEM",
+        "availableRules": [
+          {
+            "source": "rules-block",
+            "rule": "GLOBAL RULE",
+            "name": "global",
+            "alwaysApply": true
+          },
+          {
+            "source": "rules-block",
+            "rule": "TS RULE",
+            "name": "ts",
+            "globs": "**/*.ts"
+          },
+          {
+            "source": "rules-block",
+            "rule": "PY RULE",
+            "name": "py",
+            "globs": "**/*.py"
+          },
+          {
+            "source": "rules-block",
+            "rule": "SECRET RULE",
+            "name": "secret",
+            "regex": "SECRET",
+            "globs": "**/*.ts"
+          },
+          {
+            "source": "rules-block",
+            "rule": "OPT IN RULE",
+            "name": "optin",
+            "alwaysApply": false
+          },
+          {
+            "source": "rules-block",
+            "rule": "OFF RULE",
+            "name": "offrule",
+            "alwaysApply": true
+          }
+        ],
+        "rulePolicies": {
+          "offrule": "off"
+        },
+        "useSystemToolsFramework": false
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "BASE SYSTEM\n\nGLOBAL RULE\n\nTS RULE\n\nPY RULE\n\nSECRET RULE"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "const SECRET = 1;\n\n"
+              },
+              {
+                "type": "text",
+                "text": "print(1)\n\n"
+              },
+              {
+                "type": "text",
+                "text": "look at this"
+              }
+            ]
+          }
+        ],
+        "appliedRules": [
+          {
+            "source": "rules-block",
+            "name": "global",
+            "alwaysApply": true
+          },
+          {
+            "source": "rules-block",
+            "name": "ts",
+            "globs": "**/*.ts"
+          },
+          {
+            "source": "rules-block",
+            "name": "py",
+            "globs": "**/*.py"
+          },
+          {
+            "source": "rules-block",
+            "name": "secret",
+            "regex": "SECRET",
+            "globs": "**/*.ts"
+          }
+        ],
+        "appliedRulesSourceMessageId": "u-rules"
+      }
+    },
+    {
+      "name": "tool-call-and-result",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "run it",
+              "id": "u-tool"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "Sure.",
+              "id": "a-tool",
+              "toolCalls": [
+                {
+                  "id": "t-done",
+                  "type": "function",
+                  "function": {
+                    "name": "run_terminal_command",
+                    "arguments": "{}"
+                  }
+                }
+              ]
+            },
+            "contextItems": [],
+            "toolCallStates": [
+              {
+                "toolCallId": "t-done",
+                "status": "done",
+                "toolCall": {
+                  "id": "t-done",
+                  "type": "function",
+                  "function": {
+                    "name": "run_terminal_command",
+                    "arguments": "{}"
+                  }
+                },
+                "parsedArgs": {
+                  "command": "ls"
+                },
+                "output": [
+                  {
+                    "name": "stdout",
+                    "description": "ok",
+                    "content": "hello\n",
+                    "status": "success"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "baseSystemMessage": "SYS",
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": false
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "SYS"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "run it"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "Sure.",
+            "toolCalls": [
+              {
+                "id": "t-done",
+                "type": "function",
+                "function": {
+                  "name": "run_terminal_command",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "hello\n\n[Status: success]",
+            "toolCallId": "t-done"
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u-tool"
+      }
+    },
+    {
+      "name": "tool-call-statuses",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "three calls",
+              "id": "u-status"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "",
+              "id": "a-status",
+              "toolCalls": [
+                {
+                  "id": "t-canceled",
+                  "type": "function",
+                  "function": {
+                    "name": "canceled_tool",
+                    "arguments": "{}"
+                  }
+                }
+              ]
+            },
+            "contextItems": [],
+            "toolCallStates": [
+              {
+                "toolCallId": "t-canceled",
+                "status": "canceled",
+                "toolCall": {
+                  "id": "t-canceled",
+                  "type": "function",
+                  "function": {
+                    "name": "run_terminal_command",
+                    "arguments": "{}"
+                  }
+                },
+                "parsedArgs": {
+                  "command": "ls"
+                }
+              },
+              {
+                "toolCallId": "t-errored",
+                "status": "errored",
+                "toolCall": {
+                  "id": "t-errored",
+                  "type": "function",
+                  "function": {
+                    "name": "run_terminal_command",
+                    "arguments": "{}"
+                  }
+                },
+                "parsedArgs": {
+                  "command": "ls"
+                }
+              },
+              {
+                "toolCallId": "t-generating",
+                "status": "generating",
+                "toolCall": {
+                  "id": "t-generating",
+                  "type": "function",
+                  "function": {
+                    "name": "run_terminal_command",
+                    "arguments": "{}"
+                  }
+                },
+                "parsedArgs": {
+                  "command": "ls"
+                }
+              }
+            ]
+          }
+        ],
+        "baseSystemMessage": "SYS",
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": false
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "SYS"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "three calls"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "toolCalls": [
+              {
+                "id": "t-canceled",
+                "type": "function",
+                "function": {
+                  "name": "canceled_tool",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "The user cancelled this tool call.",
+            "toolCallId": "t-canceled"
+          },
+          {
+            "role": "tool",
+            "content": "There was an error calling the tool.",
+            "toolCallId": "t-errored"
+          },
+          {
+            "role": "tool",
+            "content": "No tool output",
+            "toolCallId": "t-generating"
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u-status"
+      }
+    },
+    {
+      "name": "system-tools-framework",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "run it",
+              "id": "u-tool"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "Sure.",
+              "id": "a-tool",
+              "toolCalls": [
+                {
+                  "id": "t-done",
+                  "type": "function",
+                  "function": {
+                    "name": "run_terminal_command",
+                    "arguments": "{}"
+                  }
+                }
+              ]
+            },
+            "contextItems": [],
+            "toolCallStates": [
+              {
+                "toolCallId": "t-done",
+                "status": "done",
+                "toolCall": {
+                  "id": "t-done",
+                  "type": "function",
+                  "function": {
+                    "name": "run_terminal_command",
+                    "arguments": "{}"
+                  }
+                },
+                "parsedArgs": {
+                  "command": "ls"
+                },
+                "output": [
+                  {
+                    "name": "stdout",
+                    "description": "ok",
+                    "content": "hello\n",
+                    "status": "success"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "baseSystemMessage": "SYS",
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": true
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "SYS"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "run it"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Sure."
+              },
+              {
+                "type": "text",
+                "text": "```tool\nTOOL_NAME: run_terminal_command\nBEGIN_ARG: command\n\"ls\"\nEND_ARG\n```"
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Tool output for run_terminal_command tool call:\n\nhello\n"
+              }
+            ]
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u-tool"
+      }
+    },
+    {
+      "name": "thinking-and-merged-bubble",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": "why?",
+              "id": "u-think"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "thinking",
+              "content": "hidden reasoning",
+              "id": "t-think",
+              "signature": "sig"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "because",
+              "id": "a-merged",
+              "toolCalls": [
+                {
+                  "id": "t-merged",
+                  "type": "function",
+                  "function": {
+                    "name": "merged_tool",
+                    "arguments": "{}"
+                  }
+                }
+              ]
+            },
+            "contextItems": [],
+            "reasoning": {
+              "text": "merged reasoning",
+              "startAt": 1,
+              "endAt": 2,
+              "active": false
+            },
+            "toolCallStates": [
+              {
+                "toolCallId": "t-merged",
+                "status": "done",
+                "toolCall": {
+                  "id": "t-merged",
+                  "type": "function",
+                  "function": {
+                    "name": "run_terminal_command",
+                    "arguments": "{}"
+                  }
+                },
+                "parsedArgs": {
+                  "command": "ls"
+                },
+                "output": []
+              }
+            ]
+          }
+        ],
+        "baseSystemMessage": "SYS",
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": false
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "system",
+            "content": "SYS"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "why?"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "because",
+            "toolCalls": [
+              {
+                "id": "t-merged",
+                "type": "function",
+                "function": {
+                  "name": "merged_tool",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "",
+            "toolCallId": "t-merged"
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u-think"
+      }
+    },
+    {
+      "name": "images-and-file-content",
+      "input": {
+        "history": [
+          {
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "see ![x](data:image/png;base64,AAAA) <file_content path=\"a.ts\">OLD</file_content>"
+                },
+                {
+                  "type": "imageUrl",
+                  "imageUrl": {
+                    "url": "data:image/png;base64,BBBB"
+                  }
+                },
+                {
+                  "type": "imageUrl",
+                  "imageUrl": {
+                    "url": "https://example.com/i.png"
+                  }
+                }
+              ],
+              "id": "u-img-old"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "assistant",
+              "content": "ok",
+              "id": "a-img"
+            },
+            "contextItems": []
+          },
+          {
+            "message": {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "current <file_content path=\"b.ts\">NEW</file_content>"
+                },
+                {
+                  "type": "imageUrl",
+                  "imageUrl": {
+                    "url": "data:image/png;base64,CCCC"
+                  }
+                }
+              ],
+              "id": "u-img-current"
+            },
+            "contextItems": [
+              {
+                "id": {
+                  "providerTitle": "test",
+                  "itemId": "c-img"
+                },
+                "content": "ctx content\n",
+                "name": "c-img",
+                "description": "c-img"
+              }
+            ]
+          }
+        ],
+        "availableRules": [],
+        "rulePolicies": {},
+        "useSystemToolsFramework": false
+      },
+      "expected": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "see ![x] <file_content path=\"a.ts\">OLD</file_content>"
+              },
+              {
+                "type": "imageUrl",
+                "imageUrl": {
+                  "url": "https://example.com/i.png"
+                }
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "ok"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "ctx content\n\n"
+              },
+              {
+                "type": "text",
+                "text": "current <file_content path=\"b.ts\">NEW</file_content>"
+              },
+              {
+                "type": "imageUrl",
+                "imageUrl": {
+                  "url": "data:image/png;base64,CCCC"
+                }
+              }
+            ]
+          }
+        ],
+        "appliedRules": [],
+        "appliedRulesSourceMessageId": "u-img-current"
+      }
+    }
+  ]
+}
