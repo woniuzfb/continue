@@ -25,6 +25,7 @@ import {
   applyStreamUpdatesToHistory,
   mergeSplitReplies,
 } from "./sessionHistory";
+import { findGuiIndexContainingMessageId } from "../util/historyTarget";
 
 /**
  * Phase 1 session ownership.
@@ -419,6 +420,30 @@ function markFullConversationMetricsStale(session: SessionRuntimeState): void {
 }
 
 /**
+ * Where a submitted turn lands (方案.md §七.3, Stage 2F 收口).
+ *
+ * An index captured **before** the async half of the send (context providers, slash
+ * commands) cannot be trusted afterwards: the window may have been hydrated, trimmed,
+ * or appended to, so the same number can address a different turn. The intent is
+ * therefore expressed as a discriminated identity, and `expectedConversationRevision`
+ * is the atomic guard that a submit prepared against content that is still current.
+ *
+ * ```text
+ * append           ⇒ 提交到**当时**的尾部（history.length 在 reducer 内读）
+ * replace(identity) ⇒ 按 message id（含 bubble provenance）重新定位目标
+ * ```
+ *
+ * 两者都对不上时 reducer **什么都不做**：既不改写别的回合，也不静默降级为追加。
+ */
+export type SubmittedTurnInsertion =
+  | { kind: "append"; expectedConversationRevision: number }
+  | {
+      kind: "replace";
+      targetMessageId: string;
+      expectedConversationRevision: number;
+    };
+
+/**
  * Re-point (or drop) the compaction summary after a submitted turn replaced the
  * tail of the conversation (方案.md §五.16.1, Stage 2F).
  *
@@ -674,8 +699,11 @@ export const sessionsSlice = createSlice({
      * could have persisted, and any measurement would have described a conversation
      * that never existed.
      *
-     * `insertionPoint >= history.length` appends; a smaller index replaces the turn
-     * at that position (edit-and-resend truncates the tail, as before).
+     * The target is an **identity**, not an index (see `SubmittedTurnInsertion`), and
+     * the whole thing is refused atomically when the conversation moved on while the
+     * editor content was being resolved — including the case where the target message
+     * no longer exists. A stale submit must never rewrite another turn, and it must
+     * never silently degrade into an append.
      */
     commitSubmittedTurn: (
       state,
@@ -683,17 +711,34 @@ export const sessionsSlice = createSlice({
         sessionId: string;
         userItem: ChatHistoryItemWithMessageId;
         assistantPlaceholder: ChatHistoryItemWithMessageId;
-        /** Absolute index of the turn to replace; `>= history.length` appends. */
-        insertionPoint: number;
+        insertion: SubmittedTurnInsertion;
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (!session) {
         return;
       }
-      const { userItem, assistantPlaceholder, insertionPoint } = action.payload;
-      const replaces =
-        insertionPoint >= 0 && insertionPoint < session.history.length;
+      const { userItem, assistantPlaceholder, insertion } = action.payload;
+      if (
+        session.conversationRevision !== insertion.expectedConversationRevision
+      ) {
+        return;
+      }
+      let insertionPoint: number;
+      if (insertion.kind === "append") {
+        // The size is read *now*: a window that grew while the content was being
+        // resolved must still receive an append, not a truncated tail.
+        insertionPoint = session.history.length;
+      } else {
+        insertionPoint = findGuiIndexContainingMessageId(
+          session.history,
+          insertion.targetMessageId,
+        );
+        if (insertionPoint < 0) {
+          return;
+        }
+      }
+      const replaces = insertionPoint < session.history.length;
       session.history = replaces
         ? [
             ...session.history.slice(0, insertionPoint),

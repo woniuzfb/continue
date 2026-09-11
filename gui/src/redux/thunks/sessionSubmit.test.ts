@@ -1,10 +1,65 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JSONContent } from "@tiptap/core";
+
+/**
+ * Pauses the submit thunk **after** the editor content has been resolved and before
+ * the submitted turn is committed. That is the only place where a test can inject a
+ * concurrent mutation of the same session's history (方案.md §七.3, Stage 2F 收口):
+ * the real resolution is still used, only the return is gated.
+ */
+const contentGate: {
+  armed: boolean;
+  reached: boolean;
+  release: (() => void) | undefined;
+} = { armed: false, reached: false, release: undefined };
+
+vi.mock(
+  "../../components/mainInput/TipTapEditor/utils/resolveEditorContent",
+  async (importOriginal) => {
+    const actual =
+      (await importOriginal()) as typeof import("../../components/mainInput/TipTapEditor/utils/resolveEditorContent");
+    return {
+      ...actual,
+      resolveEditorContent: async (input: any) => {
+        const resolved = await actual.resolveEditorContent(input);
+        if (contentGate.armed) {
+          contentGate.armed = false;
+          contentGate.reached = true;
+          await new Promise<void>((resolve) => {
+            contentGate.release = resolve;
+          });
+        }
+        return resolved;
+      },
+    };
+  },
+);
+
+/** Arms the pause and returns helpers to wait for it and let it through. */
+function pauseAfterContentResolution() {
+  contentGate.armed = true;
+  contentGate.reached = false;
+  contentGate.release = undefined;
+  return {
+    async reached() {
+      await vi.waitFor(() => expect(contentGate.reached).toBe(true));
+    },
+    release() {
+      contentGate.release?.();
+    },
+  };
+}
 import type { InputModifiers } from "core";
 import { createMockStore } from "../../util/test/mockStore";
 import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
-import { initialSessionRuntime } from "../slices/sessionsSlice";
+import {
+  initialSessionRuntime,
+  removeSessionRuntime,
+  setSessionHistory,
+  setSessionMainEditorAttachmentsRestore,
+  updateHistoryItemByMessageId,
+} from "../slices/sessionsSlice";
 import { resetSessionSaveQueues } from "./sessionPersistence";
 import { resetSessionStreamCheckpoints } from "./sessionStreams";
 import { resetSessionStreamRunner } from "./sessionTools";
@@ -917,5 +972,206 @@ describe("submitSessionInput — revision ownership (Stage 2F)", () => {
       .reverse()
       .find((entry: any) => entry.message.role === "user");
     expect(textOf(lastUser.message.content)).toContain("hello world");
+  });
+});
+
+describe("submitSessionInput — stale target across the async content resolution (Stage 2F 收口)", () => {
+  beforeEach(() => {
+    resetSessionSaveQueues();
+    resetSessionStreamCheckpoints();
+    resetSessionStreamRunner();
+  });
+
+  function submit(store: ReturnType<typeof makeStore>, extra: any = {}) {
+    return run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+        ...extra,
+      }),
+    );
+  }
+
+  function saveCalls(store: ReturnType<typeof makeStore>) {
+    const spy = vi.spyOn(store.mockIdeMessenger, "request");
+    return spy.mock.calls.filter(([type]: any[]) => type === "history/save");
+  }
+
+  it("appends at the tail the window has now, without truncating it", async () => {
+    const store = makeStore();
+    const gate = pauseAfterContentResolution();
+
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const pending = submit(store);
+    await gate.reached();
+    // A hydration fills the window while the editor content is being resolved; it is
+    // not a content version, so nothing else stops the submit.
+    store.dispatch(
+      setSessionHistory({
+        sessionId: "s1",
+        history: [
+          item("x1", "user", "old head"),
+          item("x2", "assistant", "old head answer"),
+          item("u1", "user", "earlier"),
+          item("a1", "assistant", "sure"),
+        ],
+        origin: "hydration",
+      }),
+    );
+    gate.release();
+    await pending;
+
+    // The submitted turn lands after everything that was already there: a stale
+    // `inputIndex` would have been read as "replace at 2" and dropped u1/a1.
+    const ids = session(store).history.map((entry: any) => entry.message.id);
+    expect(ids.slice(0, 4)).toEqual(["x1", "x2", "u1", "a1"]);
+    expect(ids).toHaveLength(6);
+    expect(session(store).history.at(-1).message.role).toBe("assistant");
+  });
+
+  it("replaces the target it was asked for, even after the window shifted", async () => {
+    const store = makeStore({
+      history: [
+        item("u1", "user", "first"),
+        item("a1", "assistant", "answer"),
+        item("u2", "user", "second"),
+        item("a2", "assistant", "answer 2"),
+      ],
+    });
+    const gate = pauseAfterContentResolution();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    const pending = submit(store, { targetMessageId: "u2" });
+    await gate.reached();
+    store.dispatch(
+      setSessionHistory({
+        sessionId: "s1",
+        history: [
+          item("x1", "user", "head"),
+          item("x2", "assistant", "head answer"),
+          ...session(store).history,
+        ],
+        origin: "hydration",
+      }),
+    );
+    gate.release();
+    await pending;
+
+    const ids = session(store).history.map((entry: any) => entry.message.id);
+    expect(ids.slice(0, 4)).toEqual(["x1", "x2", "u1", "a1"]);
+    expect(ids).toHaveLength(6);
+  });
+
+  it("cancels the whole submit when the target identity is gone", async () => {
+    const store = makeStore({
+      history: [
+        item("u1", "user", "first"),
+        item("a1", "assistant", "answer"),
+        item("u2", "user", "second"),
+        item("a2", "assistant", "answer 2"),
+      ],
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const gate = pauseAfterContentResolution();
+
+    const pending = submit(store, { targetMessageId: "u2" });
+    await gate.reached();
+    // The target disappears without a content-version change (a hydration that no
+    // longer contains it): only the identity check can catch this one.
+    store.dispatch(
+      setSessionHistory({
+        sessionId: "s1",
+        history: [
+          item("u1", "user", "first"),
+          item("a1", "assistant", "answer"),
+        ],
+        origin: "hydration",
+      }),
+    );
+    gate.release();
+    await expect(pending).resolves.toBe(false);
+
+    // No commit, no save, no request: a stale submit must not rewrite another turn,
+    // and it must not silently degrade into an append.
+    expect(
+      session(store).history.map((entry: any) => entry.message.id),
+    ).toEqual(["u1", "a1"]);
+    expect(saveCalls(store)).toHaveLength(0);
+    expect(request).not.toHaveBeenCalledWith(
+      "llm/streamChat",
+      expect.anything(),
+    );
+  });
+
+  it("cancels when the content moved on during resolution", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const gate = pauseAfterContentResolution();
+    const pending = submit(store);
+    await gate.reached();
+    // A real content mutation (deleting a turn) — this is a new content version, so the
+    // submit that was prepared against the old one must not land on top of it.
+    store.dispatch(
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "a1",
+        updates: {
+          message: { id: "a1", role: "assistant", content: "edited" },
+        },
+      }),
+    );
+    gate.release();
+
+    // The wrapper turns the refusal into a reported failure (dialog), never a silent
+    // send: `false` is the established contract for "this send did not happen".
+    await expect(pending).resolves.toBe(false);
+    expect(session(store).history).toHaveLength(2);
+    expect(session(store).history.at(-1).message.content).toBe("edited");
+    expect((store.getState() as any).ui.showDialog).toBe(true);
+    expect(saveCalls(store)).toHaveLength(0);
+  });
+
+  it("cancels when the session is closed during resolution", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const gate = pauseAfterContentResolution();
+
+    const pending = submit(store);
+    await gate.reached();
+    store.dispatch(removeSessionRuntime({ sessionId: "s1" }));
+    gate.release();
+    await expect(pending).resolves.toBe(false);
+
+    expect(saveCalls(store)).toHaveLength(0);
+  });
+
+  it("clears the submit-side runtime only after a commit that happened", async () => {
+    const store = makeStore();
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const gate = pauseAfterContentResolution();
+    // What the editor layer stores when a previous send failed and the user must get
+    // the attachments back.
+    store.dispatch(
+      setSessionMainEditorAttachmentsRestore({
+        sessionId: "s1",
+        attachments: [{ name: "a.ts", path: "file:///a.ts", content: "x" }],
+      }),
+    );
+
+    const pending = submit(store);
+    await gate.reached();
+    store.dispatch(removeSessionRuntime({ sessionId: "s1" }));
+    gate.release();
+    await expect(pending).resolves.toBe(false);
+
+    // The runtime is gone, so the restore state cannot be observed on it; what matters
+    // is that the cancel path dispatched neither a save nor a stream request.
+    expect(saveCalls(store)).toHaveLength(0);
+    expect(request).not.toHaveBeenCalledWith(
+      "llm/streamChat",
+      expect.anything(),
+    );
   });
 });

@@ -1555,7 +1555,7 @@ describe("sessionsSlice — commitSubmittedTurn (Stage 2F)", () => {
         sessionId: "s1",
         userItem: submitted(),
         assistantPlaceholder: placeholder(),
-        insertionPoint: 1,
+        insertion: { kind: "append", expectedConversationRevision: before },
       }),
     );
 
@@ -1588,7 +1588,12 @@ describe("sessionsSlice — commitSubmittedTurn (Stage 2F)", () => {
         sessionId: "s1",
         userItem: submitted("edited"),
         assistantPlaceholder: placeholder(),
-        insertionPoint: 2,
+        insertion: {
+          kind: "replace",
+          targetMessageId: "u2",
+          expectedConversationRevision:
+            state.sessionsById.s1.conversationRevision,
+        },
       }),
     );
 
@@ -1626,7 +1631,11 @@ describe("sessionsSlice — commitSubmittedTurn (Stage 2F)", () => {
         sessionId: "s1",
         userItem: submitted(),
         assistantPlaceholder: placeholder(),
-        insertionPoint: 2,
+        insertion: {
+          kind: "replace",
+          targetMessageId: "u2",
+          expectedConversationRevision: before,
+        },
       }),
     );
 
@@ -1661,7 +1670,11 @@ describe("sessionsSlice — commitSubmittedTurn (Stage 2F)", () => {
         sessionId: "s1",
         userItem: submitted(),
         assistantPlaceholder: placeholder(),
-        insertionPoint: 1,
+        insertion: {
+          kind: "replace",
+          targetMessageId: "a1",
+          expectedConversationRevision: before,
+        },
       }),
     );
 
@@ -1677,10 +1690,140 @@ describe("sessionsSlice — commitSubmittedTurn (Stage 2F)", () => {
         sessionId: "missing",
         userItem: submitted(),
         assistantPlaceholder: placeholder(),
-        insertionPoint: 0,
+        insertion: { kind: "append", expectedConversationRevision: 0 },
       }),
     );
     expect(next.sessionsById).toEqual(state.sessionsById);
+  });
+
+  it("refuses a submit whose expected revision is no longer current", () => {
+    // The content moved on while the editor content was being resolved: the target
+    // identity may describe something else now, so the whole submit is dropped.
+    const state = stateWith({ history: [item("u1", "user", "hi")] });
+    const stale = state.sessionsById.s1.conversationRevision - 1;
+
+    const next = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "s1",
+        userItem: submitted(),
+        assistantPlaceholder: placeholder(),
+        insertion: { kind: "append", expectedConversationRevision: stale },
+      }),
+    );
+
+    expect(
+      next.sessionsById.s1.history.map((entry) => entry.message.id),
+    ).toEqual(["u1"]);
+    expect(next.sessionsById.s1.conversationRevision).toBe(
+      state.sessionsById.s1.conversationRevision,
+    );
+  });
+
+  it("refuses a replace whose target identity is gone instead of appending", () => {
+    const state = stateWith({
+      history: [item("u1", "user", "1"), item("a1", "assistant", "2")],
+    });
+    const before = state.sessionsById.s1.conversationRevision;
+
+    const next = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "s1",
+        userItem: submitted(),
+        assistantPlaceholder: placeholder(),
+        insertion: {
+          kind: "replace",
+          targetMessageId: "gone",
+          expectedConversationRevision: before,
+        },
+      }),
+    );
+
+    expect(
+      next.sessionsById.s1.history.map((entry) => entry.message.id),
+    ).toEqual(["u1", "a1"]);
+    expect(next.sessionsById.s1.conversationRevision).toBe(before);
+  });
+
+  it("locates a replace target by identity, not by a stale index", () => {
+    // The window grew in front of the target while the content was being resolved
+    // (hydration / prepend): the same number addresses a different turn by then.
+    let state = stateWith({
+      history: [
+        item("u1", "user", "1"),
+        item("a1", "assistant", "2"),
+        item("u2", "user", "3"),
+        item("a2", "assistant", "4"),
+      ],
+    });
+    const before = state.sessionsById.s1.conversationRevision;
+    // Two items appear in front of the target; the content revision does not change
+    // (hydration is not a new content version).
+    state = sessionsSlice.reducer(
+      state,
+      setSessionHistory({
+        sessionId: "s1",
+        history: [
+          item("x1", "user", "head"),
+          item("x2", "assistant", "head answer"),
+          ...state.sessionsById.s1.history,
+        ],
+        origin: "hydration",
+      }),
+    );
+    expect(state.sessionsById.s1.conversationRevision).toBe(before);
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "s1",
+        userItem: submitted("edited"),
+        assistantPlaceholder: placeholder(),
+        insertion: {
+          kind: "replace",
+          targetMessageId: "u2",
+          expectedConversationRevision: before,
+        },
+      }),
+    );
+
+    // The target and everything after it is replaced — the items before it survive,
+    // including the two that arrived during the resolution.
+    expect(
+      state.sessionsById.s1.history.map((entry) => entry.message.id),
+    ).toEqual(["x1", "x2", "u1", "a1", "n1", "p1"]);
+  });
+
+  it("appends at the current tail when the window grew during resolution", () => {
+    let state = stateWith({ history: [item("u1", "user", "1")] });
+    const before = state.sessionsById.s1.conversationRevision;
+    state = sessionsSlice.reducer(
+      state,
+      setSessionHistory({
+        sessionId: "s1",
+        history: [
+          ...state.sessionsById.s1.history,
+          item("a1", "assistant", "2"),
+        ],
+        origin: "hydration",
+      }),
+    );
+
+    state = sessionsSlice.reducer(
+      state,
+      commitSubmittedTurn({
+        sessionId: "s1",
+        userItem: submitted(),
+        assistantPlaceholder: placeholder(),
+        insertion: { kind: "append", expectedConversationRevision: before },
+      }),
+    );
+
+    // Nothing is truncated: the append happened at the end of the grown window.
+    expect(
+      state.sessionsById.s1.history.map((entry) => entry.message.id),
+    ).toEqual(["u1", "a1", "n1", "p1"]);
   });
 });
 

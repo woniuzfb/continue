@@ -209,6 +209,11 @@ export const submitSessionInput = createAsyncThunk<
             : windowIndex !== undefined
               ? windowToAbsoluteIndex(capturedOffset, windowIndex)
               : session.history.length;
+        // Stage 2F 收口: everything above was resolved against `session` — the snapshot
+        // taken **before** `resolveEditorContent` awaits. The revision is what makes
+        // that snapshot's validity checkable again at commit time, and the target is
+        // carried as an identity (a number would address another turn by then).
+        const expectedConversationRevision = session.conversationRevision;
         const existingMessage =
           inputIndex >= 0 && inputIndex < session.history.length
             ? session.history[inputIndex].message
@@ -291,19 +296,55 @@ export const submitSessionInput = createAsyncThunk<
         // placeholder, the compaction-summary reindex, exactly one `conversationRevision`
         // advance and one metrics-staleness drop. No state in which the placeholder is
         // visible next to an empty user message ever exists.
+        //
+        // The reducer validates the target itself (identity + expected revision) and does
+        // nothing when it no longer holds — so the success check below is the authority
+        // on whether this submit happened at all.
+        const submittedUserItem = userHistoryItem(
+          finalContent,
+          attachmentMeta,
+          editorState,
+          selectedContextItems,
+        );
         dispatch(
           commitSubmittedTurn({
             sessionId,
-            userItem: userHistoryItem(
-              finalContent,
-              attachmentMeta,
-              editorState,
-              selectedContextItems,
-            ),
+            userItem: submittedUserItem,
             assistantPlaceholder: assistantPlaceholder(),
-            insertionPoint: inputIndex,
+            insertion:
+              targetMessageId === undefined
+                ? { kind: "append", expectedConversationRevision }
+                : {
+                    kind: "replace",
+                    targetMessageId,
+                    expectedConversationRevision,
+                  },
           }),
         );
+        // The reducer reports nothing, so "did it commit?" must be answered by the state
+        // itself. Membership of the freshly minted user item id is the only **positive**
+        // signal: a revision comparison would be fooled by an unrelated bump that happens
+        // to land on the same number.
+        const afterCommit = selectSessionById(getState(), sessionId);
+        const committed =
+          !!afterCommit &&
+          afterCommit.history.some(
+            (item) => item.message.id === submittedUserItem.message.id,
+          );
+        if (!committed) {
+          // Either the conversation moved on while the content was being resolved (the
+          // target would have been stale) or the target message is gone. Either way: no
+          // save, no request — a stale submit must not rewrite another turn, and it must
+          // not silently become an append.
+          if (!afterCommit) {
+            throw new Error("Session no longer exists");
+          }
+          throw new Error(
+            afterCommit.conversationRevision !== expectedConversationRevision
+              ? "Cannot send: the conversation changed while the message was being prepared"
+              : "Cannot resend: the target message is no longer in the loaded history",
+          );
+        }
         dispatch(
           setSessionMainEditorAttachmentsRestore({
             sessionId,
