@@ -1685,6 +1685,12 @@ export interface ContinueUIConfig {
    * text (from `role:"thinking"` items and inline `<think>` reasoning) in
    * the copied text. */
   excludeThinkingFromCopy?: boolean;
+  /**
+   * Debug switch (default off): print the [submit-latency] instrumentation lines for the
+   * send path and the terminal save to the webview console (方案.md §7.2). Mirrors the
+   * template in `config/types.ts`, which is the source of this file.
+   */
+  showSubmitLatencyLogs?: boolean;
   /** Files larger than this (MB) are split into base64 chunks + manifest
    * when attached. Defaults to 1. */
   attachmentSplitThresholdMB?: number;

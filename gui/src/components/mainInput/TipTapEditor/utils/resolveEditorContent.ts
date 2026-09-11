@@ -15,6 +15,7 @@ import { setSessionGatheringContext } from "../../../../redux/slices/sessionsSli
 import {
   measureSubmitLatency,
   measureSubmitLatencySync,
+  recordSubmitLatency,
 } from "../../../../util/submitLatency";
 import { RootState } from "../../../../redux/store";
 import { processEditorContent } from "./processEditorContent";
@@ -97,24 +98,45 @@ export async function resolveEditorContent({
   }
 
   try {
-    const selectedContextItems = await measureSubmitLatency(
-      {
+    // One event for the whole phase: the duration and the classification are only both known
+    // after the call, and two `context-resolution` lines per send made the phase count
+    // ambiguous (a test asserts one).
+    const contextStartedAt = performance.now();
+    let gathered;
+    try {
+      gathered = await gatherContextItems({
+        sessionId,
+        contextRequests,
+        modifiers,
+        ideMessenger,
+        defaultContextProviders,
+        parts: slashedParts,
+        selectedCode,
+        getState,
+      });
+    } catch (error) {
+      recordSubmitLatency({
         phase: "context-resolution",
         sessionId,
-        requests: contextRequests.length,
-      },
-      () =>
-        gatherContextItems({
-          sessionId,
-          contextRequests,
-          modifiers,
-          ideMessenger,
-          defaultContextProviders,
-          parts: slashedParts,
-          selectedCode,
-          getState,
-        }),
-    );
+        durationMs: performance.now() - contextStartedAt,
+        ok: false,
+      });
+      throw error;
+    }
+
+    const { contextItems: selectedContextItems, issued } = gathered;
+    recordSubmitLatency({
+      phase: "context-resolution",
+      sessionId,
+      durationMs: performance.now() - contextStartedAt,
+      requests:
+        issued.mentions +
+        issued.defaultProviders +
+        issued.currentFile +
+        issued.codebase,
+      contextRequests: issued,
+      ok: true,
+    });
 
     return {
       selectedContextItems,
@@ -152,7 +174,16 @@ async function gatherContextItems({
   parts: MessagePart[];
   selectedCode: RangeInFile[];
   getState: () => RootState;
-}): Promise<ContextItemWithId[]> {
+}): Promise<{
+  contextItems: ContextItemWithId[];
+  /** Which context requests this call actually issued (for the latency log). */
+  issued: {
+    mentions: number;
+    defaultProviders: number;
+    currentFile: number;
+    codebase: number;
+  };
+}> {
   const defaultRequests: GetContextRequest[] = defaultContextProviders.map(
     (def) => ({
       provider: def.name,
@@ -173,6 +204,16 @@ async function gatherContextItems({
   );
   const contextItems: ContextItemWithId[] = [];
 
+  // What this call actually issues, counted where the decision is made. `requests` alone was
+  // misleading: the editor's mention list is often 0 while `currentFile` (or a default
+  // provider, or codebase) is still being fetched.
+  const issued = {
+    mentions: 0,
+    defaultProviders: 0,
+    currentFile: 0,
+    codebase: 0,
+  };
+
   const isInAgentMode =
     (getState().sessions.sessionsById[sessionId]?.mode ?? "chat") === "agent";
 
@@ -190,6 +231,8 @@ async function gatherContextItems({
   const mentionResults: ContextItemWithId[][] = new Array(
     deduplicatedInputs.length,
   );
+  issued.mentions = deduplicatedInputs.length;
+  issued.defaultProviders = defaultRequests.length;
   deduplicatedInputs.forEach((item, mentionIdx) => {
     parallelRequests.push(
       (async () => {
@@ -217,6 +260,7 @@ async function gatherContextItems({
     modifiers.useCodebase &&
     !deduplicatedInputs.some((item) => item.provider === "codebase")
   ) {
+    issued.codebase = 1;
     parallelRequests.push(
       (async () => {
         const result = await measureSubmitLatency(
@@ -243,6 +287,7 @@ async function gatherContextItems({
     !modifiers.noContext &&
     !deduplicatedInputs.some((item) => item.provider === "currentFile")
   ) {
+    issued.currentFile = 1;
     parallelRequests.push(
       (async () => {
         const currentFileResponse = await measureSubmitLatency(
@@ -305,5 +350,5 @@ async function gatherContextItems({
     },
     [],
   );
-  return deduplicatedOutputs;
+  return { contextItems: deduplicatedOutputs, issued };
 }

@@ -35,6 +35,7 @@ export type SubmitLatencyPhase =
   | "submit-to-commit"
   | "commit-turn"
   | "save-enqueue"
+  | "save-payload"
   | "stream-start"
   | "terminal-commit"
   | "terminal-identity"
@@ -49,6 +50,18 @@ export type SubmitLatencyEvent = {
   provider?: string;
   /** How many IPC requests the phase issued, when that is the point of the phase. */
   requests?: number;
+  /**
+   * Classification of the context requests the phase issued. Counted where the requests are
+   * actually decided (`gatherContextItems`), not from the editor's mention list.
+   */
+  contextRequests?: {
+    mentions: number;
+    defaultProviders: number;
+    currentFile: number;
+    codebase: number;
+  };
+  /** Approximate size of a payload the phase built, in MB (cheap length sum, no copy). */
+  payloadMB?: number;
   /** Whether the resolved turn actually carried context items. */
   hadContext?: boolean;
   /** Submit shape, so append and edit/resend can be compared separately. */
@@ -56,6 +69,23 @@ export type SubmitLatencyEvent = {
   /** `false` for a phase that ended in an error (still useful: it explains a gap). */
   ok?: boolean;
 };
+
+/**
+ * Logging is **off by default**: diagnostics must not become permanent console noise. The
+ * extension UI owns the switch (User Settings → "Show submit latency logs"), which is a
+ * `config.ui` flag; `Chat` syncs it here.
+ */
+let loggingEnabled = false;
+
+/** Called by the UI when the debug setting changes. */
+export function setSubmitLatencyLoggingEnabled(enabled: boolean): void {
+  loggingEnabled = enabled;
+}
+
+/** Whether the instrumentation currently prints. Exported for tests. */
+export function isSubmitLatencyLoggingEnabled(): boolean {
+  return loggingEnabled;
+}
 
 /**
  * Records one phase. Always cheap and never throws — an instrumentation failure must not
@@ -75,6 +105,9 @@ export type SubmitLatencyEvent = {
  * wait was **not** context IPC at all — which is exactly why the partition exists.
  */
 export function recordSubmitLatency(event: SubmitLatencyEvent): void {
+  if (!loggingEnabled) {
+    return;
+  }
   try {
     const details: string[] = [];
     if (event.durationMs !== undefined) {
@@ -85,6 +118,21 @@ export function recordSubmitLatency(event: SubmitLatencyEvent): void {
     }
     if (event.requests !== undefined) {
       details.push(`requests=${event.requests}`);
+    }
+    // Context requests are classified: a bare `requests=0` was misleading, because the
+    // editor's own mentions are 0 even when `currentFile` / providers / codebase are hit.
+    if (event.contextRequests !== undefined) {
+      const { mentions, defaultProviders, currentFile, codebase } =
+        event.contextRequests;
+      details.push(
+        `mentions=${mentions}`,
+        `providers=${defaultProviders}`,
+        `currentFile=${currentFile}`,
+        `codebase=${codebase}`,
+      );
+    }
+    if (event.payloadMB !== undefined) {
+      details.push(`payloadMB=${event.payloadMB.toFixed(1)}`);
     }
     if (event.insertion !== undefined) {
       details.push(event.insertion);

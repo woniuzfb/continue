@@ -1,5 +1,9 @@
 import { vi } from "vitest";
-import type { SubmitLatencyEvent } from "../submitLatency";
+import {
+  isSubmitLatencyLoggingEnabled,
+  setSubmitLatencyLoggingEnabled,
+  type SubmitLatencyEvent,
+} from "../submitLatency";
 
 /**
  * Captures the `[submit-latency]` lines the app prints.
@@ -11,6 +15,10 @@ import type { SubmitLatencyEvent } from "../submitLatency";
  */
 export function captureSubmitLatencyLines() {
   const lines: string[] = [];
+  // The instrumentation is off by default (a `config.ui` debug switch owns it), so a test
+  // that wants the lines has to turn it on — exactly like the UI does.
+  const wasEnabled = isSubmitLatencyLoggingEnabled();
+  setSubmitLatencyLoggingEnabled(true);
   const spy = vi.spyOn(console, "log").mockImplementation((...args: any[]) => {
     const line = String(args[0] ?? "");
     if (line.startsWith("[submit-latency]")) {
@@ -50,6 +58,9 @@ export function captureSubmitLatencyLines() {
         }
         return event;
       }),
-    restore: () => spy.mockRestore(),
+    restore: () => {
+      spy.mockRestore();
+      setSubmitLatencyLoggingEnabled(wasEnabled);
+    },
   };
 }

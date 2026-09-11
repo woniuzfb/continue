@@ -70,6 +70,7 @@ export function UserSettingsSection() {
   const dontMergeHistoricalReplyBubbles =
     config.ui?.dontMergeHistoricalReplyBubbles ?? true;
   const excludeThinkingFromCopy = config.ui?.excludeThinkingFromCopy ?? true;
+  const showSubmitLatencyLogs = config.ui?.showSubmitLatencyLogs ?? false;
   const disableSessionTitles = config.disableSessionTitles ?? false;
   const useCurrentFileAsContext =
     config.experimental?.useCurrentFileAsContext ?? false;
@@ -136,6 +137,15 @@ export function UserSettingsSection() {
                   value={excludeThinkingFromCopy}
                   onChange={(value) =>
                     handleUpdate({ excludeThinkingFromCopy: value })
+                  }
+                />
+                <UserSetting
+                  type="toggle"
+                  title="Show Submit Latency Logs"
+                  description="Debug: print the [submit-latency] timing lines for sending a message and for the terminal save to the webview console (Developer: Open Webview Developer Tools). Off by default."
+                  value={showSubmitLatencyLogs}
+                  onChange={(value) =>
+                    handleUpdate({ showSubmitLatencyLogs: value })
                   }
                 />
                 <UserSetting

@@ -1069,6 +1069,13 @@ declare global {
      */
     lazyLoadHistory?: boolean;
     /**
+     * 调试开关（默认关闭）：把发送路径与终态保存的 [submit-latency] 埋点打到
+     * webview 控制台（方案.md §7.2）。默认关，避免把诊断信息变成常态噪声。
+     *
+     * 注意：本文件整体是一个模板字符串，正文里不能出现反引号或美元花括号插值。
+     */
+    showSubmitLatencyLogs?: boolean;
+    /**
      * 懒加载开启时，初次加载的最近消息条数（默认 4）。
      * 注意这里是消息条数而非"轮数"，1 轮 = user+assistant = 2 条。
      */

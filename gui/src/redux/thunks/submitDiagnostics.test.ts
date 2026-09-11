@@ -10,6 +10,7 @@ import { resetSessionStreamCheckpoints } from "./sessionStreams";
 import { resetSessionStreamRunner } from "./sessionTools";
 import { submitSessionInput } from "./sessionSubmit";
 import { captureSubmitLatencyLines } from "../../util/test/submitLatencyCapture";
+import { setSubmitLatencyLoggingEnabled } from "../../util/submitLatency";
 import { resolveEditorContent } from "../../components/mainInput/TipTapEditor/utils/resolveEditorContent";
 
 /**
@@ -167,6 +168,61 @@ describe("submit diagnostics — gathering flag ownership", () => {
     resolveProvider!(undefined);
     await pending;
     expect(session(store).isGatheringContext).toBeFalsy();
+  });
+});
+
+describe("submit diagnostics — the debug switch", () => {
+  beforeEach(() => {
+    resetSessionSaveQueues();
+    resetSessionStreamCheckpoints();
+    resetSessionStreamRunner();
+  });
+
+  it("prints nothing until the debug setting is enabled", async () => {
+    const store = makeStore();
+    // Off is the state the module starts in (asserted separately for a fresh import); pin it
+    // here too, because an earlier test in this file turns it on.
+    setSubmitLatencyLoggingEnabled(false);
+    const printed: string[] = [];
+    const spy = vi
+      .spyOn(console, "log")
+      .mockImplementation((...args: any[]) => {
+        if (String(args[0] ?? "").startsWith("[submit-latency]")) {
+          printed.push(String(args[0]));
+        }
+      });
+
+    await run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+    expect(printed).toEqual([]);
+
+    // With the switch on (what the UI does when the setting changes), it prints again.
+    setSubmitLatencyLoggingEnabled(true);
+    await run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+    expect(printed.length).toBeGreaterThan(0);
+    setSubmitLatencyLoggingEnabled(false);
+    spy.mockRestore();
+  });
+});
+
+describe("submit diagnostics — default state", () => {
+  it("starts with logging disabled", async () => {
+    vi.resetModules();
+    const fresh = await import("../../util/submitLatency");
+    expect(fresh.isSubmitLatencyLoggingEnabled()).toBe(false);
   });
 });
 

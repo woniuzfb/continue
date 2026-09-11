@@ -69,6 +69,7 @@ import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
 import { stopActiveSessionStream } from "../../redux/thunks/sessionStreams";
 import { getLocalStorage, setLocalStorage } from "../../util/localStorage";
+import { setSubmitLatencyLoggingEnabled } from "../../util/submitLatency";
 import { EmptyChatBody } from "./EmptyChatBody";
 import { ExploreDialogWatcher } from "./ExploreDialogWatcher";
 import { useAutoScroll } from "./useAutoScroll";
@@ -177,6 +178,14 @@ export function Chat() {
   const showChatScrollbar = useAppSelector(
     (state) => state.config.config.ui?.showChatScrollbar,
   );
+  const showSubmitLatencyLogs = useAppSelector(
+    (state) => state.config.config.ui?.showSubmitLatencyLogs ?? false,
+  );
+  // The instrumentation module is deliberately store-agnostic, so the UI pushes the debug
+  // flag into it instead of the module reading Redux (方案.md §7.2: default off).
+  useEffect(() => {
+    setSubmitLatencyLoggingEnabled(showSubmitLatencyLogs);
+  }, [showSubmitLatencyLogs]);
   const codeToEdit = useSessionEditState()?.codeToEdit ?? [];
   const isInEdit = useSessionIsInEdit();
 

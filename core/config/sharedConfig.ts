@@ -44,6 +44,11 @@ export const sharedConfigSchema = z
     dontMergeReplyBubbles: z.boolean(),
     dontMergeHistoricalReplyBubbles: z.boolean(),
     excludeThinkingFromCopy: z.boolean(),
+    /**
+     * Debug switch (default off): print the `[submit-latency]` instrumentation lines for
+     * the send path and the terminal save to the webview console (方案.md §7.2).
+     */
+    showSubmitLatencyLogs: z.boolean(),
 
     // `tabAutocompleteOptions` in `ContinueConfig`
     useAutocompleteCache: z.boolean(),
@@ -208,6 +213,9 @@ export function modifyAnyConfigWithSharedConfig<
   if (sharedConfig.excludeThinkingFromCopy !== undefined) {
     configCopy.ui.excludeThinkingFromCopy =
       sharedConfig.excludeThinkingFromCopy;
+  }
+  if (sharedConfig.showSubmitLatencyLogs !== undefined) {
+    configCopy.ui.showSubmitLatencyLogs = sharedConfig.showSubmitLatencyLogs;
   }
 
   configCopy.experimental = {

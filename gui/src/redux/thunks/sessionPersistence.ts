@@ -6,7 +6,10 @@ import {
   type FullConversationMeasurementRequest,
 } from "core/util/fullConversationMetrics";
 import { resolveSessionMeasurementInputs } from "../util/sessionRequestOptions";
-import { recordSubmitLatency } from "../../util/submitLatency";
+import {
+  isSubmitLatencyLoggingEnabled,
+  recordSubmitLatency,
+} from "../../util/submitLatency";
 import {
   currentFullConversationMetricsEnvironment,
   currentFullConversationMetricsMeta,
@@ -161,6 +164,29 @@ function buildSessionPayload(
   const { wireHistory, savedMergedProvenance } = stripHistoryRuntimeFields(
     session.history,
   );
+  // Diagnostic for the terminal save cost: the GUI puts the **whole history** on the wire on
+  // every save, and each assistant item carries the full rendered prompt it was sent, so this
+  // payload grows quadratically with conversation length (a 400-turn session sums to ~47MB of
+  // prompt text in a synthetic measurement). A length sum is O(n) and allocates nothing —
+  // JSON.stringify to measure it would itself cost what we are trying to observe.
+  if (isSubmitLatencyLoggingEnabled()) {
+    let bytes = 0;
+    for (const item of wireHistory) {
+      const content = item.message?.content;
+      bytes +=
+        typeof content === "string"
+          ? content.length
+          : JSON.stringify(content ?? "").length;
+      for (const log of item.promptLogs ?? []) {
+        bytes += (log as { prompt?: string }).prompt?.length ?? 0;
+      }
+    }
+    recordSubmitLatency({
+      phase: "save-payload",
+      sessionId,
+      payloadMB: bytes / 1024 / 1024,
+    });
+  }
   const payload = {
     sessionId,
     title: session.title,
