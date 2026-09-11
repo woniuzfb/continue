@@ -198,7 +198,13 @@ async function performSave(
   // The response is authoritative: an empty first turn must *clear* the old
   // one, otherwise a deleted/emptied session keeps serving a stale first turn
   // (方案.md §五.5).
-  if (responseIsCurrent && result.content?.firstTurnItems !== undefined) {
+  // USER_SUBMITTED contains an intentionally empty assistant placeholder and
+  // is not an authoritative completed first-turn cache.
+  if (
+    responseIsCurrent &&
+    request.reason !== "USER_SUBMITTED" &&
+    result.content?.firstTurnItems !== undefined
+  ) {
     // P4b-2: the same fallback report as the load paths. The dispatch below is
     // unchanged — only the reporting helper variant is new, so nothing about
     // dirty / historyRevision / persistence moves because of the report.

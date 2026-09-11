@@ -214,7 +214,11 @@ export function Chat() {
     async (
       editorState: JSONContent,
       modifiers: InputModifiers,
-      index?: number,
+      // A number is a window index (fresh at click time, e.g. the error dialog);
+      // an object addresses the message by identity. Inline history editors use
+      // the identity: their `onEnter` is captured once at mount, so a positional
+      // index would go stale as soon as the window is trimmed or hydrated.
+      position?: number | { targetMessageId: string },
       editorToClearOnSend?: Editor,
       attachments?: AttachedFile[],
     ): Promise<boolean> => {
@@ -272,7 +276,11 @@ export function Chat() {
             sessionId,
             editorState,
             modifiers,
-            index,
+            ...(typeof position === "number"
+              ? { index: position }
+              : position
+                ? { targetMessageId: position.targetMessageId }
+                : {}),
             attachments,
           }),
         );
@@ -527,7 +535,9 @@ export function Chat() {
         return (
           <ContinueInputBox
             onEnter={(editorState, modifiers) =>
-              sendInput(editorState, modifiers, index)
+              sendInput(editorState, modifiers, {
+                targetMessageId: message.id,
+              })
             }
             attachments={attachments}
             isLastUserInput={isLastUserInput(index)}

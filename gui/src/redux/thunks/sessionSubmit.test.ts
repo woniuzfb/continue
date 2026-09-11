@@ -39,23 +39,36 @@ function item(
 
 type StoreOptions = {
   history?: ChatHistoryItemWithMessageId[];
+  firstTurnItems?: ChatHistoryItemWithMessageId[];
   truncated?: boolean;
   loadedOffset?: number;
   model?: boolean;
+  modelName?: string;
+  hasPersistedBaseline?: boolean;
 };
 
 function makeStore(options: StoreOptions = {}) {
   const {
     history = [item("u1", "user", "earlier"), item("a1", "assistant", "sure")],
+    firstTurnItems = [],
     truncated = false,
     loadedOffset = 0,
     model = true,
+    modelName = "gpt-4o",
+    hasPersistedBaseline = false,
   } = options;
 
   const s1 = initialSessionRuntime("s1", "Chat 1", {
     history,
+    firstTurnItems,
     mode: "agent",
     chatModelTitle: "gpt-4o",
+    persistence: {
+      state: "clean",
+      revision: 0,
+      persistedRevision: 0,
+      hasPersistedBaseline,
+    },
     pagination: {
       truncated,
       loadedOffset,
@@ -90,7 +103,7 @@ function makeStore(options: StoreOptions = {}) {
                 {
                   title: "gpt-4o",
                   provider: "openai",
-                  model: "gpt-4o",
+                  model: modelName,
                 } as any,
               ]
             : [],
@@ -343,6 +356,169 @@ describe("submitSessionInput", () => {
     // Nothing was loaded, nothing was written.
     expect(session(store).history).toHaveLength(2);
     expect(request).not.toHaveBeenCalledWith("history/load", expect.anything());
+  });
+
+  it("resolves an edit by identity even when the captured window index is stale", async () => {
+    // Regression: an inline history bubble captures its `onEnter` once, when it
+    // mounts, so its positional index goes stale as soon as the window is
+    // trimmed or fully hydrated (a post-save trim, a full load). The identity
+    // survives those, so it is re-resolved against the *current* window.
+    const store = makeStore({ truncated: true, loadedOffset: 4 });
+    store.mockIdeMessenger.responses["history/load"] = {
+      history: [
+        item("h1", "user", "head user"),
+        item("h2", "assistant", "head answer"),
+        item("h3", "user", "head user 2"),
+        item("h4", "assistant", "head answer 2"),
+      ],
+    } as any;
+
+    // `u1` is window index 0. A stale `index: 9` must be ignored, not honoured.
+    expect(
+      await run(
+        store,
+        submitSessionInput({
+          sessionId: "s1",
+          editorState: EDITOR_STATE,
+          modifiers: MODIFIERS,
+          targetMessageId: "u1",
+          index: 9,
+        }),
+      ),
+    ).toBe(true);
+
+    const target = session(store);
+    // 4 frozen head items + the new user/assistant pair; the replaced tail is gone.
+    expect(target.history).toHaveLength(6);
+    expect(target.history[4].message.role).toBe("user");
+    expect(target.history[5].message.role).toBe("assistant");
+    expect(
+      target.history.some(
+        (h: ChatHistoryItemWithMessageId) =>
+          h.message.id === "u1" || h.message.id === "a1",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps a complete Local Provider first turn across repeated edits", async () => {
+    const originalFirstTurn = [
+      item("u1", "user", "original question"),
+      item("a1", "assistant", "original answer with substantial context"),
+    ];
+    const store = makeStore({
+      history: originalFirstTurn,
+      firstTurnItems: originalFirstTurn,
+      modelName: "openrouter:local-model",
+      hasPersistedBaseline: true,
+    });
+    store.mockIdeMessenger.responseHandlers["history/save"] = async (
+      payload: any,
+    ) => ({
+      firstTurnItems: payload.history,
+      totalHistoryCount: payload.history.length,
+    });
+    store.mockIdeMessenger.responseHandlers["llm/compileChat"] = async (
+      payload: any,
+    ) => ({
+      compiledChatMessages: payload.messages,
+      didPrune: false,
+      inputTokens: JSON.stringify(payload.messages).length,
+      contextLength: 100_000,
+      contextPercentage: JSON.stringify(payload.messages).length / 100_000,
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    expect(
+      await run(
+        store,
+        submitSessionInput({
+          sessionId: "s1",
+          editorState: EDITOR_STATE,
+          modifiers: MODIFIERS,
+          targetMessageId: "u1",
+        }),
+      ),
+    ).toBe(true);
+
+    const firstReplacementId = session(store).history.find(
+      (entry: ChatHistoryItemWithMessageId) => entry.message.role === "user",
+    ).message.id;
+    expect(firstReplacementId).not.toBe("u1");
+    await vi.waitFor(() => {
+      expect(
+        session(store).firstTurnItems.some(
+          (entry: ChatHistoryItemWithMessageId) =>
+            entry.message.role === "assistant" &&
+            entry.message.content === "This is a test",
+        ),
+      ).toBe(true);
+    });
+
+    expect(
+      await run(
+        store,
+        submitSessionInput({
+          sessionId: "s1",
+          editorState: EDITOR_STATE,
+          modifiers: MODIFIERS,
+          targetMessageId: firstReplacementId,
+        }),
+      ),
+    ).toBe(true);
+
+    expect(
+      session(store).firstTurnItems.some(
+        (entry: ChatHistoryItemWithMessageId) =>
+          entry.message.role === "assistant" &&
+          entry.message.content === "This is a test",
+      ),
+    ).toBe(true);
+    const compileCalls = request.mock.calls.filter(
+      ([messageType]) => messageType === "llm/compileChat",
+    );
+    expect(compileCalls).toHaveLength(2);
+    expect(JSON.stringify((compileCalls[0][1] as any).messages)).toContain(
+      "original answer with substantial context",
+    );
+    // The second edit must retain the completed first edited turn. The broken
+    // path synchronously rebuilt `firstTurnItems` from `new user + empty
+    // assistant`, so this compile contained almost no context and its metric
+    // remained near zero.
+    expect(JSON.stringify((compileCalls[1][1] as any).messages)).toContain(
+      "This is a test",
+    );
+  });
+
+  it("hydrates a trimmed historical identity before resend", async () => {
+    const store = makeStore({ truncated: true, loadedOffset: 2 });
+    store.mockIdeMessenger.responses["history/load"] = {
+      history: [
+        item("h1", "user", "historical question"),
+        item("h2", "assistant", "historical answer"),
+        item("u1", "user", "earlier"),
+        item("a1", "assistant", "sure"),
+      ],
+    } as any;
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    expect(
+      await run(
+        store,
+        submitSessionInput({
+          sessionId: "s1",
+          editorState: EDITOR_STATE,
+          modifiers: MODIFIERS,
+          targetMessageId: "h1",
+        }),
+      ),
+    ).toBe(true);
+
+    expect(request).toHaveBeenCalledWith("history/load", { id: "s1" });
+    const target = session(store);
+    expect(target.history).toHaveLength(2);
+    expect(target.history[0].message.role).toBe("user");
+    expect(target.history[0].message.id).not.toBe("h1");
+    expect(target.history[1].message.role).toBe("assistant");
   });
 
   it("is a no-op for an unknown session", async () => {

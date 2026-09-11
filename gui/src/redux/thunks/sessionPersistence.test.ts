@@ -379,6 +379,34 @@ describe("sessionPersistence.saveSession response handling", () => {
     });
   });
 
+  it("does not replace the first-turn cache from USER_SUBMITTED placeholder history", async () => {
+    const originalFirstTurn = [
+      item("u1", "user", "original question"),
+      item("a1", "assistant", "completed answer"),
+    ];
+    const store = makeStore({ firstTurnItems: originalFirstTurn });
+    store.mockIdeMessenger.request = vi.fn().mockResolvedValue({
+      status: "success",
+      content: {
+        firstTurnItems: [
+          item("u2", "user", "edited question"),
+          item("a2", "assistant", ""),
+        ],
+        totalHistoryCount: 2,
+      },
+      done: true,
+    }) as any;
+    await run(
+      store,
+      saveSession({ sessionId: "s1", reason: "USER_SUBMITTED" }),
+    );
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.firstTurnItems.map(
+        (entry) => entry.message.content,
+      ),
+    ).toEqual(["original question", "completed answer"]);
+  });
+
   it("clears a stale first turn and summary when the response omits them", async () => {
     const store = makeStore({
       firstTurnItems: [item("old1", "user", "stale first turn")],

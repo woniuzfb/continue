@@ -132,6 +132,10 @@ export function createEditorConfig(options: {
   const inDropdownRef = useRef(false);
   const defaultModelRef = useUpdatingRef(defaultModel);
   const isStreamingRef = useUpdatingRef(isStreaming);
+  // `useEditor` and its Enter shortcut are created once. Historical bubbles
+  // may be replaced with a new message ID after resend, so the callback must
+  // always dispatch through the latest props rather than a stale closure.
+  const onEnterRef = useUpdatingRef(props.onEnter);
   const hasAttachmentsRef = useUpdatingRef(props.hasAttachments);
   const getSubmenuContextItemsRef = useUpdatingRef(getSubmenuContextItems);
   const availableContextProvidersRef = useUpdatingRef(
@@ -480,7 +484,7 @@ export function createEditorConfig(options: {
       addRef.current(json);
     }
 
-    props.onEnter(json, modifiers, editor);
+    onEnterRef.current(json, modifiers, editor);
   };
 
   return { editor, onEnter };

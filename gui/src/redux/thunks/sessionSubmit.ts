@@ -20,13 +20,16 @@ import {
 import { windowToAbsoluteIndex } from "../util/historyIndex";
 import {
   carrierMessageIdOf,
+  findGuiIndexContainingMessageId,
   windowHasUnsavedMerge,
 } from "../util/historyTarget";
 import {
   markSessionDirty,
   resetSessionCodeBlockApplyIndex,
+  clearSessionConversationSummary,
   setSessionHistory,
   setSessionMainEditorAttachmentsRestore,
+  setSessionConversationSummary,
   updateHistoryItemByMessageId,
 } from "../slices/sessionsSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
@@ -58,8 +61,23 @@ export type SessionSubmitInput = {
   /**
    * Index in the session's *loaded* history to replace (retry / edit-and-resend).
    * Absolute index is computed after the full history is loaded.
+   *
+   * Prefer `targetMessageId` where the caller knows it: a window index is only
+   * meaningful against the array it was read from, and a bubble's index moves
+   * as the window is trimmed or fully hydrated.
    */
   index?: number;
+  /**
+   * Identity of the message to replace. Preferred over `index`.
+   *
+   * An inline history editor resolves its `onEnter` once, when the bubble
+   * mounts, so a positional `index` captured there goes stale the moment the
+   * window changes underneath it (a post-save trim, a full hydration): the next
+   * edit then addresses the wrong row or aborts with "no longer in the loaded
+   * history". The message id is stable across all of those, so the target is
+   * re-resolved in the **current** window at send time.
+   */
+  targetMessageId?: string;
   attachments?: AttachedFile[];
 };
 
@@ -115,7 +133,25 @@ export const submitSessionInput = createAsyncThunk<
         }
         const windowHasMerge = windowHasUnsavedMerge(pre.history);
         let targetMessageId: string | undefined;
-        if (index !== undefined) {
+        // The window index used for the arithmetic below. `index` is used
+        // verbatim only when the caller did not supply an identity.
+        let windowIndex = index;
+        if (input.targetMessageId !== undefined) {
+          // Identity wins: re-resolve the target's position in the window **now**.
+          // If lazy loading has trimmed the bubble, resolve the identity against
+          // disk below rather than rejecting a real historical message.
+          const found = findGuiIndexContainingMessageId(
+            pre.history,
+            input.targetMessageId,
+          );
+          windowIndex = found >= 0 ? found : undefined;
+          targetMessageId = input.targetMessageId;
+          if (found < 0 && !pre.pagination.truncated) {
+            throw new Error(
+              "Cannot resend: the target message is no longer in the loaded history",
+            );
+          }
+        } else if (index !== undefined) {
           const clicked = pre.history[index];
           targetMessageId = clicked ? carrierMessageIdOf(clicked) : undefined;
           if (targetMessageId === undefined) {
@@ -139,7 +175,13 @@ export const submitSessionInput = createAsyncThunk<
         // address the **window** coordinate, because the replacement below writes
         // to `session.history`. A miss aborts instead of editing another message.
         let resolvedIndex: number | undefined;
-        if (targetMessageId !== undefined && windowHasMerge) {
+        if (
+          targetMessageId !== undefined &&
+          (windowHasMerge || windowIndex === undefined)
+        ) {
+          // A merged GUI item or a trimmed-away historical bubble cannot be
+          // addressed with offset arithmetic. Hydrate and match the stable ID
+          // against disk, then use the post-hydration GUI coordinate.
           const resolved = await dispatch(
             resolveHistoryMutationTarget({ sessionId, targetMessageId }),
           ).unwrap();
@@ -165,8 +207,8 @@ export const submitSessionInput = createAsyncThunk<
         const inputIndex =
           resolvedIndex !== undefined
             ? resolvedIndex
-            : index !== undefined
-              ? windowToAbsoluteIndex(capturedOffset, index)
+            : windowIndex !== undefined
+              ? windowToAbsoluteIndex(capturedOffset, windowIndex)
               : session.history.length;
         const existingMessage =
           inputIndex >= 0 && inputIndex < session.history.length
@@ -197,6 +239,37 @@ export const submitSessionInput = createAsyncThunk<
             : [...session.history, userItem, assistantPlaceholder()];
 
         dispatch(setSessionHistory({ sessionId, history: nextHistory }));
+        // `firstTurnItems` is the authoritative original first turn persisted
+        // for the Local Provider conversation key. Never rebuild it from an
+        // edited tail: when the edited bubble is itself the first/only turn,
+        // doing so replaces the original key with `new user + empty assistant`.
+        // The first edit may appear valid, but the next edit then compiles an
+        // almost-empty request and leaves ContextStatus near zero.
+        //
+        // A brand-new session with no first-turn cache safely uses the full
+        // current history; the USER_SUBMITTED save fills the authoritative
+        // cache from disk.
+        const oldSummary = session.latestConversationSummary;
+        const retainedSummaryIndex = oldSummary
+          ? nextHistory.findIndex(
+              (item) =>
+                item.message.id === oldSummary.sourceMessageId &&
+                item.conversationSummary === oldSummary.content,
+            )
+          : -1;
+        if (oldSummary && retainedSummaryIndex < 0) {
+          dispatch(clearSessionConversationSummary({ sessionId }));
+        } else if (oldSummary && retainedSummaryIndex >= 0) {
+          dispatch(
+            setSessionConversationSummary({
+              sessionId,
+              summary: {
+                ...oldSummary,
+                sourceAbsoluteIndex: retainedSummaryIndex,
+              },
+            }),
+          );
+        }
         dispatch(markSessionDirty({ sessionId }));
         dispatch(
           setSessionMainEditorAttachmentsRestore({
