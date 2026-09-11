@@ -125,6 +125,56 @@ describe("normalizePersistedContextMetrics (方案.md §五.16.5)", () => {
     ).toEqual({ freshness: "unavailable" });
   });
 
+  it("accepts a Result that came back from a real JSON round-trip", () => {
+    // 方案.md §7.1.4: every persisted number is finite, so the Result Core wrote is
+    // the Result the GUI reads back after a reload — no `null`, no `unavailable`.
+    const result = {
+      metrics: {
+        inputTokens: 140000,
+        contextLength: 100000,
+        availableTokens: -1000,
+        // 非正预算时的饱和比例（有限、JSON 安全、× 100 后仍有限）。
+        contextPercentage: Number.MAX_SAFE_INTEGER,
+        exceedsContext: true,
+      },
+      meta: {
+        conversationRevision: 7,
+        constructionIdentity: "identity-7",
+        schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+      },
+    };
+    const roundTripped = JSON.parse(JSON.stringify(result));
+
+    expect(normalizePersistedContextMetrics(roundTripped)).toEqual({
+      metrics: roundTripped.metrics,
+      meta: roundTripped.meta,
+      freshness: "fresh",
+    });
+  });
+
+  it("refuses a Result whose percentage was degraded to null by JSON", () => {
+    // What a `contextPercentage: Infinity` write leaves on disk. The reader must NOT
+    // guess `Infinity` back: `null` can equally come from a corrupt file, a partial
+    // write or a hand edit. `unavailable` means "no usable value" ⇒ the gate
+    // recomputes once, which is the correct recovery.
+    expect(
+      normalizePersistedContextMetrics({
+        metrics: {
+          inputTokens: 140000,
+          contextLength: 100000,
+          availableTokens: -1000,
+          contextPercentage: null as any,
+          exceedsContext: true,
+        },
+        meta: {
+          conversationRevision: 7,
+          constructionIdentity: "identity-7",
+          schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+        },
+      }),
+    ).toEqual({ freshness: "unavailable" });
+  });
+
   it("reports absent metrics as unavailable, not as zero", () => {
     expect(normalizePersistedContextMetrics(undefined)).toEqual({
       freshness: "unavailable",

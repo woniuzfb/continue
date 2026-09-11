@@ -194,8 +194,10 @@ export function freshFullConversationMetrics(
  *
  * 1. `fresh` 只代表「这份数值描述的就是**当前**内容与**当前**构造环境」，它是唯一可以被
  *    自动决策（自动压缩阈值之类）当作权威的态；UI 可以继续显示 `stale` 的 last-known 值。
- * 2. `measuring` 优先于 `stale`：数值没到 ≠ 数值过期，消费者不该把飞行中的重算当成「已
- *    有一份旧值可用」。
+ * 2. 完整优先级是 **fresh > measuring > stale > unavailable**：先看能不能证明 fresh，
+ *    只有证明不了时才看有没有计量在飞（数值没到 ≠ 数值过期，消费者不该把飞行中的重算当成
+ *    「已有一份旧值可用」），再退到 stale / unavailable。也就是说：一份可证明为 fresh 的
+ *    快照，即使有冗余计量在飞，仍然报 fresh。
  * 3. 判定完全基于**已存状态**，不重算 canonical identity —— 渲染路径上不能重跑系统消息
  *    渲染（流式期间每个 chunk 都会重新选择 state）。这里**信任**环境指纹与 meta 同源：
  *    两者由同一次 `setSessionFullConversationMetrics` 原子写入，而 canonical identity 的

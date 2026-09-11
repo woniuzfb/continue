@@ -51,7 +51,13 @@ function measurement(
 }
 
 /** 注入给 `measureFullConversation` 的计量实现：真实 no-prune 计量 + 记录入参。 */
-function realMeasure(sink?: { messages: ChatMessage[] }) {
+function realMeasure(
+  sink?: { messages: ChatMessage[] },
+  budget: { knownContextLength: number; maxTokens: number } = {
+    knownContextLength: 128000,
+    maxTokens: 2000,
+  },
+) {
   return (messages: ChatMessage[]) => {
     if (sink) {
       sink.messages = messages;
@@ -59,8 +65,8 @@ function realMeasure(sink?: { messages: ChatMessage[] }) {
     return measureChatMessagesNoPrune({
       modelName: MODEL,
       msgs: messages,
-      knownContextLength: 128000,
-      maxTokens: 2000,
+      knownContextLength: budget.knownContextLength,
+      maxTokens: budget.maxTokens,
       supportsImages: true,
     });
   };
@@ -133,6 +139,84 @@ describe("history/save with a full-conversation measurement", () => {
       schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
     });
     expect(onDisk.history).toHaveLength(6);
+  });
+
+  it("writes a JSON-safe Result when the output reservation consumes the window", async () => {
+    // 方案.md §7.1.4: the anomaly case (no input budget) must still be persistable.
+    // `JSON.stringify(Infinity)` is `null`, so an infinite percentage would make the
+    // response and the file disagree — and the reader grades a Result with a null
+    // percentage as `unavailable` (方案.md §五.16.5), i.e. the save would look failed
+    // after a reload.
+    const sessionId = uuidv4();
+    const request = measurement({
+      completionOptions: { model: MODEL, maxTokens: 5000 },
+    });
+
+    const response = await historyManager.save(
+      sessionWith(sessionId, history()),
+      {
+        measureFullConversation: (finalHistory) =>
+          measureFullConversation({
+            history: finalHistory,
+            request,
+            measure: realMeasure(undefined, {
+              knownContextLength: 1000,
+              maxTokens: 5000,
+            }),
+          }),
+      },
+    );
+
+    const result = response.fullConversationMetrics!;
+    expect(result.metrics.availableTokens).toBeLessThanOrEqual(0);
+    expect(result.metrics.exceedsContext).toBe(true);
+    expect(Number.isFinite(result.metrics.contextPercentage)).toBe(true);
+    // Byte-for-byte the same object comes back from the file.
+    const onDisk = readRawSession(sessionId);
+    expect(onDisk.contextMetrics).toEqual(result);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+  });
+
+  it("refuses to persist a non-JSON-safe measurement", async () => {
+    // 方案.md §7.1.4 write-boundary backstop: `JSON.stringify(Infinity)` is `null`, and
+    // the reader must not guess a value back from a lossy `null`. A producer bug must
+    // therefore degrade to "metrics unchanged", never to a corrupt file.
+    const sessionId = uuidv4();
+    const first = await historyManager.save(sessionWith(sessionId, history()), {
+      measureFullConversation: (finalHistory) =>
+        measureFullConversation({
+          history: finalHistory,
+          request: measurement(),
+          measure: realMeasure(),
+        }),
+    });
+    const goodMetrics = first.fullConversationMetrics!;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const second = await historyManager.save(
+      sessionWith(sessionId, history(4)),
+      {
+        measureFullConversation: (finalHistory) =>
+          measureFullConversation({
+            history: finalHistory,
+            request: measurement(),
+            measure: () => ({
+              inputTokens: 10,
+              contextLength: 100,
+              availableTokens: 0,
+              contextPercentage: Number.POSITIVE_INFINITY,
+              exceedsContext: true,
+            }),
+          }),
+      },
+    );
+
+    // The save itself still succeeds and the new history is on disk…
+    expect(readRawSession(sessionId).history).toHaveLength(8);
+    // …but nothing was returned as "the metrics this save wrote", and the previous
+    // value is preserved instead of being replaced by `null`.
+    expect(second.fullConversationMetrics).toBeUndefined();
+    expect(readRawSession(sessionId).contextMetrics).toEqual(goodMetrics);
   });
 
   it("measures the history it writes, not the runtime window", async () => {

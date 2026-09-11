@@ -2,7 +2,10 @@ import * as fs from "fs";
 
 import { BaseSessionMetadata, Session } from "../index.js";
 import type { PersistedContextMetrics } from "../index.js";
-import type { FullConversationMetricsResult } from "./fullConversationMetrics";
+import {
+  isJsonSafeMetricsSnapshot,
+  type FullConversationMetricsResult,
+} from "./fullConversationMetrics";
 import { ListHistoryOptions } from "../protocol/core.js";
 
 import { NEW_SESSION_TITLE } from "./constants.js";
@@ -609,7 +612,17 @@ export class HistoryManager {
     // 下一次保存/计量会收敛。
     let fullConversationMetrics: FullConversationMetricsResult | undefined;
     if (options?.measureFullConversation) {
-      fullConversationMetrics = options.measureFullConversation(finalHistory);
+      const measured = options.measureFullConversation(finalHistory);
+      // 方案.md §7.1.4 的写入边界兜底：JSON 没有非有限数（`Infinity` ⇒ `null`），
+      // 把一个读方必然判为 `unavailable` 的值写进磁盘没有意义 —— 保留磁盘原值即可。
+      if (isJsonSafeMetricsSnapshot(measured.metrics)) {
+        fullConversationMetrics = measured;
+      } else {
+        console.warn(
+          "history/save: skipping a non-JSON-safe full-conversation measurement",
+          measured.metrics,
+        );
+      }
     }
 
     // 不携带计量的保存**不得**改动磁盘上已有的 metrics：GUI 载荷里的

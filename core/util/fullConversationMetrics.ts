@@ -158,3 +158,27 @@ export function fullConversationConstructionIdentity(
 ): string {
   return canonicalJson(inputs);
 }
+
+/**
+ * 方案.md §7.1.4：快照必须**有限且 JSON-safe**。
+ *
+ * 这份快照会经 `history/save` 持久化到 `Session.contextMetrics`，而 JSON 没有非有限数：
+ * `JSON.stringify` 把 `Infinity` / `NaN` 写成 `null`，读回时 §五.16.5 的归一化只看到 `null`
+ * 且**不得**猜回原始值，于是「刚写下的 Result 一 reload 就 `unavailable`」。
+ *
+ * 生产侧的真实修法是让计量本身只产出有限值（`countTokens.ts` 的
+ * `OVER_BUDGET_CONTEXT_PERCENTAGE`）；这个谓词是**写入边界的兜底**：与其把一个自己就知道
+ * 读方必须拒绝的值写进磁盘，不如保留磁盘上已有的 metrics（并大声 warn），让下一次计量收敛。
+ * 它不改变 history 的完整性 —— 计量失败从来不影响保存会话内容。
+ */
+export function isJsonSafeMetricsSnapshot(
+  metrics: FullConversationMetricsSnapshot,
+): boolean {
+  return (
+    Number.isFinite(metrics.inputTokens) &&
+    Number.isFinite(metrics.contextLength) &&
+    Number.isFinite(metrics.availableTokens) &&
+    Number.isFinite(metrics.contextPercentage) &&
+    typeof metrics.exceedsContext === "boolean"
+  );
+}

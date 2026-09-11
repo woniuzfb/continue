@@ -144,6 +144,27 @@ describe("ContextStatus reads the full-conversation metrics (Stage 2E)", () => {
     expect(ring.getAttribute("class")).toContain("text-error");
   });
 
+  it("clamps a saturated (over-budget) percentage to a full ring", () => {
+    // 方案.md §7.1.4: a non-positive budget reports a very large but **finite**
+    // percentage. The UI math (`× 100`) must stay finite too, otherwise the
+    // non-finite number simply moves one layer up.
+    const store = makeStore({
+      fullConversationMetrics: {
+        inputTokens: 140000,
+        contextLength: 100000,
+        availableTokens: -1000,
+        contextPercentage: Number.MAX_SAFE_INTEGER,
+        exceedsContext: true,
+      },
+    });
+    const { getByTestId } = renderStatus(store);
+    const ring = getByTestId(RING) as unknown as SVGElement;
+
+    expect(Number.isFinite(dashOffsetOf(ring))).toBe(true);
+    expect(dashOffsetOf(ring)).toBe(0);
+    expect(ring.getAttribute("class")).toContain("text-error");
+  });
+
   it("draws an empty ring when there is no usable snapshot at all", () => {
     const { getByTestId } = renderStatus(makeStore({}));
     const ring = getByTestId(RING) as unknown as SVGElement;

@@ -171,9 +171,18 @@ export const loadSessionRuntime = createAsyncThunk<
         // 只有数值（无身份即 stale）。
         //
         // 归一化的 freshness **不**被存下来：它是「与**当前**环境可比」的意思，而当前环境
-        // 只能由门禁（激活时的 `ensureFullConversationMetrics`）去比。这里不写环境指纹，
-        // 因此磁盘恢复的快照在 selector 眼里一律 stale，直到第一次本进程计量落地
-        // （已知限制 #50：重启后首次激活必然重算一次）。
+        // 只能由门禁（激活时的 `ensureFullConversationMetrics`）去比。这里**刻意不写**
+        // 环境指纹，所以磁盘恢复的快照在 selector 眼里先是 stale，首次激活由门禁分两种：
+        //
+        //   三项身份（schema / conversationRevision / canonical identity）都能证明相等
+        //     ⇒ 只修复环境指纹（`refreshSessionFullConversationMetricsEnvironment`），
+        //       不发任何请求，直接回到 fresh；
+        //   任何一项证明不了或不等
+        //     ⇒ 发起一次重算（`history/measureConversation`）。
+        //
+        // 常见情形是重算：`conversationRevision` 在重启后从 0 重新开始，而磁盘 meta 记的是
+        // 保存当刻的版本号，两者通常不等（已知限制 #50）。这里也不把磁盘 revision 搬进
+        // runtime —— 它是另一个量（§五.16.1：revision 是本进程的内容版本计数，不是持久化代次）。
         fullConversationMetrics: persistedSnapshot.metrics,
         fullConversationMetricsMeta: persistedSnapshot.meta,
         ...mergeSettings(getState()),

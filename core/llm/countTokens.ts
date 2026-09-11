@@ -875,6 +875,25 @@ export type ChatTokenMeasurement = {
   exceedsContext: boolean;
 };
 
+/**
+ * 方案.md §7.1.4：预算非正（`availableTokens <= 0`）且有输入时的**有限饱和比例**。
+ *
+ * 为什么不是 `Infinity`（Stage 2C 的原始写法，实测有缺陷）：这个结果会被
+ * `history/save` 持久化到 `Session.contextMetrics` 并落盘，而
+ * `JSON.stringify({contextPercentage: Infinity})` 是 `{"contextPercentage":null}`
+ * —— 读回时 §五.16.5 的归一化只看到 `null`，既不能猜回 `Infinity`（`null` 也可能来自文件
+ * 损坏 / 半截写入 / 手工编辑），只能判该 Result `unavailable`，于是「刚写下的 Result 一 reload
+ * 就不可用」。
+ *
+ * 为什么也不是 `Number.MAX_VALUE`：消费者把**比例**换算成**百分比**（`× 100`）时，
+ * `Number.MAX_VALUE * 100 === Infinity` —— 等于把同一个非有限数往上推一层。
+ * `Number.MAX_SAFE_INTEGER` 满足全部约束：有限、`Number.isFinite` 为真、
+ * JSON 往返恒等、`× 100` 之后仍然有限，而且远超任何真实比例。
+ *
+ * 超限的**权威**信号始终是 `exceedsContext`；百分比只是展示与阈值的标量。
+ */
+export const OVER_BUDGET_CONTEXT_PERCENTAGE = Number.MAX_SAFE_INTEGER;
+
 function measureChatMessagesNoPrune({
   modelName,
   msgs,
@@ -929,7 +948,7 @@ function measureChatMessagesNoPrune({
       availableTokens > 0
         ? inputTokens / availableTokens
         : inputTokens > 0
-          ? Number.POSITIVE_INFINITY
+          ? OVER_BUDGET_CONTEXT_PERCENTAGE
           : 0,
     exceedsContext: inputTokens > availableTokens,
   };

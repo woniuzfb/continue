@@ -331,8 +331,12 @@ describe("measureChatMessagesNoPrune — no pruning, no throwing", () => {
     expect(Number.isFinite(measured.contextPercentage)).toBe(true);
   });
 
-  it("flags a configuration anomaly instead of producing NaN", () => {
-    // Output reservation >= window: there is no input budget at all.
+  it("flags a configuration anomaly with a finite saturating percentage", () => {
+    // Output reservation >= window: there is no input budget at all. The signal is
+    // `exceedsContext`; the percentage saturates instead of becoming Infinity,
+    // because the Result is persisted as JSON (`Session.contextMetrics`) and
+    // `JSON.stringify(Infinity)` is `null` — a value the reader must reject
+    // (方案.md §五.16.5: 归一化层不得靠丢失类型信息的 null 猜原始值).
     const measured = measure({
       msgs: simpleHistory(),
       knownContextLength: 1000,
@@ -340,7 +344,39 @@ describe("measureChatMessagesNoPrune — no pruning, no throwing", () => {
     });
     expect(measured.availableTokens).toBeLessThanOrEqual(0);
     expect(measured.exceedsContext).toBe(true);
-    expect(measured.contextPercentage).toBe(Number.POSITIVE_INFINITY);
+    expect(Number.isFinite(measured.contextPercentage)).toBe(true);
+    expect(measured.contextPercentage).toBeGreaterThan(1);
+  });
+
+  it("returns a zero percentage when there is no budget and no input", () => {
+    const measured = measure({
+      msgs: [],
+      knownContextLength: 1000,
+      maxTokens: 5000,
+    });
+    expect(measured.availableTokens).toBeLessThanOrEqual(0);
+    expect(measured.inputTokens).toBe(0);
+    expect(measured.contextPercentage).toBe(0);
+  });
+
+  it("produces a measurement that survives a JSON round-trip", () => {
+    // 方案.md §7.1.4: every number that can reach `FullConversationMetricsSnapshot`
+    // is finite and JSON-safe. Without this, a save writes `null` and a reload
+    // grades the Result it just wrote as `unavailable`.
+    const cases = [
+      { knownContextLength: 128000, maxTokens: 2000 },
+      { knownContextLength: 2_000_000, maxTokens: 2000 },
+      { knownContextLength: 1000, maxTokens: 5000 },
+      { knownContextLength: undefined, maxTokens: 2000 },
+    ];
+    for (const budget of cases) {
+      const measured = measure({ msgs: overBudgetHistory(), ...budget });
+      expect(Number.isFinite(measured.inputTokens)).toBe(true);
+      expect(Number.isFinite(measured.contextLength)).toBe(true);
+      expect(Number.isFinite(measured.availableTokens)).toBe(true);
+      expect(Number.isFinite(measured.contextPercentage)).toBe(true);
+      expect(JSON.parse(JSON.stringify(measured))).toEqual(measured);
+    }
   });
 
   it("is consistent with its own percentage definition", () => {
