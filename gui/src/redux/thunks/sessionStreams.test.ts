@@ -49,6 +49,13 @@ type StoreOptions = {
   chatModelTitle?: string;
   models?: ModelDescription[];
   title?: string;
+  truncated?: boolean;
+  loadedOffset?: number;
+  firstTurnItems?: ChatHistoryItemWithMessageId[];
+  persistence?: any;
+  contextMetrics?: any;
+  contextMetricsMeta?: any;
+  history?: ChatHistoryItemWithMessageId[];
 };
 
 function makeStore(options: StoreOptions = {}) {
@@ -59,13 +66,32 @@ function makeStore(options: StoreOptions = {}) {
     chatModelTitle = "gpt-4o",
     models = [CHAT_MODEL],
     title = "Chat 1",
+    truncated = false,
+    loadedOffset = 0,
+    firstTurnItems,
+    persistence,
+    contextMetrics,
+    contextMetricsMeta,
+    history = [user("u1")],
   } = options;
 
   const s1 = initialSessionRuntime("s1", title, {
-    history: [user("u1")],
+    history,
     mode,
     chatModelTitle,
     stream: stream as any,
+    ...(firstTurnItems ? { firstTurnItems } : {}),
+    ...(persistence ? { persistence } : {}),
+    ...(contextMetrics ? { contextMetrics } : {}),
+    ...(contextMetricsMeta ? { contextMetricsMeta } : {}),
+    pagination: {
+      truncated,
+      loadedOffset,
+      hasMore: truncated,
+      loading: false,
+      requestGeneration: 0,
+      persistPending: false,
+    },
   });
   const s2 = initialSessionRuntime("s2", "Chat 2", {
     history: [user("u2")],
@@ -147,10 +173,10 @@ describe("sessionStreams", () => {
     expect(lastMessage.role).toBe("assistant");
     expect(lastMessage.content).toBe("This is a test");
     expect(target.stream).toEqual({ status: "idle" });
-    expect(target.contextMetricsMeta).toMatchObject({
-      modelIdentity: "gpt-4o",
-      schemaVersion: 1,
-    });
+    // Terminal commit: the reply is final, so the snapshot is stale — its
+    // freshness identity is cleared while the last-known value stays visible.
+    expect(target.contextMetricsMeta).toBeUndefined();
+    expect(target.contextMetrics).toBeDefined();
     expect(request).toHaveBeenCalledWith("llm/compileChat", expect.anything());
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith(
@@ -160,6 +186,105 @@ describe("sessionStreams", () => {
     });
     // The active tab is untouched.
     expect(session(store, "s2").history).toHaveLength(1);
+  });
+
+  it("does not overwrite the full-conversation metrics with a reduced Local Provider request", async () => {
+    // 方案.md §五.16: a truncated Local Provider request sends only
+    // firstTurnItems + currentTurnItems, so its compile result must never
+    // replace the full-conversation snapshot.
+    const localModel = {
+      title: "local",
+      provider: "continue-local",
+      model: "LLM:local",
+      underlyingProviderName: "continue-local",
+    } as ModelDescription;
+    const sentinel = {
+      didPrune: false,
+      contextPercentage: 0.99,
+      inputTokens: 199149,
+      contextLength: 200000,
+    };
+    const store = makeStore({
+      models: [localModel],
+      chatModelTitle: "local",
+      truncated: true,
+      loadedOffset: 10,
+      firstTurnItems: [user("f1", "first turn question")],
+      persistence: {
+        state: "clean",
+        revision: 0,
+        persistedRevision: 0,
+        hasPersistedBaseline: true,
+      },
+      contextMetrics: sentinel,
+      contextMetricsMeta: {
+        modelIdentity: "local",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+    });
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    // The reduced request did not overwrite the full-conversation snapshot,
+    // and no bookkeeping update invalidated it either.
+    expect(session(store).contextMetrics).toEqual(sentinel);
+  });
+
+  it("does not overwrite the metrics when a non-truncated Local Provider still reduces", async () => {
+    // 方案.md §五.16: the fast path depends on firstTurnItems + a reliable
+    // baseline, NOT on pagination.truncated. A non-truncated window with
+    // middle turns still sends only firstTurn + currentTurn.
+    const localModel = {
+      title: "local",
+      provider: "continue-local",
+      model: "LLM:local",
+      underlyingProviderName: "continue-local",
+    } as ModelDescription;
+    const sentinel = {
+      didPrune: false,
+      contextPercentage: 0.99,
+      inputTokens: 199149,
+      contextLength: 200000,
+    };
+    const store = makeStore({
+      models: [localModel],
+      chatModelTitle: "local",
+      truncated: false,
+      history: [
+        user("u1", "first first"),
+        user("u2", "middle middle"),
+        user("u3", "current current"),
+      ],
+      firstTurnItems: [user("u1", "first first")],
+      persistence: {
+        state: "clean",
+        revision: 0,
+        persistedRevision: 0,
+        hasPersistedBaseline: true,
+      },
+      contextMetrics: sentinel,
+      contextMetricsMeta: {
+        modelIdentity: "local",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+    });
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+
+    await run(store, runSessionStream({ sessionId: "s1" }));
+
+    const compile = request.mock.calls.find(
+      ([messageType]) => messageType === "llm/compileChat",
+    );
+    const sent = JSON.stringify((compile![1] as any).messages);
+    // The reduced request kept the first turn and the current turn, and dropped
+    // the middle turn.
+    expect(sent).toContain("first first");
+    expect(sent).toContain("current current");
+    expect(sent).not.toContain("middle middle");
+    // ...so it must not have overwritten the full-conversation snapshot.
+    expect(session(store).contextMetrics).toEqual(sentinel);
   });
 
   it("protects every message of a Local Provider request from pruning", async () => {

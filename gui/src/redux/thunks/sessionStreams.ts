@@ -551,6 +551,15 @@ async function streamModelTurn(
     );
   }
 
+  // 方案.md §五.16: only the complete logical conversation may update the
+  // context metrics. Use the builder's explicit mode, never
+  // `pagination.truncated`: the Local Provider fast path returns a reduced
+  // request even when the window is not truncated yet (firstTurnItems + a
+  // reliable baseline is enough). The reduced compile still drives the actual
+  // send / prune / out-of-context decision.
+  const requestDroppedMiddle =
+    plan.kind === "ready" && plan.mode === "first-turn-plus-current";
+
   const { messages, appliedRules, appliedRulesSourceMessageId } =
     constructMessages(
       historyForRequest,
@@ -618,20 +627,22 @@ async function streamModelTurn(
     contextLength,
   } = precompiledRes.content;
 
-  dispatch(
-    setSessionContextMetrics({
-      sessionId,
-      metrics: { didPrune, contextPercentage, inputTokens, contextLength },
-      // Identity of this snapshot (方案.md §五.16): the gate only recompiles
-      // when the model, the history revision or the schema moved on.
-      meta: {
-        modelIdentity: selectedChatModel.title,
-        historyRevision:
-          selectSessionById(getState(), sessionId)?.historyRevision ?? 0,
-        schemaVersion: CONTEXT_METRICS_SCHEMA_VERSION,
-      },
-    }),
-  );
+  if (!requestDroppedMiddle) {
+    dispatch(
+      setSessionContextMetrics({
+        sessionId,
+        metrics: { didPrune, contextPercentage, inputTokens, contextLength },
+        // Identity of this snapshot (方案.md §五.16): the gate only recompiles
+        // when the model, the history revision or the schema moved on.
+        meta: {
+          modelIdentity: selectedChatModel.title,
+          historyRevision:
+            selectSessionById(getState(), sessionId)?.historyRevision ?? 0,
+          schemaVersion: CONTEXT_METRICS_SCHEMA_VERSION,
+        },
+      }),
+    );
+  }
 
   try {
     let gen = ideMessenger.llmStreamChat(

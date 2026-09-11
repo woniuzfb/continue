@@ -366,15 +366,61 @@ function stateAfterMutation(
   }
 }
 
-function markHistoryChanged(session: SessionRuntimeState): void {
+/**
+ * Content must be re-saved, but the full-conversation semantics did not change
+ * (方案.md §五.16.2): stream chunks, promptLog/reasoning bookkeeping. Advances
+ * the save revision only — never the conversation revision, so the context
+ * metrics snapshot stays fresh.
+ */
+function markPersistenceChanged(session: SessionRuntimeState): void {
   session.dirty = true;
-  session.historyRevision += 1;
   const persistence = session.persistence ?? initialPersistenceState();
   session.persistence = {
     ...persistence,
     state: stateAfterMutation(persistence.state),
     revision: persistence.revision + 1,
   };
+}
+
+function markHistoryChanged(session: SessionRuntimeState): void {
+  markPersistenceChanged(session);
+  session.historyRevision += 1;
+}
+
+/**
+ * Terminal commit (方案.md §五.16.4; transitional name until the
+ * conversationRevision rename). The assistant turn is now final, so the
+ * conversation revision advances exactly once — the individual chunks only
+ * advanced the persistence revision. Keep the last-known metrics VALUE visible
+ * and drop only its freshness identity, so a finished reply does not blank the
+ * context ring.
+ */
+function markConversationCommitted(session: SessionRuntimeState): void {
+  session.historyRevision += 1;
+  session.contextMetricsMeta = undefined;
+}
+
+/**
+ * Keys of `history[n]` whose update changes the full logical conversation and
+ * therefore the conversation metrics (方案.md §五.16). Everything else —
+ * promptLogs, reasoning display flags, `appliedRules` (per-message display
+ * metadata; `constructMessages` derives the applied rules from config, not from
+ * the item) and editorState — is runtime bookkeeping: it must be saved, but
+ * must not invalidate the snapshot.
+ */
+const CONVERSATION_RELEVANT_UPDATE_KEYS: ReadonlySet<string> = new Set([
+  "message",
+  "contextItems",
+  "conversationSummary",
+  "toolCallStates",
+]);
+
+function updateChangesConversation(
+  updates: Partial<ChatHistoryItemWithMessageId>,
+): boolean {
+  return Object.keys(updates).some((key) =>
+    CONVERSATION_RELEVANT_UPDATE_KEYS.has(key),
+  );
 }
 
 export const sessionsSlice = createSlice({
@@ -587,7 +633,17 @@ export const sessionsSlice = createSlice({
       if (!session || !item) {
         return;
       }
-      markHistoryChanged(session);
+      if (updateChangesConversation(action.payload.updates)) {
+        // A content mutation changes the full logical conversation: bump the
+        // conversation revision and invalidate freshness (方案.md §五.16).
+        markHistoryChanged(session);
+        invalidateContextMetrics(session);
+      } else {
+        // promptLogs / reasoning / editorState bookkeeping: must be saved, but
+        // must NOT invalidate the context metrics — otherwise the ring drops to
+        // zero the moment a reply finishes (方案.md §五.16.2).
+        markPersistenceChanged(session);
+      }
       Object.assign(item, action.payload.updates);
       // 方案.md §十一: the runtime summary is what the Local Provider sends, so a
       // compact result must be visible immediately instead of only after the
@@ -600,9 +656,6 @@ export const sessionsSlice = createSlice({
           content: action.payload.updates.conversationSummary,
         };
       }
-      // Editing/retrying invalidates the previous context snapshot, and a tool
-      // state change changes the pending-approval projection.
-      invalidateContextMetrics(session);
       session.pendingApprovalCount = countAwaitingApprovalToolCalls(
         session.history,
       );
@@ -620,7 +673,10 @@ export const sessionsSlice = createSlice({
         ? findItemByMessageId(session, action.payload.messageId)
         : undefined;
       if (session && item) {
-        markHistoryChanged(session);
+        // appliedRules is per-message display metadata; `constructMessages`
+        // derives the applied rules from config, not from the item. It must be
+        // saved but must not advance the conversation revision (方案.md §五.16).
+        markPersistenceChanged(session);
         item.appliedRules = action.payload.appliedRules;
       }
     },
@@ -764,7 +820,9 @@ export const sessionsSlice = createSlice({
       if (!session || session.stream.requestId !== action.payload.requestId) {
         return;
       }
-      markHistoryChanged(session);
+      // 方案.md §五.16.2: a chunk is content that must be saved, but it does not
+      // advance the conversation revision — the terminal commit does that once.
+      markPersistenceChanged(session);
       applyStreamUpdatesToHistory(session, action.payload.messages);
     },
     /**
@@ -799,6 +857,7 @@ export const sessionsSlice = createSlice({
       if (!session || session.stream.requestId !== action.payload.requestId) {
         return;
       }
+      markConversationCommitted(session);
       const { error } = session.stream;
       session.stream = {
         status: action.payload.status === "completed" ? "idle" : "failed",

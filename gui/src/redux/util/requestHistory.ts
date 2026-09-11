@@ -11,8 +11,14 @@ import type { SessionRuntimeState } from "../slices/sessionsSlice";
  * `loadFullHistory`（调用方执行后重建）。
  */
 
+export type RequestHistoryMode = "full-history" | "first-turn-plus-current";
+
 export type RequestHistoryPlan =
-  | { kind: "ready"; requestHistory: ChatHistoryItemWithMessageId[] }
+  | {
+      kind: "ready";
+      requestHistory: ChatHistoryItemWithMessageId[];
+      mode: RequestHistoryMode;
+    }
   | { kind: "needs-full-history" };
 
 export function buildRequestHistoryForSession(
@@ -23,7 +29,11 @@ export function buildRequestHistoryForSession(
   // Every other provider keeps the full history.
   if (!options.localConversation) {
     if (!session.pagination.truncated) {
-      return { kind: "ready", requestHistory: session.history };
+      return {
+        kind: "ready",
+        requestHistory: session.history,
+        mode: "full-history",
+      };
     }
     return { kind: "needs-full-history" };
   }
@@ -47,12 +57,17 @@ export function buildRequestHistoryForSession(
       requestHistory: currentTurnStartsAtFirstTurn
         ? currentTurnItems
         : [...firstTurnItems, ...currentTurnItems],
+      mode: "first-turn-plus-current",
     };
   }
 
   // 回退：完整 history 就是权威请求历史（含首轮）。
   if (!session.pagination.truncated) {
-    return { kind: "ready", requestHistory: session.history };
+    return {
+      kind: "ready",
+      requestHistory: session.history,
+      mode: "full-history",
+    };
   }
 
   return { kind: "needs-full-history" };

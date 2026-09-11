@@ -186,6 +186,59 @@ describe("compileSessionChatForContextMetrics", () => {
     expect(session(store, "s2").contextMetrics).toBeUndefined();
   });
 
+  it("rejects a metrics compile whose input was superseded", async () => {
+    const store = makeStore();
+    const metaBefore = session(store).contextMetricsMeta;
+    const original = store.mockIdeMessenger.request.bind(
+      store.mockIdeMessenger,
+    );
+    (store.mockIdeMessenger as any).request = vi.fn(
+      async (type: string, data: any) => {
+        if (type === "llm/compileChat") {
+          // The history moves while the compile is in flight.
+          store.dispatch({
+            type: "sessions/setSessionHistory",
+            payload: {
+              sessionId: "s1",
+              history: [
+                item("u1", "user", "hi"),
+                item("a1", "assistant", "sure"),
+              ],
+            },
+          } as any);
+        }
+        return original(type as any, data as any);
+      },
+    );
+
+    await run(store, compileSessionChatForContextMetrics({ sessionId: "s1" }));
+
+    // The stale result was not labelled with the newer revision.
+    expect(session(store).contextMetricsMeta).toBe(metaBefore);
+  });
+
+  it("keeps the last-known value when the compile cannot fit the conversation", async () => {
+    const store = makeStore();
+    const metaBefore = session(store).contextMetricsMeta;
+    const valueBefore = session(store).contextMetrics;
+    (store.mockIdeMessenger as any).request = vi.fn(async (type: string) => {
+      if (type === "llm/compileChat") {
+        return {
+          status: "error",
+          error:
+            "Not enough context available to include all protected messages",
+          done: true,
+        };
+      }
+      return { status: "success", content: {}, done: true };
+    });
+
+    await run(store, compileSessionChatForContextMetrics({ sessionId: "s1" }));
+
+    expect(session(store).contextMetrics).toBe(valueBefore);
+    expect(session(store).contextMetricsMeta).toBe(metaBefore);
+  });
+
   it("is a no-op without a model or an empty history", async () => {
     const noModel = makeStore({ chatModelTitle: undefined });
     (noModel.getState() as any).config.config.modelsByRole.chat = [];

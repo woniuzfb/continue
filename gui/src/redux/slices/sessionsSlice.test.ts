@@ -9,6 +9,7 @@ import {
   createSessionRuntime,
   deleteCompactionByMessageId,
   deleteTurnByMessageId,
+  finishSessionStream,
   initialSessionRuntime,
   initialSessionsState,
   markSessionDirty,
@@ -160,6 +161,223 @@ describe("sessionsSlice — ownership", () => {
     expect(state.sessionsById.s1.persistence?.revision).toBe(before + 1);
     expect(state.sessionsById.s1.persistence?.state).toBe("pending");
     expect(state.sessionsById.s1.dirty).toBe(true);
+  });
+
+  it("keeps the context metrics across promptLog / reasoning bookkeeping", () => {
+    // 方案.md §五.16: a reply finishing attaches promptLogs + reasoning through
+    // this reducer. That must be saved, but it must NOT invalidate the metrics
+    // snapshot — otherwise the ring drops to zero the moment a reply finishes.
+    const metrics = {
+      didPrune: false,
+      contextPercentage: 0.42,
+      inputTokens: 199149,
+      contextLength: 200000,
+    };
+    let state = stateWith({
+      history: [item("u1", "user", "hi")],
+      contextMetrics: metrics,
+      contextMetricsMeta: {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+      isPruned: false,
+      contextPercentage: 0.42,
+    });
+    const revisionBefore = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "u1",
+        updates: { promptLogs: [] },
+      }),
+    );
+
+    expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+    expect(state.sessionsById.s1.contextPercentage).toBe(0.42);
+    expect(state.sessionsById.s1.historyRevision).toBe(revisionBefore);
+    // Still must be re-saved.
+    expect(state.sessionsById.s1.dirty).toBe(true);
+    expect(state.sessionsById.s1.persistence?.state).toBe("pending");
+
+    // A real content update still invalidates the snapshot.
+    state = sessionsSlice.reducer(
+      state,
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "u1",
+        updates: { message: item("u1", "user", "edited").message },
+      }),
+    );
+    expect(state.sessionsById.s1.contextMetrics).toBeUndefined();
+    expect(state.sessionsById.s1.historyRevision).toBe(revisionBefore + 1);
+  });
+
+  it("does not advance the conversation revision on a stream chunk", () => {
+    // 方案.md §五.16.2: a chunk changes what must be saved, but the terminal
+    // commit is what advances the conversation revision once.
+    let state = stateWith({ history: [item("u1", "user", "hi")] });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const revisionBefore = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [{ role: "assistant", content: "hi" } as any],
+      }),
+    );
+
+    expect(state.sessionsById.s1.historyRevision).toBe(revisionBefore);
+    expect(state.sessionsById.s1.dirty).toBe(true);
+  });
+
+  it("advances the conversation revision exactly once at a completed terminal", () => {
+    const metrics = {
+      didPrune: false,
+      contextPercentage: 0.3,
+      inputTokens: 10,
+      contextLength: 100,
+    };
+    let state = stateWith({
+      history: [item("u1", "user", "hi")],
+      contextMetrics: metrics,
+      contextMetricsMeta: {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+      contextPercentage: 0.3,
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [{ role: "assistant", content: "a" } as any],
+      }),
+    );
+    state = sessionsSlice.reducer(
+      state,
+      applySessionStreamUpdate({
+        sessionId: "s1",
+        requestId: "r1",
+        messages: [{ role: "assistant", content: "b" } as any],
+      }),
+    );
+    // Chunks never advance the conversation revision.
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+
+    state = sessionsSlice.reducer(
+      state,
+      finishSessionStream({
+        sessionId: "s1",
+        requestId: "r1",
+        status: "completed",
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    // Last-known value kept visible; only the freshness identity is cleared.
+    expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+    expect(state.sessionsById.s1.contextPercentage).toBe(0.3);
+    expect(state.sessionsById.s1.contextMetricsMeta).toBeUndefined();
+
+    // A stale terminal is a no-op.
+    const after = state.sessionsById.s1.historyRevision;
+    state = sessionsSlice.reducer(
+      state,
+      finishSessionStream({
+        sessionId: "s1",
+        requestId: "r1",
+        status: "completed",
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(after);
+  });
+
+  it("advances the conversation revision once for aborted and failed terminals", () => {
+    for (const status of ["aborted", "failed"] as const) {
+      let state = stateWith({ history: [item("u1", "user", "hi")] });
+      state = sessionsSlice.reducer(
+        state,
+        beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+      );
+      const before = state.sessionsById.s1.historyRevision;
+      state = sessionsSlice.reducer(
+        state,
+        finishSessionStream({ sessionId: "s1", requestId: "r1", status }),
+      );
+      expect(state.sessionsById.s1.historyRevision).toBe(before + 1);
+    }
+  });
+
+  it("does not advance the conversation revision for a stale terminal", () => {
+    const meta = {
+      modelIdentity: "gpt-4o",
+      historyRevision: 0,
+      schemaVersion: 1,
+    };
+    let state = stateWith({
+      history: [item("u1", "user", "hi")],
+      contextMetrics: { didPrune: false, contextPercentage: 0.2 },
+      contextMetricsMeta: meta,
+    });
+    state = sessionsSlice.reducer(
+      state,
+      beginSessionStream({ sessionId: "s1", requestId: "r1" }),
+    );
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      finishSessionStream({
+        sessionId: "s1",
+        requestId: "other",
+        status: "completed",
+      }),
+    );
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.contextMetricsMeta).toBe(meta);
+  });
+
+  it("treats appliedRules as bookkeeping, not a conversation change", () => {
+    const metrics = { didPrune: false, contextPercentage: 0.3 };
+    let state = stateWith({
+      history: [item("u1", "user", "hi")],
+      contextMetrics: metrics,
+      contextMetricsMeta: {
+        modelIdentity: "gpt-4o",
+        historyRevision: 0,
+        schemaVersion: 1,
+      },
+    });
+    const before = state.sessionsById.s1.historyRevision;
+
+    state = sessionsSlice.reducer(
+      state,
+      setAppliedRulesByMessageId({
+        sessionId: "s1",
+        messageId: "u1",
+        appliedRules: [{ name: "r" } as any],
+      }),
+    );
+
+    expect(state.sessionsById.s1.historyRevision).toBe(before);
+    expect(state.sessionsById.s1.contextMetrics).toBe(metrics);
+    expect(state.sessionsById.s1.dirty).toBe(true);
+    expect(state.sessionsById.s1.persistence?.revision).toBeGreaterThan(0);
   });
 
   it("keeps a failed save visible when more content arrives", () => {

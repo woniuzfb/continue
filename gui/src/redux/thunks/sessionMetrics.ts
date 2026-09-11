@@ -8,7 +8,6 @@ import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import { setSessionContextMetrics } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
 import { constructMessages } from "../util/constructMessages";
-import { buildRequestHistoryForSession } from "../util/requestHistory";
 import { isLocalConversationModel } from "core/llm/localConversation";
 import { getBaseSystemMessage } from "../util/getBaseSystemMessage";
 import {
@@ -87,15 +86,17 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
     if (!selectedChatModel) {
       return;
     }
+    // Capture the revision of the input we are about to measure. A stale async
+    // result must never be labelled with a newer revision (方案.md §五.16).
+    const metricsHistoryRevision = session.historyRevision;
 
-    // 方案.md §十三.8: the metrics path shares the request-history builder with
-    // the send path, so token counts describe the same request.
+    // 方案.md §五.16: metrics describe the COMPLETE logical conversation. Do NOT
+    // reuse the send-path request builder — for a Local Provider it returns the
+    // reduced `firstTurnItems + currentTurnItems` payload, which is a different
+    // quantity. Always measure the full history.
     let historyForCompile: ChatHistoryItemWithMessageId[] = session.history;
     const localConversation = isLocalConversationModel(selectedChatModel);
-    const plan = buildRequestHistoryForSession(session, { localConversation });
-    if (plan.kind === "ready") {
-      historyForCompile = plan.requestHistory;
-    } else if (session.pagination.truncated) {
+    if (session.pagination.truncated) {
       try {
         const result = await extra.ideMessenger.request("history/load", {
           id: sessionId,
@@ -148,22 +149,21 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
         )
       : baseSystemMessage;
 
+    // The full history carries the summary carrier itself, so no override is
+    // needed here (the override exists only for the reduced Local Provider send).
     const { messages } = constructMessages(
       historyForCompile,
       systemMessage,
       state.config.config.rules,
       state.ui.ruleSettings,
       systemToolsFramework,
-      localConversation
-        ? {
-            conversationSummaryOverride:
-              session.latestConversationSummary?.content,
-          }
-        : undefined,
     );
 
-    // Same protection as the send (方案.md §十四): metrics must describe the
-    // prompt that would actually be sent.
+    // Temporary compatibility path (方案.md §五.16): during Step 1 the metrics
+    // still go through compileChat, so an over-budget full conversation fails
+    // with "Not enough context" and simply yields no new snapshot — the
+    // last-known value is kept. The authoritative no-prune measurement
+    // (`measureChatMessagesNoPrune`, `exceedsContext`) is a later Core stage.
     const precompiledRes = await extra.ideMessenger.request("llm/compileChat", {
       messages,
       options: completionOptions,
@@ -182,10 +182,10 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
     const { didPrune, contextPercentage, inputTokens, contextLength } =
       precompiledRes.content;
 
-    // Re-read: history may have moved while compiling. Store the revision the
-    // snapshot actually describes so a stale result cannot look fresh.
+    // Reject a result whose input has been superseded while compiling: writing
+    // the CURRENT revision onto the older result would make it look fresh.
     const current = selectSessionById(getState(), sessionId);
-    if (!current) {
+    if (!current || current.historyRevision !== metricsHistoryRevision) {
       return;
     }
     dispatch(
@@ -194,7 +194,7 @@ export const compileSessionChatForContextMetrics = createAsyncThunk<
         metrics: { didPrune, contextPercentage, inputTokens, contextLength },
         meta: {
           modelIdentity: sessionModelIdentity(getState(), sessionId),
-          historyRevision: current.historyRevision,
+          historyRevision: metricsHistoryRevision,
           schemaVersion: CONTEXT_METRICS_SCHEMA_VERSION,
         },
       }),
