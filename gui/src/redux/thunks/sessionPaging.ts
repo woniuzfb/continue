@@ -14,7 +14,9 @@ import {
   resolveHistoryTargetOnDisk,
   type HistoryTargetOnDisk,
 } from "../util/historyTarget";
-import { ensureMessageIds } from "../util/messageIds";
+import { ensureMessageIdsWithReport } from "../util/messageIds";
+import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
+import { selectMessageIdMigrationCapability } from "../slices/runtimeCapabilitiesSlice";
 import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 
 /**
@@ -85,10 +87,20 @@ export const loadMoreHistory = createAsyncThunk<
       }
 
       const { items, hasMore, total } = res.content;
+      // P4b-2: report the fallback rather than minting silently — an id minted
+      // here is runtime-only and must never be read as a migrated disk identity.
+      const itemsReport = ensureMessageIdsWithReport(items);
+      if (itemsReport.mintedCount > 0) {
+        reportMessageIdFallback({
+          sessionId,
+          mintedCount: itemsReport.mintedCount,
+          hostCapability: selectMessageIdMigrationCapability(getState()),
+        });
+      }
       dispatch(
         prependSessionHistory({
           sessionId,
-          items: ensureMessageIds(items),
+          items: itemsReport.items,
           hasMore,
           newLoadedOffset: total - loadedCount - items.length,
           totalCount: total,
@@ -176,10 +188,18 @@ export const loadFullHistory = createAsyncThunk<
       ...current.history,
     ];
 
+    const mergedReport = ensureMessageIdsWithReport(mergedHistory);
+    if (mergedReport.mintedCount > 0) {
+      reportMessageIdFallback({
+        sessionId,
+        mintedCount: mergedReport.mintedCount,
+        hostCapability: selectMessageIdMigrationCapability(getState()),
+      });
+    }
     dispatch(
       setSessionHistory({
         sessionId,
-        history: ensureMessageIds(mergedHistory),
+        history: mergedReport.items,
       }),
     );
     dispatch(

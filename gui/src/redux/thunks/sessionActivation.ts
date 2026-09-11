@@ -15,7 +15,9 @@ import {
 } from "../slices/sessionsSlice";
 import type { ThunkApiType } from "../store";
 import { mergeSettings } from "../util/mergeSettings";
-import { ensureMessageIds } from "../util/messageIds";
+import { ensureMessageIdsWithReport } from "../util/messageIds";
+import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
+import { selectMessageIdMigrationCapability } from "../slices/runtimeCapabilitiesSlice";
 import { extractFirstTurnItems } from "core/util/firstTurn";
 import { latestSummaryOf } from "../slices/sessionHistory";
 import type { ChatHistoryItem } from "core";
@@ -111,13 +113,29 @@ export const loadSessionRuntime = createAsyncThunk<
         totalCount = session.history.length;
       }
 
-      const history = ensureMessageIds(session.history);
+      const historyReport = ensureMessageIdsWithReport(session.history);
+      const history = historyReport.items;
+      // P4b-2: report the GUI fallback instead of hiding it. Minting here is the
+      // legacy path when the disk response carries no ids; it must not fail the
+      // load, mark the session dirty, or be mistaken for a completed migration.
+      const firstTurnReport = hasMore
+        ? ensureMessageIdsWithReport(pageFirstTurnItems ?? [])
+        : undefined;
+      const mintedCount =
+        historyReport.mintedCount + (firstTurnReport?.mintedCount ?? 0);
+      if (mintedCount > 0) {
+        reportMessageIdFallback({
+          sessionId,
+          mintedCount,
+          hostCapability: selectMessageIdMigrationCapability(getState()),
+        });
+      }
       const runtime = initialSessionRuntime(sessionId, session.title, {
         history,
         // Phase 4/5 (方案.md §五.5/§十三.4): the first turn comes from the disk
         // — from the page response when paging, or computed on a full load.
         firstTurnItems: hasMore
-          ? ensureMessageIds(pageFirstTurnItems ?? [])
+          ? (firstTurnReport?.items ?? [])
           : extractFirstTurnItems(history),
         mode: session.mode ?? "chat",
         chatModelTitle: session.chatModelTitle ?? undefined,

@@ -1,7 +1,9 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { Session } from "core";
 import { selectSessionById } from "../selectors/sessions";
-import { ensureMessageIds } from "../util/messageIds";
+import { ensureMessageIdsWithReport } from "../util/messageIds";
+import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
+import { selectMessageIdMigrationCapability } from "../slices/runtimeCapabilitiesSlice";
 import { upsertSessionMetadata } from "../slices/sessionCatalogSlice";
 import type {
   ChatHistoryItemWithMessageId,
@@ -193,10 +195,23 @@ async function performSave(
   // one, otherwise a deleted/emptied session keeps serving a stale first turn
   // (方案.md §五.5).
   if (responseIsCurrent && result.content?.firstTurnItems !== undefined) {
+    // P4b-2: the same fallback report as the load paths. The dispatch below is
+    // unchanged — only the reporting helper variant is new, so nothing about
+    // dirty / historyRevision / persistence moves because of the report.
+    const firstTurnReport = ensureMessageIdsWithReport(
+      result.content.firstTurnItems,
+    );
+    if (firstTurnReport.mintedCount > 0) {
+      reportMessageIdFallback({
+        sessionId,
+        mintedCount: firstTurnReport.mintedCount,
+        hostCapability: selectMessageIdMigrationCapability(getState()),
+      });
+    }
     dispatch(
       setSessionFirstTurn({
         sessionId,
-        firstTurnItems: ensureMessageIds(result.content.firstTurnItems),
+        firstTurnItems: firstTurnReport.items,
       }),
     );
   }

@@ -61,6 +61,7 @@ import { FatalErrorIndicator } from "../../components/config/FatalErrorNotice";
 import { DeprecationBanner } from "../../components/DeprecationBanner";
 import InlineErrorMessage from "../../components/mainInput/InlineErrorMessage";
 import SessionSaveErrorBanner from "../../components/mainInput/SessionSaveErrorBanner";
+import MessageIdMigrationErrorBanner from "../../components/mainInput/MessageIdMigrationErrorBanner";
 import InterruptedSessionBanner from "../../components/mainInput/InterruptedSessionBanner";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
@@ -741,6 +742,8 @@ export function Chat() {
       <div className={"relative shrink-0"}>
         <InterruptedSessionBanner />
         <SessionSaveErrorBanner />
+        {/* Independent from the save banner: an unmigrated id is not a lost save. */}
+        <MessageIdMigrationErrorBanner />
         <ContinueInputBox
           isMainInput
           isLastUserInput={false}

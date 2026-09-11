@@ -77,4 +77,12 @@ export const {
   registerCapabilityProbeAttempt,
 } = runtimeCapabilitiesSlice.actions;
 
+/**
+ * Structural (not `RootState`) so this slice does not have to import `store`,
+ * which imports every slice.
+ */
+export const selectMessageIdMigrationCapability = (state: {
+  runtimeCapabilities: RuntimeCapabilitiesState;
+}): MessageIdMigrationCapability => state.runtimeCapabilities.historyMigrateIds;
+
 export default runtimeCapabilitiesSlice.reducer;
