@@ -59,6 +59,7 @@ import {
 } from "./constants.js";
 import {
   compileChatMessages,
+  measureChatMessagesNoPrune,
   countLargeToolOutputTokens,
   countTokens,
   pruneRawPromptFromTop,
@@ -1047,6 +1048,33 @@ export abstract class BaseLLM implements ILLM {
       excludeToolOutputsFromTokenCountMinTokens:
         this.excludeToolOutputsFromTokenCountMinTokens,
       protectedMessageIndexes,
+    });
+  }
+
+  /**
+   * 方案.md §7.1.2：完整逻辑会话的 **no-prune** 计量。
+   *
+   * 与 `compileChatMessages` 传入**完全相同**的计量输入（tokenizer 键、解析后的窗口、
+   * 图片能力、tool 定义、tool-output 排除规则），只有 prune 策略不同 —— 这样
+   * `history/save` 写下的指标与发送路径的 prune 决策描述的是同一个量。
+   */
+  measureChatMessagesNoPrune(
+    message: ChatMessage[],
+    options: LLMFullCompletionOptions,
+  ) {
+    let { completionOptions } = this._parseCompletionOptions(options);
+    completionOptions = this._modifyCompletionOptions(completionOptions);
+
+    return measureChatMessagesNoPrune({
+      modelName: completionOptions.model,
+      msgs: message,
+      knownContextLength: this._contextLength,
+      maxTokens: completionOptions.maxTokens ?? DEFAULT_MAX_TOKENS,
+      supportsImages: this.supportsImages(),
+      tools: options.tools,
+      excludeToolOutputsFromTokenCount: this.excludeToolOutputsFromTokenCount,
+      excludeToolOutputsFromTokenCountMinTokens:
+        this.excludeToolOutputsFromTokenCountMinTokens,
     });
   }
 

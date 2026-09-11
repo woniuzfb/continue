@@ -17,7 +17,7 @@ import type {
   FullConversationMetricsMeta,
   FullConversationMetricsResult,
   FullConversationMetricsSnapshot,
-} from "../util/fullConversationMetrics";
+} from "core/util/fullConversationMetrics";
 import {
   ChatHistoryItemWithMessageId,
   SavedMergedProvenance,

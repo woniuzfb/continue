@@ -14,6 +14,10 @@ import { ProfileDescription } from "../config/ProfileLifecycleManager";
 import { SharedConfigSchema } from "../config/sharedConfig";
 import { GlobalContextModelSelections } from "../util/GlobalContext";
 
+import type {
+  FullConversationMeasurementRequest,
+  FullConversationMetricsResult,
+} from "../util/fullConversationMetrics";
 import {
   BaseSessionMetadata,
   BrowserSerializedContinueConfig,
@@ -100,6 +104,20 @@ export interface MigrateMessageIdsResponse {
 }
 
 /**
+ * 方案.md §五.16.7: `history/save` 的请求。
+ *
+ * 与磁盘上的 `Session` 同形，外加一个可选的计量请求：**携带它** ⇒ Core 在保存锁内用同一份
+ * `finalHistory` 构造完整逻辑会话、no-prune 计量，并把 history 与 metrics 一次原子写盘；
+ * **不携带** ⇒ Core 只保存，不计量、也不改动磁盘上已有的 `contextMetrics`。
+ *
+ * 调用方以「本次保存是否建立了新的完整会话内容版本」为准决定是否携带，
+ * **不以 reason 字符串驱动 Core 逻辑**。
+ */
+export type SaveHistoryRequest = Session & {
+  fullConversationMeasurement?: FullConversationMeasurementRequest;
+};
+
+/**
  * 方案.md §七.8.1: `history/save` returns the authoritative post-merge data.
  * GUI 只在 success 后更新，绝不从 truncated window 重算。
  */
@@ -143,6 +161,15 @@ export interface SaveHistoryResponse {
    * 估 messageCount）。
    */
   sessionMetadata?: BaseSessionMetadata;
+  /**
+   * 方案.md §五.16.5: the full-conversation measurement this save wrote to disk.
+   *
+   * 只有在请求携带 `fullConversationMeasurement` 且计量真正执行时才存在 —— Core 返回
+   * **同一个** Result（不重新算一次），GUI 校验完整身份（conversationRevision +
+   * constructionIdentity + schemaVersion）后才接受。缺省是安全空操作：GUI 保留
+   * last-known 数值，等待下一次计量，**不得**据此清空快照或伪造身份。
+   */
+  fullConversationMetrics?: FullConversationMetricsResult;
 }
 
 export interface LoadPageHistoryResponse {
@@ -202,7 +229,7 @@ export type ToCoreFromIdeOrWebviewProtocol = {
   "history/load": [{ id: string }, Session];
   "history/loadPage": [LoadPageHistoryRequest, LoadPageHistoryResponse];
   "history/searchContent": [{ query: string }, HistorySearchResult[]];
-  "history/save": [Session, SaveHistoryResponse];
+  "history/save": [SaveHistoryRequest, SaveHistoryResponse];
   "history/migrateIds": [MigrateMessageIdsRequest, MigrateMessageIdsResponse];
   "history/share": [{ id: string; outputDir?: string }, void];
   "history/clear": [undefined, void];

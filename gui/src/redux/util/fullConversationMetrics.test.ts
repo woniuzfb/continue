@@ -1,139 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { RuleWithSource, Tool } from "core";
 import {
-  CONVERSATION_SUMMARY_SEMANTICS_VERSION,
-  FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
-  fullConversationConstructionIdentity,
   fullConversationMetricsFromCompileResult,
-  fullConversationMetricsFromLegacyDisk,
   legacyDiskContextMetricsFromFullConversation,
-  type FullConversationConstructionInputs,
+  persistedContextMetricsToRuntime,
 } from "./fullConversationMetrics";
+import {
+  FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+  CONVERSATION_SUMMARY_SEMANTICS_VERSION,
+} from "core/util/fullConversationMetrics";
 
-const TOOL: Tool = {
-  type: "function",
-  function: { name: "read_file", description: "read" },
-  displayTitle: "Read file",
-  wouldLikeTo: "read a file",
-  readonly: true,
-  group: "built-in",
-};
-
-const RULE = {
-  name: "style",
-  slug: "style",
-  source: "local",
-  rule: "Use tabs.",
-} as unknown as RuleWithSource;
-
-function inputs(
-  overrides: Partial<FullConversationConstructionInputs> = {},
-): FullConversationConstructionInputs {
-  return {
-    modelIdentity: "gpt-4o",
-    mode: "chat",
-    reasoningEnabled: false,
-    effectiveRules: [RULE],
-    ruleSettings: { style: "on" } as any,
-    effectiveTools: [TOOL],
-    systemMessageInputs: "You are an assistant.",
-    completionOptionsInputsAffectingMeasurement: {
-      model: "gpt-4o",
-      maxTokens: 2048,
-      contextLength: 200000,
-    },
-    conversationSummarySemanticsVersion: CONVERSATION_SUMMARY_SEMANTICS_VERSION,
-    ...overrides,
-  };
-}
-
-describe("fullConversationConstructionIdentity", () => {
-  it("is stable for equal inputs and independent of key order", () => {
-    expect(fullConversationConstructionIdentity(inputs())).toBe(
-      fullConversationConstructionIdentity(inputs()),
-    );
-
-    const reordered = {
-      ...inputs(),
-      completionOptionsInputsAffectingMeasurement: {
-        contextLength: 200000,
-        maxTokens: 2048,
-        model: "gpt-4o",
-      },
-    };
-    expect(fullConversationConstructionIdentity(reordered)).toBe(
-      fullConversationConstructionIdentity(inputs()),
-    );
-  });
-
-  it("is the canonical serialization itself, not a digest", () => {
-    // This is what makes "a changed input always yields a different identity"
-    // true: the comparand carries the input values, so two distinct
-    // construction environments cannot collide the way a 32-bit hash can.
-    const identity = fullConversationConstructionIdentity(inputs());
-    expect(identity).toContain('"modelIdentity":"gpt-4o"');
-    expect(identity).toContain('"systemMessageInputs":"You are an assistant."');
-    expect(identity).toContain('"maxTokens":2048');
-    expect(identity).toContain('"mode":"chat"');
-  });
-
-  it("preserves array order, because tools and rules order is an input", () => {
-    const second = { ...TOOL, displayTitle: "Write file" };
-    const forward = fullConversationConstructionIdentity(
-      inputs({ effectiveTools: [TOOL, second] }),
-    );
-    const reversed = fullConversationConstructionIdentity(
-      inputs({ effectiveTools: [second, TOOL] }),
-    );
-    expect(forward).not.toBe(reversed);
-  });
-
-  it("changes for every input the plan lists", () => {
-    const base = fullConversationConstructionIdentity(inputs());
-    const variants: Partial<FullConversationConstructionInputs>[] = [
-      { modelIdentity: "gpt-3.5" },
-      { mode: "agent" },
-      { reasoningEnabled: true },
-      { effectiveRules: [] },
-      { ruleSettings: {} as any },
-      { effectiveTools: [] },
-      { systemMessageInputs: "You are another assistant." },
-      {
-        completionOptionsInputsAffectingMeasurement: {
-          model: "gpt-4o",
-          maxTokens: 4096,
-          contextLength: 200000,
-        },
-      },
-      {
-        completionOptionsInputsAffectingMeasurement: {
-          model: "gpt-4o",
-          maxTokens: 2048,
-          contextLength: 128000,
-        },
-      },
-      { conversationSummarySemanticsVersion: 2 },
-    ];
-
-    for (const variant of variants) {
-      expect(
-        fullConversationConstructionIdentity(inputs(variant)),
-        JSON.stringify(variant).slice(0, 60),
-      ).not.toBe(base);
-    }
-  });
-
-  it("ignores an undefined optional field instead of hashing its absence twice", () => {
-    // `reasoningEnabled: undefined` means "the model decides"; it must equal a
-    // construction where the field is simply not written.
-    const withUndefined = { ...inputs(), reasoningEnabled: undefined };
-    const withoutField = { ...inputs() };
-    delete (withoutField as any).reasoningEnabled;
-    expect(fullConversationConstructionIdentity(withUndefined)).toBe(
-      fullConversationConstructionIdentity(withoutField),
-    );
-  });
-});
+/**
+ * GUI 侧只剩过渡适配（方案.md §五.16.5）：发送载荷 compile 结果 → 快照，
+ * 以及磁盘 `Session.contextMetrics` 的两种形状 ↔ 快照。identity 与契约类型本身由
+ * `core/util/fullConversationMetrics.ts` 拥有，测试在 core。
+ */
 
 describe("full conversation metrics adapters (transitional, 方案.md §五.16.5)", () => {
   it("maps a compile result into the full snapshot", () => {
@@ -163,27 +43,65 @@ describe("full conversation metrics adapters (transitional, 方案.md §五.16.5
     ).toMatchObject({ inputTokens: 0, contextLength: 0, availableTokens: 0 });
   });
 
-  it("round-trips the legacy disk field both ways", () => {
+  it("reads a legacy disk snapshot as value-only (no freshness identity)", () => {
     const legacy = {
       didPrune: false,
       contextPercentage: 0.25,
       inputTokens: 25,
       contextLength: 100,
     };
-    const snapshot = fullConversationMetricsFromLegacyDisk(legacy);
-    expect(snapshot).toMatchObject({
+    const restored = persistedContextMetricsToRuntime(legacy);
+    expect(restored.metrics).toMatchObject({
       inputTokens: 25,
       contextLength: 100,
       contextPercentage: 0.25,
       exceedsContext: false,
     });
-    expect(legacyDiskContextMetricsFromFullConversation(snapshot)).toEqual(
-      legacy,
-    );
+    // No identity on disk ⇒ the gate must treat it as stale.
+    expect(restored.meta).toBeUndefined();
   });
 
-  it("keeps undefined undefined", () => {
-    expect(fullConversationMetricsFromLegacyDisk(undefined)).toBeUndefined();
+  it("reads a persisted full Result as value plus identity", () => {
+    // Stage 2D: `history/save` writes this shape; freshness is then decided by the
+    // gate comparing revision + construction identity + schema.
+    const result = {
+      metrics: {
+        inputTokens: 25,
+        contextLength: 100,
+        availableTokens: 80,
+        contextPercentage: 0.31,
+        exceedsContext: false,
+      },
+      meta: {
+        conversationRevision: 4,
+        constructionIdentity: "identity",
+        schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+      },
+    };
+    expect(persistedContextMetricsToRuntime(result)).toEqual({
+      metrics: result.metrics,
+      meta: result.meta,
+    });
+  });
+
+  it("writes the legacy field shape when a legacy host needs one", () => {
+    const snapshot = {
+      inputTokens: 25,
+      contextLength: 100,
+      availableTokens: 80,
+      contextPercentage: 0.25,
+      exceedsContext: true,
+    };
+    expect(legacyDiskContextMetricsFromFullConversation(snapshot)).toEqual({
+      didPrune: true,
+      contextPercentage: 0.25,
+      inputTokens: 25,
+      contextLength: 100,
+    });
+  });
+
+  it("keeps absent metrics absent in both directions", () => {
+    expect(persistedContextMetricsToRuntime(undefined)).toEqual({});
     expect(
       legacyDiskContextMetricsFromFullConversation(undefined),
     ).toBeUndefined();

@@ -4,117 +4,26 @@ import type { RulePolicies } from "core/llm/rules/types";
 /**
  * 方案.md §五.16.5/§五.16.6：GUI runtime 的**完整逻辑会话**指标。
  *
- * 这个模块只放三样东西：状态契约（类型与版本号）、唯一的构造身份纯 helper、
- * 以及与「发送载荷 compile 结果 / legacy 磁盘字段」之间的过渡适配。它不依赖
- * Redux / React / active session，也不读 store。
+ * 这个模块只保留 **GUI 侧的过渡适配**：「发送载荷 compile 结果 → 快照」与
+ * 「legacy 磁盘字段 / 完整 Result ↔ 快照」。契约本体（类型、版本号、唯一 identity helper）
+ * 与 `history/save` 的计量共用同一份，定义在 `core/util/fullConversationMetrics.ts`
+ * 并从那里 re-export（GUI 只做转发，不复制）。这里不依赖 Redux / React，也不读 store。
  *
- * 过渡期边界（Stage 2A，见 §五.16.5 与已知限制）：
- * - 生产这五个数值的仍是 `llm/compileChat`，不是 Core 的 no-prune 计量（Stage 2C）；
- * - 磁盘 `Session.contextMetrics` 仍是 legacy `didPrune` 形状（Core 原子计量与
- *   Result 持久化属 Stage 2D），所以这里提供两个显式适配函数而不是直接复用字段。
+ * 过渡期边界（Stage 2D 起）：
+ * - `history/save` 携带计量时，磁盘 `Session.contextMetrics` 已是完整
+ *   `FullConversationMetricsResult`；未携带时仍是 legacy `didPrune` 形状（旧数据亦然）。
+ *   因此读取侧必须在**同一次归一化**里区分两种形状：Result ⇒ 恢复数值 + 身份，
+ *   legacy ⇒ 只恢复数值（无身份即 stale）。完整的 fresh/stale/unavailable 分类属 Stage 2E。
  */
 
-/** 快照形状或其语义变化时递增（方案.md §五.16.6）。 */
-export const FULL_CONVERSATION_METRICS_SCHEMA_VERSION = 1;
-
-/**
- * summary 构造语义版本（方案.md §五.16.2）：summary 的**构造算法/语义**变化时递增。
- * 它属于 constructionIdentity —— summary 的**内容**变化才是内容版本。
- */
-export const CONVERSATION_SUMMARY_SEMANTICS_VERSION = 1;
-
-/**
- * 一旦带入 constructionIdentity 输入，这些字段就不允许再单独进入版本比较
- * （方案 §五.16.2：identity 统一覆盖 model / mode / reasoning / rules / tools /
- * system / completion options / summary 语义；比较不匹配即重算）。
- */
-export type FullConversationMetricsSnapshot = {
-  inputTokens: number;
-  contextLength: number;
-  availableTokens: number;
-  contextPercentage: number;
-  exceedsContext: boolean;
-};
-
-export type FullConversationMetricsMeta = {
-  conversationRevision: number;
-  constructionIdentity: string;
-  schemaVersion: number;
-};
-
-export type FullConversationMetricsResult = {
-  metrics: FullConversationMetricsSnapshot;
-  meta: FullConversationMetricsMeta;
-};
-
-/**
- * constructionIdentity 的输入（方案.md §五.16.2）。**全部显式传入**，
- * helper 只做稳定序列化，不读 store，也不看 active session。
- */
-export type FullConversationConstructionInputs = {
-  /** session 自己的聊天模型身份（title）；由此解析模型配置与 tokenizer。 */
-  modelIdentity: string;
-  mode: MessageModes;
-  reasoningEnabled: boolean | undefined;
-  /** 参与构造的规则（含内容）；禁用与否由 ruleSettings 表达。 */
-  effectiveRules: readonly RuleWithSource[];
-  ruleSettings: RulePolicies;
-  effectiveTools: readonly Tool[];
-  /** 已经渲染好的 system message 输入（base system + 规则 + system-tools 框架）。 */
-  systemMessageInputs: string;
-  completionOptionsInputsAffectingMeasurement: {
-    /** `completionOptions.model`：tokenizer / 计量的键。 */
-    model: string;
-    maxTokens?: number;
-    /** 影响可用预算的模型上下文长度（若选项里显式给出）。 */
-    contextLength?: number;
-  };
-  conversationSummarySemanticsVersion: number;
-};
-
-/**
- * 稳定序列化：对象键排序后再 `JSON.stringify`，因此同样的输入永远得到同样的字符串
- * （JS 对象键顺序、`undefined` 字段的书写顺序都不影响结果）。
- */
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
-  }
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, item]) => item !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries
-    .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-    .join(",")}}`;
-}
-
-/**
- * constructionIdentity 的**唯一实现**（方案.md §五.16.2）。
- *
- * 身份**就是**输入的 canonical 序列化本身，不是摘要：身份参与的是
- * 「异步结果是否仍属于当前构造环境」的**正确性门禁**（门禁不匹配 ⇒ 丢弃结果、
- * 判定快照陈旧），因此这里不能接受任何有限的哈希空间 —— 32 位摘要用 150k 个
- * 不同的构造环境即可实测碰撞（见 `fullConversationMetrics.test.ts` 的探针与
- * Stage 2A 记录）。canonical 形式保证：
- *
- * - 相同输入 ⇒ 严格相同的字符串；
- * - **对 `FullConversationConstructionInputs` 所允许的规范化 JSON 输入域，任一未被明确忽略的
- *   输入值变化都会改变 identity**（只有 `undefined` 字段被忽略，无碰撞可能）。这个承诺只覆盖
- *   该封闭输入域：不要让 Date、`NaN`/`Infinity`/`-0`、循环引用或其它非 JSON 值进入 identity ——
- *   canonical 序列化对它们不成立；
- * - 数组顺序有意义并保留（tools / rules 的顺序属于构造输入）。
- *
- * 若将来为了缩短磁盘或协议表示要改摘要，必须用**跨宿主一致的强摘要**
- * （如 SHA-256），且 canonical 输入仍是唯一权威 —— 不得退回自造短哈希。
- */
-export function fullConversationConstructionIdentity(
-  inputs: FullConversationConstructionInputs,
-): string {
-  return canonicalJson(inputs);
-}
+// 共享契约（类型 + 版本常量 + 唯一 identity helper）住在 Core
+// （`core/util/fullConversationMetrics.ts`）：`history/save` 的锁内计量与 GUI 用同一份，
+// **不两边各复制一份**，也不在这里 re-export 出第二个入口 —— 需要的地方直接从 Core import。
+import type {
+  FullConversationMetricsMeta,
+  FullConversationMetricsResult,
+  FullConversationMetricsSnapshot,
+} from "core/util/fullConversationMetrics";
 
 /** 发送路径 `llm/compileChat` 结果的形状（过渡期唯一的数值来源）。 */
 export type CompileChatMetricsResult = {
@@ -157,15 +66,33 @@ export type LegacyDiskContextMetrics = {
 };
 
 /**
- * 过渡读取：磁盘快照 → runtime 数值。**不产生 identity**：legacy 形状没有构造身份，
- * 因此调用方恢复后一律视为 stale（§五.16.5：只有 snapshot、没有 meta ⇒ stale），
- * 首次门禁检查会重算。完整的 `normalizePersistedContextMetrics`（fresh/stale/unavailable
- * 判定与旧形状归一）属 Stage 2E。
+ * 过渡读取：磁盘 `Session.contextMetrics` → runtime 数值 + 身份。
+ *
+ * 两种形状必须在**同一处**区分（Stage 2D 起 `history/save` 会写完整 Result）：
+ * - `FullConversationMetricsResult`（`metrics` + `meta` 都在）⇒ 数值与身份一起恢复；
+ *   freshness 由门禁按 revision / constructionIdentity / schema 比较决定，
+ *   因此这里**不**替调用方判定；
+ * - legacy `didPrune` 形状 ⇒ 只恢复数值，没有身份 ⇒ stale（§五.16.5），首次门禁检查会重算。
+ *
+ * 完整的 `normalizePersistedContextMetrics`（含 `unavailable`）属 Stage 2E。
  */
-export function fullConversationMetricsFromLegacyDisk(
-  legacy: LegacyDiskContextMetrics | undefined,
-): FullConversationMetricsSnapshot | undefined {
-  return legacy ? fullConversationMetricsFromCompileResult(legacy) : undefined;
+export function persistedContextMetricsToRuntime(
+  value: LegacyDiskContextMetrics | FullConversationMetricsResult | undefined,
+): {
+  metrics?: FullConversationMetricsSnapshot;
+  meta?: FullConversationMetricsMeta;
+} {
+  if (!value) {
+    return {};
+  }
+  if ("metrics" in value && value.metrics && "meta" in value && !!value.meta) {
+    return { metrics: value.metrics, meta: value.meta };
+  }
+  return {
+    metrics: fullConversationMetricsFromCompileResult(
+      value as LegacyDiskContextMetrics,
+    ),
+  };
 }
 
 /**

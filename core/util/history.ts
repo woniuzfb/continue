@@ -1,6 +1,8 @@
 import * as fs from "fs";
 
 import { BaseSessionMetadata, Session } from "../index.js";
+import type { PersistedContextMetrics } from "../index.js";
+import type { FullConversationMetricsResult } from "./fullConversationMetrics";
 import { ListHistoryOptions } from "../protocol/core.js";
 
 import { NEW_SESSION_TITLE } from "./constants.js";
@@ -253,6 +255,39 @@ async function releaseSessionsListLock(lockDir: string): Promise<void> {
   await releaseSessionLock(lockDir);
 }
 
+/**
+ * 方案.md §五.16.7: `history/save` 的可选计量回调。
+ *
+ * 回调在**保存锁内**、拿到合并后的 `finalHistory` 之后被调用 —— 计量必须与写盘看到同一份
+ * 内容。回调由 `history/save` handler 组装（解析模型 + 请求里的构造输入），history 层
+ * 因此不依赖 LLM 类，也不读 active model。
+ */
+export type SaveHistoryOptions = {
+  measureFullConversation?: (
+    finalHistory: ChatHistoryItem[],
+  ) => FullConversationMetricsResult;
+};
+
+/**
+ * 读回磁盘上已有的 metrics（legacy 形状或完整 Result），供「只保存、不计量」的路径原样写回。
+ * 文件缺失/不可解析时返回 undefined：那种情况没有可信的 metrics 可保留，
+ * 但**不能**因此中断保存（数据完整性优先）。
+ */
+function readContextMetricsFromDisk(
+  sessionId: string,
+): PersistedContextMetrics | undefined {
+  try {
+    const sessionFilePath = getSessionFilePath(sessionId);
+    if (!fs.existsSync(sessionFilePath)) {
+      return undefined;
+    }
+    const raw = JSON.parse(fs.readFileSync(sessionFilePath, "utf8")) as Session;
+    return raw.contextMetrics;
+  } catch {
+    return undefined;
+  }
+}
+
 export class HistoryManager {
   list(options: ListHistoryOptions): BaseSessionMetadata[] {
     const filepath = getSessionsListPath();
@@ -443,7 +478,10 @@ export class HistoryManager {
     };
   }
 
-  async save(session: Session): Promise<SaveHistoryResponse> {
+  async save(
+    session: Session,
+    options?: SaveHistoryOptions,
+  ): Promise<SaveHistoryResponse> {
     // 用跨进程锁串行化整个“读→合并→写”，使两个 IDE 窗口编辑同一 session 时不会
     // 互相覆盖。finally 保证任何退出路径（数据完整性守卫的 return、抛异常）都释放锁。
     // 异步版：等待锁期间不再阻塞事件循环（见 sleep/acquireSessionLock）。
@@ -451,7 +489,7 @@ export class HistoryManager {
       getSessionFilePath(session.sessionId),
     );
     try {
-      return await this._saveUnlocked(session);
+      return await this._saveUnlocked(session, options);
     } finally {
       await releaseSessionLock(lockDir);
     }
@@ -488,7 +526,10 @@ export class HistoryManager {
     }
   }
 
-  private async _saveUnlocked(session: Session): Promise<SaveHistoryResponse> {
+  private async _saveUnlocked(
+    session: Session,
+    options?: SaveHistoryOptions,
+  ): Promise<SaveHistoryResponse> {
     // Save the main session json file
     // Explicitely rewriting here to influence the written key order in the file!
     // e.g. id at the top, history next, etc.
@@ -560,6 +601,25 @@ export class HistoryManager {
     // 差分，消除滚动上下文的平方级重复存储。加载时由 load() 重建。
     encodePromptLogDeltas(finalHistory);
 
+    // 方案.md §五.16.4/§五.16.7：携带计量请求时，在**同一把锁内**用这份 finalHistory
+    // 构造完整逻辑会话并 no-prune 计量；metrics 与 history 一起原子写盘。
+    //
+    // 度量对象是**写盘后的语义内容**（上面的三个落盘瘦身助手已经跑过）：reload 之后
+    // 运行时读到的就是这份，两边因此同源。内存里尚未落盘的窗口可能算出略大的数，
+    // 下一次保存/计量会收敛。
+    let fullConversationMetrics: FullConversationMetricsResult | undefined;
+    if (options?.measureFullConversation) {
+      fullConversationMetrics = options.measureFullConversation(finalHistory);
+    }
+
+    // 不携带计量的保存**不得**改动磁盘上已有的 metrics：GUI 载荷里的
+    // `Session.contextMetrics` 因此不再被采信（它只是历史遗留字段），磁盘值才是权威。
+    // 无计量时把原值读回来原样写回；文件不存在/不可解析时按"没有 metrics"处理。
+    const preservedContextMetrics =
+      fullConversationMetrics ??
+      readContextMetricsFromDisk(session.sessionId) ??
+      undefined;
+
     const orderedSession: Session = {
       sessionId: session.sessionId,
       title: session.title,
@@ -575,8 +635,8 @@ export class HistoryManager {
     if (session.usage !== undefined) {
       orderedSession.usage = session.usage;
     }
-    if (session.contextMetrics !== undefined) {
-      orderedSession.contextMetrics = session.contextMetrics;
+    if (preservedContextMetrics !== undefined) {
+      orderedSession.contextMetrics = preservedContextMetrics;
     }
     // per-session reasoning preference (方案.md §七.8): without these the GUI
     // falls back to the derived default after a reload.
@@ -679,6 +739,9 @@ export class HistoryManager {
       latestConversationSummary: this.latestSummaryOf(finalHistory),
       totalHistoryCount: finalHistory.length,
       sessionMetadata: savedMetadata,
+      // 方案.md §五.16.5: 回传**同一个** Result（不重新计量），GUI 校验完整身份后接受。
+      // 未携带计量时保持 undefined —— GUI 据此保留 last-known 数值。
+      ...(fullConversationMetrics ? { fullConversationMetrics } : {}),
     };
   }
 

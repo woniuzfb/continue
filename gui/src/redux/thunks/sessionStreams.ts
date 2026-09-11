@@ -25,8 +25,8 @@ import {
 import {
   FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
   fullConversationConstructionIdentity,
-  fullConversationMetricsFromCompileResult,
-} from "../util/fullConversationMetrics";
+} from "core/util/fullConversationMetrics";
+import { fullConversationMetricsFromCompileResult } from "../util/fullConversationMetrics";
 import {
   selectSessionById,
   selectSessionChatModel,

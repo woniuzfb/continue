@@ -10,6 +10,8 @@ import { TextResourceContents } from "@modelcontextprotocol/sdk/types.js";
 import Parser from "web-tree-sitter";
 import { CodebaseIndexer } from "./indexing/CodebaseIndexer";
 import { LLMConfigurationStatuses } from "./llm/constants";
+import type { FullConversationMetricsResult } from "./util/fullConversationMetrics";
+import type { ChatTokenMeasurement } from "./llm/countTokens";
 
 declare global {
   interface Window {
@@ -143,6 +145,17 @@ export interface ILLM
     /** 方案.md §十四: indexes that must never be pruned. */
     protectedMessageIndexes?: number[],
   ): CompiledChatMessagesReport;
+
+  /**
+   * 方案.md §7.1.2: full-conversation measurement with the SAME inputs as
+   * `compileChatMessages` (tokenizer key, resolved window, image support, tool
+   * definitions, tool-output exclusion) — only the prune policy differs. Used by
+   * `history/save` to write the metrics that describe the saved history.
+   */
+  measureChatMessagesNoPrune(
+    messages: ChatMessage[],
+    options: LLMFullCompletionOpeions,
+  ): ChatTokenMeasurement;
 
   embed(chunks: string[]): Promise<number[][]>;
 
@@ -278,6 +291,25 @@ export interface SessionUsage extends Usage {
   totalCost: number;
 }
 
+/**
+ * 方案.md §五.16.5: the pre-Stage-2D on-disk metrics shape. Still readable (old
+ * files, saves without a measurement), never written by the new measurement path.
+ */
+export interface LegacyContextMetricsSnapshot {
+  didPrune: boolean;
+  contextPercentage: number;
+  inputTokens?: number;
+  contextLength?: number;
+}
+
+/**
+ * 方案.md §五.16.5: what the `contextMetrics` field can hold on disk — the legacy
+ * snapshot or the full Result written by the in-lock measurement.
+ */
+export type PersistedContextMetrics =
+  | LegacyContextMetricsSnapshot
+  | FullConversationMetricsResult;
+
 export interface Session {
   sessionId: string;
   title: string;
@@ -298,16 +330,18 @@ export interface Session {
   /** Optional: 已加载的 history 中最旧一条对应的全局 offset（头部未加载条数） */
   historyLoadedOffset?: number;
   /**
-   * Optional: 最近一次 LLM 调用后的 context 指标快照（不含编译后的消息数组）。
+   * 最近一次 LLM 调用后的 context 指标快照（不含编译后的消息数组）。
    * 加载会话时直接读取，避免重新 compile（懒加载场景下尤为关键，
    * 因为前端可能只有部分 history）。
+   *
+   * 方案.md §五.16.5：字段名保持 `contextMetrics`，但**形状有两种**：
+   * - `FullConversationMetricsResult`（`metrics` + `meta`）：Stage 2D 起由
+   *   `history/save` 的 Core 锁内计量写入，带完整身份，可比较后恢复为 fresh；
+   * - `LegacyContextMetricsSnapshot`（`didPrune` 形状）：旧数据与未携带计量的保存，
+   *   只有数值、没有身份 ⇒ 读取方一律视为 stale。
+   * 读取方必须在同一处区分两种形状（GUI 的 `persistedContextMetricsToRuntime`）。
    */
-  contextMetrics?: {
-    didPrune: boolean;
-    contextPercentage: number;
-    inputTokens?: number;
-    contextLength?: number;
-  };
+  contextMetrics?: PersistedContextMetrics;
   /**
    * Optional: per-session reasoning preference. Persisted with the session so a
    * restart restores the user's explicit choice instead of the derived default

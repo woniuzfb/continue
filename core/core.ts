@@ -25,6 +25,11 @@ import { compactConversation } from "./util/conversationCompaction";
 import { searchSessionContent } from "./util/historySearch";
 import { GlobalContext } from "./util/GlobalContext";
 import historyManager from "./util/history";
+import {
+  measureFullConversationForSave,
+  measurementSchemaMatches,
+} from "./util/fullConversationMeasurement.js";
+import { FULL_CONVERSATION_METRICS_SCHEMA_VERSION } from "./util/fullConversationMetrics.js";
 import { editConfigFile, migrateV1DevDataFiles } from "./util/paths";
 
 import {
@@ -330,7 +335,48 @@ export class Core {
 
     on("history/save", async (msg) => {
       // 异步保存；错误向上传播（gui 侧 await request("history/save")）。
-      return historyManager.save(msg.data);
+      const { fullConversationMeasurement: measurement } = msg.data;
+
+      // 不带计量 = 只保存：不量化、也不改动磁盘上已有的 metrics。
+      if (!measurement) {
+        return historyManager.save(msg.data);
+      }
+
+      // 方案.md §五.16.7 / §7.1.2: 计量输入里 GUI 不可见的那部分（tokenizer 键、解析后的
+      // 窗口、图片能力、tool-output 排除规则）来自**按标题显式解析**的模型。
+      //
+      // 刻意不回退 `selectedModelByRole.chat`：那是 profile 级全局选择，可能属于另一个
+      // tab（§七.10 的同一条教训）。匹配用 `title ?? model`，因为
+      // `llmToSerializedModelDescription` 就是这么投影的，而 `ILLM.title` 可选。
+      //
+      // 解析失败 / schema 不一致都**不阻断保存**：保存是数据完整性路径，计量只是派生值。
+      // 此时不写 metrics、不回传 Result，GUI 保留 last-known 数值并等待下一次计量。
+      const { config } = await this.configHandler.loadConfig();
+      const targetModel = config?.modelsByRole.chat.find(
+        (model) => (model.title ?? model.model) === measurement.modelTitle,
+      );
+      if (!targetModel) {
+        console.warn(
+          `[history/save] full-conversation measurement skipped: model not found for title "${measurement.modelTitle}"`,
+        );
+        return historyManager.save(msg.data);
+      }
+      if (!measurementSchemaMatches(measurement)) {
+        console.warn(
+          `[history/save] full-conversation measurement skipped: schema ${measurement.schemaVersion} !== ${FULL_CONVERSATION_METRICS_SCHEMA_VERSION}`,
+        );
+        return historyManager.save(msg.data);
+      }
+
+      return historyManager.save(msg.data, {
+        measureFullConversation: (finalHistory) =>
+          measureFullConversationForSave({
+            history: finalHistory,
+            request: measurement,
+            measure: (messages, options) =>
+              targetModel.measureChatMessagesNoPrune(messages, options),
+          }),
+      });
     });
 
     on("history/migrateIds", async (msg) => {

@@ -14,9 +14,9 @@ export { FULL_CONVERSATION_METRICS_SCHEMA_VERSION };
 import {
   FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
   fullConversationConstructionIdentity,
-  fullConversationMetricsFromCompileResult,
   type FullConversationMetricsMeta,
-} from "../util/fullConversationMetrics";
+} from "core/util/fullConversationMetrics";
+import { fullConversationMetricsFromCompileResult } from "../util/fullConversationMetrics";
 import {
   buildFullConversationConstructionInputs,
   buildSessionCompletionOptions,

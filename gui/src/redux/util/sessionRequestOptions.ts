@@ -8,7 +8,7 @@ import type { RootState } from "../store";
 import {
   CONVERSATION_SUMMARY_SEMANTICS_VERSION,
   type FullConversationConstructionInputs,
-} from "./fullConversationMetrics";
+} from "core/util/fullConversationMetrics";
 
 /**
  * 方案.md §五.16 / §十三: the context-metrics compile and the real send must
