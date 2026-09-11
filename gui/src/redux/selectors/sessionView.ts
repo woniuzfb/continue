@@ -1,8 +1,14 @@
+import { useMemo } from "react";
 import { useAppSelector } from "../hooks";
 import { useSessionId } from "../../components/mainInput/TipTapEditor/SessionScope";
 import type { RootState } from "../store";
 import type { SessionRuntimeState } from "../slices/sessionsSlice";
 import { absoluteToWindowIndex } from "../util/historyIndex";
+import {
+  selectFullConversationMetricsFreshness,
+  selectFullConversationMetricsSnapshot,
+  type SessionFullConversationMetricsView,
+} from "../thunks/sessionMetrics";
 import {
   findGuiIndexContainingMessageId,
   windowItemContainsMessageId,
@@ -91,18 +97,6 @@ export const selectActiveMainEditorAttachmentsRestore = (state: RootState) =>
 
 export const selectActiveInlineErrorMessage = (state: RootState) =>
   activeRuntime(state)?.inlineErrorMessage;
-
-export const selectActiveIsPruned = (state: RootState) =>
-  activeRuntime(state)?.isPruned;
-
-export const selectActiveContextPercentage = (state: RootState) =>
-  activeRuntime(state)?.contextPercentage;
-
-export const selectActiveContextInputTokens = (state: RootState) =>
-  activeRuntime(state)?.contextInputTokens;
-
-export const selectActiveContextLength = (state: RootState) =>
-  activeRuntime(state)?.contextLength;
 
 export const selectActiveFullConversationMetrics = (state: RootState) =>
   activeRuntime(state)?.fullConversationMetrics;
@@ -261,19 +255,22 @@ export function useSessionInlineErrorMessage() {
   );
 }
 
-export function useSessionFullConversationMetricsFields() {
+/**
+ * 方案.md §五.16.6：一个 session 的完整会话指标 + 可信度。组件只读这个投影，
+ * 不再读已下线的零散 legacy 字段。
+ */
+export function useSessionFullConversationMetrics(): SessionFullConversationMetricsView {
   const sessionId = useSessionId();
-  return useAppSelector((state) => {
-    const session = activeRuntimeOf(state, sessionId);
-    return {
-      isPruned: session?.isPruned,
-      contextPercentage: session?.contextPercentage,
-      contextInputTokens: session?.contextInputTokens,
-      contextLength: session?.contextLength,
-      // 过渡投影：组件仍读零散字段（Stage 2E 改读 fullConversationMetrics）。
-      fullConversationMetrics: session?.fullConversationMetrics,
-    };
-  });
+  // Two stable selections instead of one object-building selector: a selector that
+  // returns a fresh object every call would re-render this component on every
+  // dispatched action (and re-render it once per stream chunk during a reply).
+  const metrics = useAppSelector((state) =>
+    selectFullConversationMetricsSnapshot(state, sessionId),
+  );
+  const freshness = useAppSelector((state) =>
+    selectFullConversationMetricsFreshness(state, sessionId),
+  );
+  return useMemo(() => ({ metrics, freshness }), [metrics, freshness]);
 }
 
 export function useSessionEditState() {

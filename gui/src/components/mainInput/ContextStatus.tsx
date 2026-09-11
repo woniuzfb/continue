@@ -4,7 +4,7 @@ import { useCompactConversation } from "../../util/compactConversation";
 import { carrierMessageIdOf } from "../../redux/util/historyTarget";
 import { ToolTip } from "../gui/Tooltip";
 import {
-  useSessionFullConversationMetricsFields,
+  useSessionFullConversationMetrics,
   useSessionHistory,
 } from "../../redux/selectors/sessionView";
 import { createAndActivateSession } from "../../redux/thunks/sessionActivation";
@@ -20,18 +20,24 @@ function formatTokens(tokens: number): string {
 
 const ContextStatus = () => {
   const dispatch = useAppDispatch();
-  const { contextPercentage, isPruned } =
-    useSessionFullConversationMetricsFields();
+  // 方案.md §五.16.6: 唯一数据源是完整逻辑会话指标。`freshness` 只用于「能否被自动决策当
+  // 权威」；这里只是显示，因此 stale 的 last-known 数值照常显示（不显示 0）。
+  const { metrics } = useSessionFullConversationMetrics();
   const selectedChatModel = useAppSelector(
     (state) => state.config.config.selectedModelByRole.chat?.model,
   );
   const previousHistoryLength = useRef<number | null>(null);
   const previousSelectedChatModel = useRef<string | null>(null);
   const history = useSessionHistory();
-  const percent = Math.round((contextPercentage ?? 0) * 100);
-
-  const { contextInputTokens, contextLength } =
-    useSessionFullConversationMetricsFields();
+  const contextPercentage = metrics?.contextPercentage ?? 0;
+  const isPruned = metrics?.exceedsContext ?? false;
+  const contextInputTokens = metrics?.inputTokens;
+  const contextLength = metrics?.contextLength;
+  // 环只能画 0..100%：完整会话占比允许超过 1（§五.16.3 的预算口径），超了就画满。
+  const percent = Math.max(
+    0,
+    Math.min(100, Math.round(contextPercentage * 100)),
+  );
 
   const isDifferentModelAndSameHistory = useMemo(() => {
     if (!selectedChatModel) return false;

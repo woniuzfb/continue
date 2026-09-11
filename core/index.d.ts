@@ -339,7 +339,8 @@ export interface Session {
    *   `history/save` 的 Core 锁内计量写入，带完整身份，可比较后恢复为 fresh；
    * - `LegacyContextMetricsSnapshot`（`didPrune` 形状）：旧数据与未携带计量的保存，
    *   只有数值、没有身份 ⇒ 读取方一律视为 stale。
-   * 读取方必须在同一处区分两种形状（GUI 的 `persistedContextMetricsToRuntime`）。
+   * 读取方必须在同一处区分两种形状（GUI 的 `normalizePersistedContextMetrics`，
+   * Stage 2E 起是唯一入口）。
    */
   contextMetrics?: PersistedContextMetrics;
   /**

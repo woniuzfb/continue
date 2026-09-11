@@ -717,8 +717,8 @@ describe("migration never looks like a conversation change", () => {
     expect(session(store, "s1").fullConversationMetricsMeta).toBe(metaA);
     expect(session(store, "s2").fullConversationMetrics).toBe(metricsB);
     expect(session(store, "s2").fullConversationMetricsMeta).toBe(metaB);
-    expect(session(store, "s1").contextPercentage).toBe(
-      beforeA.contextPercentage,
+    expect(session(store, "s1").fullConversationMetricsEnvironment).toBe(
+      beforeA.fullConversationMetricsEnvironment,
     );
     // No recompute, and no write: the migration is not a conversation change.
     expect(
@@ -844,7 +844,10 @@ describe("migration never looks like a conversation change", () => {
       expect(after.fullConversationMetricsMeta, testCase.name).toBe(
         METRICS_META,
       );
-      expect(after.contextPercentage, testCase.name).toBeUndefined();
+      expect(
+        after.fullConversationMetricsEnvironment,
+        testCase.name,
+      ).toBeUndefined();
       expect(
         (after as any).messageIdMigration.error,
         testCase.name,

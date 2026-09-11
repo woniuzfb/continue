@@ -1,7 +1,7 @@
 import { createAsyncThunk } from "@reduxjs/toolkit";
 import { NEW_SESSION_TITLE } from "core/util/constants";
 import { v4 as uuidv4 } from "uuid";
-import { persistedContextMetricsToRuntime as persistedRuntimeMetrics } from "../util/fullConversationMetrics";
+import { normalizePersistedContextMetrics } from "../util/fullConversationMetrics";
 import { selectSessionById, selectTabDescriptor } from "../selectors/sessions";
 import { setActiveSessionModelProjection } from "../slices/configSlice";
 import {
@@ -13,6 +13,7 @@ import {
   setSessionClosing,
   setSessionInterrupted,
   setTabLoadState,
+  refreshSessionFullConversationMetricsEnvironment,
 } from "../slices/sessionsSlice";
 import type { ThunkApiType } from "../store";
 import { mergeSettings } from "../util/mergeSettings";
@@ -27,9 +28,12 @@ import { extractFirstTurnItems } from "core/util/firstTurn";
 import { latestSummaryOf } from "../slices/sessionHistory";
 import type { ChatHistoryItem } from "core";
 import {
+  currentFullConversationMetricsEnvironment,
   measureFullConversationForMetrics,
   needsFullConversationMetricsRecompute,
+  sessionConstructionIdentity,
 } from "./sessionMetrics";
+import { FULL_CONVERSATION_METRICS_SCHEMA_VERSION } from "core/util/fullConversationMetrics";
 import { getSession, getSessionPage } from "./session";
 import { hasUnresumableTurn } from "./sessionInterruption";
 import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
@@ -142,7 +146,9 @@ export const loadSessionRuntime = createAsyncThunk<
           messenger: extra.ideMessenger,
         });
       }
-      const persistedSnapshot = persistedRuntimeMetrics(session.contextMetrics);
+      const persistedSnapshot = normalizePersistedContextMetrics(
+        session.contextMetrics,
+      );
       const runtime = initialSessionRuntime(sessionId, session.title, {
         history,
         // Phase 4/5 (方案.md §五.5/§十三.4): the first turn comes from the disk
@@ -161,8 +167,13 @@ export const loadSessionRuntime = createAsyncThunk<
         latestConversationSummary:
           pageLatestSummary ?? latestSummaryOf(history),
         // 方案.md §五.16.5: 磁盘可能是历史 legacy `didPrune` 形状，也可能是 Stage 2D
-        // 起写入的完整 Result。两种形状在同一处归一：Result ⇒ 数值 + 身份（freshness
-        // 交给门禁按 revision / identity / schema 判定）；legacy ⇒ 只有数值 ⇒ stale。
+        // 起写入的完整 Result。两种形状在同一处归一：Result ⇒ 数值 + 身份；legacy ⇒
+        // 只有数值（无身份即 stale）。
+        //
+        // 归一化的 freshness **不**被存下来：它是「与**当前**环境可比」的意思，而当前环境
+        // 只能由门禁（激活时的 `ensureFullConversationMetrics`）去比。这里不写环境指纹，
+        // 因此磁盘恢复的快照在 selector 眼里一律 stale，直到第一次本进程计量落地
+        // （已知限制 #50：重启后首次激活必然重算一次）。
         fullConversationMetrics: persistedSnapshot.metrics,
         fullConversationMetricsMeta: persistedSnapshot.meta,
         ...mergeSettings(getState()),
@@ -367,6 +378,35 @@ export const ensureFullConversationMetrics = createAsyncThunk<
     // session (方案.md §五.16 重算门禁): missing, different model, different
     // history revision or incompatible schema. Switching tabs must not compile.
     if (!needsFullConversationMetricsRecompute(getState(), sessionId)) {
+      // The gate just proved the canonical identity still matches (or could not
+      // resolve one at all). When it *did* prove it, also refresh the cheap
+      // environment stamp: the stamp over-reports staleness by design, and a
+      // permanently stale snapshot would keep "fresh-only" consumers idle
+      // (方案.md §五.16.6). A gate that could not resolve an identity repairs
+      // nothing — this must stay the conservative direction.
+      const state = getState();
+      const session = selectSessionById(state, sessionId);
+      const identity = sessionConstructionIdentity(state, sessionId);
+      const meta = session?.fullConversationMetricsMeta;
+      if (
+        identity !== undefined &&
+        meta?.constructionIdentity === identity &&
+        meta.conversationRevision === session?.conversationRevision &&
+        meta.schemaVersion === FULL_CONVERSATION_METRICS_SCHEMA_VERSION
+      ) {
+        const environment = currentFullConversationMetricsEnvironment(
+          state,
+          sessionId,
+        );
+        if (environment) {
+          dispatch(
+            refreshSessionFullConversationMetricsEnvironment({
+              sessionId,
+              environment,
+            }),
+          );
+        }
+      }
       return;
     }
     await dispatch(measureFullConversationForMetrics({ sessionId }));

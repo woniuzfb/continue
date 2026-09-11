@@ -4,10 +4,10 @@ import { initialSessionRuntime } from "../slices/sessionsSlice";
 import {
   selectActiveCodeBlockApplyStates,
   selectActiveCompactionLoading,
-  selectActiveContextPercentage,
   selectActiveHasMoreHistory,
   selectActiveHistory,
   selectActiveHistoryTruncated,
+  selectActiveFullConversationMetrics,
   selectActiveIsStreaming,
   selectActiveMainEditorDraft,
   selectActiveMode,
@@ -81,7 +81,9 @@ describe("sessionView selectors", () => {
     expect(selectActiveHistory(state)).toEqual([]);
     expect(selectActiveMode(state)).toBe("chat");
     expect(selectActiveIsStreaming(state)).toBe(false);
-    expect(selectActiveContextPercentage(state)).toBeUndefined();
+    // Stage 2E: the legacy per-field projection is gone; the metrics projection is
+    // selected per session instead (`selectFullConversationMetrics`).
+    expect(selectActiveFullConversationMetrics(state)).toBeUndefined();
     // Stable references: useSelector must not see a new array each call.
     expect(selectActiveHistory(state)).toBe(selectActiveHistory(state));
   });

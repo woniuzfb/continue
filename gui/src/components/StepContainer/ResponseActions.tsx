@@ -11,7 +11,7 @@ import { FeedbackButtons } from "../FeedbackButtons";
 import { CopyIconButton } from "../gui/CopyIconButton";
 import HeaderButtonWithToolTip from "../gui/HeaderButtonWithToolTip";
 import {
-  useSessionFullConversationMetricsFields,
+  useSessionFullConversationMetrics,
   useSessionHistory,
 } from "../../redux/selectors/sessionView";
 
@@ -32,8 +32,9 @@ export default function ResponseActions({
   onDelete,
   isLast,
 }: ResponseActionsProps) {
-  const { contextPercentage, isPruned } =
-    useSessionFullConversationMetricsFields();
+  // 方案.md §五.16.6: 完整逻辑会话指标（不是发送载荷指标）。与 ContextStatus 一致：
+  // stale 的 last-known 数值照常用于**显示**，自动决策才需要 fresh。
+  const { metrics } = useSessionFullConversationMetrics();
 
   const history = useSessionHistory();
   const excludeThinkingFromCopy = useAppSelector(
@@ -102,7 +103,8 @@ export default function ResponseActions({
     return thinking || content;
   };
 
-  const percent = Math.round((contextPercentage ?? 0) * 100);
+  const percent = Math.round((metrics?.contextPercentage ?? 0) * 100);
+  const isPruned = metrics?.exceedsContext ?? false;
   const buttonColorClass =
     isLast && (isPruned || percent > 80)
       ? "text-warning"

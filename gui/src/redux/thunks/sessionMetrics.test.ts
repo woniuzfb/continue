@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ModelDescription } from "core";
 import { createMockStore } from "../../util/test/mockStore";
 import { ensureFullConversationMetrics } from "./sessionActivation";
-import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
+import { INITIAL_CONFIG_SLICE, updateConfig } from "../slices/configSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
   initialSessionRuntime,
@@ -10,13 +10,19 @@ import {
 } from "../slices/sessionsSlice";
 import {
   FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+  currentFullConversationMetricsEnvironment,
+  freshFullConversationMetrics,
   measureFullConversationForMetrics,
   needsFullConversationMetricsRecompute,
+  selectFullConversationMetrics,
   sessionConstructionIdentity,
 } from "./sessionMetrics";
 import {
+  beginSessionFullConversationMetricsMeasure,
+  endSessionFullConversationMetricsMeasure,
   setSessionFullConversationMetrics,
   setSessionMode,
+  updateHistoryItemByMessageId,
 } from "../slices/sessionsSlice";
 
 const CHAT_MODEL = {
@@ -69,6 +75,10 @@ function makeStore(
   store.dispatch(
     setSessionFullConversationMetrics({
       sessionId: "s1",
+      environment: currentFullConversationMetricsEnvironment(
+        store.getState() as any,
+        "s1",
+      )!,
       result: {
         metrics: METRICS,
         meta: {
@@ -164,6 +174,10 @@ describe("needsFullConversationMetricsRecompute", () => {
     oldSchema.dispatch(
       setSessionFullConversationMetrics({
         sessionId: "s1",
+        environment: currentFullConversationMetricsEnvironment(
+          oldSchema.getState() as any,
+          "s1",
+        )!,
         result: {
           metrics: METRICS,
           meta: {
@@ -294,8 +308,11 @@ describe("measureFullConversationForMetrics", () => {
       conversationRevision: 3,
       schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
     });
-    // Legacy projection is refreshed in the same transaction (Stage 2A contract).
-    expect(session(store).contextPercentage).toBe(0.05);
+    // The environment stamp is written in the same transaction (§五.16.6): the
+    // result is fresh only while it still describes the current environment.
+    expect(session(store).fullConversationMetricsEnvironment).toEqual(
+      currentFullConversationMetricsEnvironment(store.getState() as any, "s1"),
+    );
     // The active session is untouched.
     expect(session(store, "s2").fullConversationMetrics).toBeUndefined();
   });
@@ -469,5 +486,191 @@ describe("ensureFullConversationMetrics", () => {
     expect(
       session(store).fullConversationMetricsMeta?.conversationRevision,
     ).toBe(9);
+  });
+});
+
+describe("selectFullConversationMetrics (方案.md §五.16.6)", () => {
+  it("reports fresh while value, revision and environment all still match", () => {
+    const store = makeStore();
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1"),
+    ).toEqual({ metrics: METRICS, freshness: "fresh" });
+  });
+
+  it("keeps the last-known value but reports stale once the content moved on", () => {
+    // A content change clears the freshness identity (方案.md §五.16): the ring
+    // keeps showing the last-known number, but nothing may treat it as fresh.
+    const store = makeStore();
+    const before = session(store).conversationRevision;
+    store.dispatch(
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "a1",
+        updates: {
+          message: { id: "a1", role: "assistant", content: "edited" },
+        },
+      }),
+    );
+    expect(session(store).conversationRevision).toBe(before + 1);
+
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1"),
+    ).toEqual({ metrics: METRICS, freshness: "stale" });
+  });
+
+  it("reports stale when only the construction environment changed", () => {
+    // Same content, same revision — but the prompt would now be built
+    // differently, so the old numbers describe a prompt that is no longer the one
+    // being sent. `setSessionMode` deliberately does not advance the content
+    // revision (§五.16.1), so this really is the environment-only case.
+    const store = makeStore();
+    const before = session(store);
+    store.dispatch(setSessionMode({ sessionId: "s1", mode: "chat" }));
+    expect(session(store).conversationRevision).toBe(
+      before.conversationRevision,
+    );
+
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("stale");
+  });
+
+  it("reports measuring while a recompute is in flight, never fresh", () => {
+    const store = makeStore({ conversationRevision: 9 }, false);
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("unavailable");
+
+    store.dispatch(
+      beginSessionFullConversationMetricsMeasure({ sessionId: "s1" }),
+    );
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("measuring");
+
+    // With a stale value on screen, measuring still wins: a pending recompute is
+    // not "a usable old value".
+    store.dispatch(
+      setSessionFullConversationMetrics({
+        sessionId: "s1",
+        environment: currentFullConversationMetricsEnvironment(
+          store.getState() as any,
+          "s1",
+        )!,
+        result: {
+          metrics: METRICS,
+          meta: {
+            conversationRevision: 9,
+            constructionIdentity: sessionConstructionIdentity(
+              store.getState() as any,
+              "s1",
+            )!,
+            schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
+          },
+        },
+      }),
+    );
+    store.dispatch(setSessionMode({ sessionId: "s1", mode: "chat" }));
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("measuring");
+
+    store.dispatch(
+      endSessionFullConversationMetricsMeasure({ sessionId: "s1" }),
+    );
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("stale");
+  });
+
+  it("reports unavailable for a session that has no snapshot at all", () => {
+    const store = makeStore({}, false);
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1"),
+    ).toEqual({ freshness: "unavailable" });
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "nope"),
+    ).toEqual({ freshness: "unavailable" });
+  });
+
+  it("hands automatic decisions a value only when it is fresh", () => {
+    // 方案.md §五.16.6 / 验收项「自动 compact threshold 只吃 fresh」: the single correct
+    // entry point for any automatic decision. Display paths still show stale values.
+    const fresh = makeStore();
+    expect(freshFullConversationMetrics(fresh.getState() as any, "s1")).toBe(
+      METRICS,
+    );
+
+    const stale = makeStore();
+    stale.dispatch(setSessionMode({ sessionId: "s1", mode: "chat" }));
+    expect(
+      freshFullConversationMetrics(stale.getState() as any, "s1"),
+    ).toBeUndefined();
+
+    const measuring = makeStore({ conversationRevision: 9 }, false);
+    measuring.dispatch(
+      beginSessionFullConversationMetricsMeasure({ sessionId: "s1" }),
+    );
+    expect(
+      freshFullConversationMetrics(measuring.getState() as any, "s1"),
+    ).toBeUndefined();
+
+    expect(
+      freshFullConversationMetrics(fresh.getState() as any, "nope"),
+    ).toBeUndefined();
+  });
+
+  it("never reports fresh for a value restored from disk without an identity", () => {
+    // `makeStore({}, { withMeta: false })` is the disk-restore shape: value only.
+    const store = makeStore({}, { withMeta: false });
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1"),
+    ).toEqual({ metrics: METRICS, freshness: "stale" });
+  });
+});
+
+describe("ensureFullConversationMetrics repairs the environment stamp", () => {
+  it("refreshes the stamp when the gate proved the identity still matches", async () => {
+    // The stamp is a conservative approximation of the canonical identity: a config
+    // reload that replaces its references with equal content (profile switch,
+    // rehydration) must not leave the snapshot permanently stale.
+    const store = makeStore();
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("fresh");
+
+    const config = (store.getState() as any).config.config;
+    store.dispatch(updateConfig(JSON.parse(JSON.stringify(config))));
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("stale");
+
+    await run(store, ensureFullConversationMetrics({ sessionId: "s1" }));
+
+    // Same content ⇒ same canonical identity ⇒ the gate does not re-measure, it
+    // re-stamps. (No request may be needed for this: it is a proven equality.)
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("fresh");
+  });
+
+  it("does not repair anything it could not prove", async () => {
+    // No chat model ⇒ the gate cannot resolve an identity at all. It must then
+    // leave the stamp alone instead of turning an unprovable snapshot into fresh.
+    const store = makeStore({ chatModelTitle: undefined });
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("fresh");
+
+    store.dispatch(setSessionMode({ sessionId: "s1", mode: "chat" }));
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("stale");
+
+    await run(store, ensureFullConversationMetrics({ sessionId: "s1" }));
+
+    expect(
+      selectFullConversationMetrics(store.getState() as any, "s1").freshness,
+    ).toBe("stale");
   });
 });

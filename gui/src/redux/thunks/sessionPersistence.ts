@@ -6,7 +6,10 @@ import {
   type FullConversationMeasurementRequest,
 } from "core/util/fullConversationMetrics";
 import { resolveSessionMeasurementInputs } from "../util/sessionRequestOptions";
-import { currentFullConversationMetricsMeta } from "./sessionMetrics";
+import {
+  currentFullConversationMetricsEnvironment,
+  currentFullConversationMetricsMeta,
+} from "./sessionMetrics";
 import {
   selectSessionById,
   selectSessionChatModel,
@@ -297,9 +300,21 @@ async function performSave(
         savedMetrics.meta.constructionIdentity &&
       currentMeta.schemaVersion === savedMetrics.meta.schemaVersion
     ) {
-      dispatch(
-        setSessionFullConversationMetrics({ sessionId, result: savedMetrics }),
+      // The environment stamp was validated by the same identity comparison, so
+      // freshness later stays an O(1) check (方案.md §五.16.6).
+      const environment = currentFullConversationMetricsEnvironment(
+        getState(),
+        sessionId,
       );
+      if (environment) {
+        dispatch(
+          setSessionFullConversationMetrics({
+            sessionId,
+            result: savedMetrics,
+            environment,
+          }),
+        );
+      }
     }
   }
 

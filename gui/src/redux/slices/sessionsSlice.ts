@@ -18,6 +18,7 @@ import type {
   FullConversationMetricsResult,
   FullConversationMetricsSnapshot,
 } from "core/util/fullConversationMetrics";
+import type { FullConversationMetricsEnvironment } from "../util/fullConversationMetrics";
 import {
   ChatHistoryItemWithMessageId,
   SavedMergedProvenance,
@@ -204,17 +205,17 @@ export type SessionRuntimeState = {
    */
   fullConversationMetrics?: FullConversationMetricsSnapshot;
   fullConversationMetricsMeta?: FullConversationMetricsMeta;
-
   /**
-   * 过渡兼容投影（方案.md §五.16.5）：迁移期间由 reducer 从
-   * `fullConversationMetrics` 同步写入，供尚未迁移的组件（ContextStatus /
-   * ResponseActions）继续读取。Stage 2E 之后组件只读 `fullConversationMetrics`，
-   * 这几个零散字段随之删除。
+   * 快照被接受时的构造环境指纹（方案.md §五.16.6）—— fresh 判定用它做 O(1) 比较，
+   * 不在渲染路径重算 canonical identity。undefined ⇒ 无法证明 fresh ⇒ stale。
    */
-  isPruned?: boolean;
-  contextPercentage?: number;
-  contextInputTokens?: number;
-  contextLength?: number;
+  fullConversationMetricsEnvironment?: FullConversationMetricsEnvironment;
+  /**
+   * 正在飞行的只读计量请求数（方案.md §五.16.6 的 `measuring` 态）。用计数而不是布尔：
+   * 同一 session 可能有并发请求（例如激活门禁与手动重算），布尔会让先返回的那个提前清掉
+   * 后一个仍在飞行的状态。
+   */
+  fullConversationMetricsMeasuring?: number;
 
   inlineErrorMessage?: InlineErrorMessageType;
   compactionLoading: Record<string, boolean>;
@@ -412,6 +413,9 @@ function markHistoryChanged(session: SessionRuntimeState): void {
  */
 function markFullConversationMetricsStale(session: SessionRuntimeState): void {
   session.fullConversationMetricsMeta = undefined;
+  // The environment stamp describes the snapshot the meta belonged to; a stale
+  // snapshot has no provable environment, so it is dropped together with the meta.
+  session.fullConversationMetricsEnvironment = undefined;
 }
 
 /**
@@ -1660,31 +1664,80 @@ export const sessionsSlice = createSlice({
      * the session is on right now, otherwise the freshness identity would claim
      * more than it can prove.
      *
-     * The legacy per-field projections are written here as well, so the
-     * not-yet-migrated UI keeps working while it reads them (Stage 2E moves the
-     * consumers to `fullConversationMetrics`).
+     * The caller also passes the **construction environment stamp** it validated
+     * against (方案.md §五.16.6): freshness is then an O(1) comparison instead of a
+     * per-render canonical identity recompute.
      */
     setSessionFullConversationMetrics: (
       state,
       action: PayloadAction<{
         sessionId: string;
         result: FullConversationMetricsResult;
+        environment: FullConversationMetricsEnvironment;
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (!session) {
         return;
       }
-      const { result } = action.payload;
+      const { result, environment } = action.payload;
       if (result.meta.conversationRevision !== session.conversationRevision) {
         return;
       }
       session.fullConversationMetrics = result.metrics;
       session.fullConversationMetricsMeta = result.meta;
-      session.isPruned = result.metrics.exceedsContext;
-      session.contextPercentage = result.metrics.contextPercentage;
-      session.contextInputTokens = result.metrics.inputTokens;
-      session.contextLength = result.metrics.contextLength;
+      session.fullConversationMetricsEnvironment = environment;
+    },
+    /**
+     * 门禁证明「快照身份仍等于当前构造身份」时，把环境指纹刷新成当前环境
+     * （方案.md §五.16.6）。指纹是**保守近似**：引用换了但内容逐字没变时会多报 stale，
+     * 而 stale 永久留着会让「只吃 fresh」的消费者无谓停摆。刷新只在门禁真的比过
+     * canonical identity 之后发生，因此不会把陈旧快照洗成 fresh。
+     */
+    refreshSessionFullConversationMetricsEnvironment: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        environment: FullConversationMetricsEnvironment;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (
+        session &&
+        session.fullConversationMetrics &&
+        session.fullConversationMetricsMeta
+      ) {
+        session.fullConversationMetricsEnvironment = action.payload.environment;
+      }
+    },
+    /**
+     * 方案.md §五.16.6 `measuring` 态：只读计量在飞行中。这不是「旧值」也不是
+     * 「新值」，因此消费者（尤其自动决策）不得把它当作 fresh。
+     */
+    beginSessionFullConversationMetricsMeasure: (
+      state,
+      action: PayloadAction<{ sessionId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (session) {
+        session.fullConversationMetricsMeasuring =
+          (session.fullConversationMetricsMeasuring ?? 0) + 1;
+      }
+    },
+    endSessionFullConversationMetricsMeasure: (
+      state,
+      action: PayloadAction<{ sessionId: string }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const remaining = (session.fullConversationMetricsMeasuring ?? 0) - 1;
+      if (remaining > 0) {
+        session.fullConversationMetricsMeasuring = remaining;
+      } else {
+        delete session.fullConversationMetricsMeasuring;
+      }
     },
     setSessionScrollState: (
       state,
@@ -1764,6 +1817,9 @@ export const {
   setSessionSymbols,
   setSessionInlineError,
   setSessionFullConversationMetrics,
+  refreshSessionFullConversationMetricsEnvironment,
+  beginSessionFullConversationMetricsMeasure,
+  endSessionFullConversationMetricsMeasure,
   setSessionScrollState,
 } = sessionsSlice.actions;
 

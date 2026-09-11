@@ -1,110 +1,134 @@
 import { describe, expect, it } from "vitest";
-import {
-  fullConversationMetricsFromCompileResult,
-  legacyDiskContextMetricsFromFullConversation,
-  persistedContextMetricsToRuntime,
-} from "./fullConversationMetrics";
+import { normalizePersistedContextMetrics } from "./fullConversationMetrics";
 import {
   FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
   CONVERSATION_SUMMARY_SEMANTICS_VERSION,
 } from "core/util/fullConversationMetrics";
 
 /**
- * GUI 侧只剩过渡适配（方案.md §五.16.5）：发送载荷 compile 结果 → 快照，
- * 以及磁盘 `Session.contextMetrics` 的两种形状 ↔ 快照。identity 与契约类型本身由
- * `core/util/fullConversationMetrics.ts` 拥有，测试在 core。
+ * 磁盘 `Session.contextMetrics` 的归一化（方案.md §五.16.5）。GUI 侧只剩这一件事
+ * （发送路径的 compile 适配已在 Stage 2E 删除）：磁盘上可能是完整 Result、裸 snapshot
+ * 或 legacy `didPrune` 形状，三种都要在同一处区分，并给出可信度。
  */
 
-describe("full conversation metrics adapters (transitional, 方案.md §五.16.5)", () => {
-  it("maps a compile result into the full snapshot", () => {
-    expect(
-      fullConversationMetricsFromCompileResult({
-        didPrune: true,
-        contextPercentage: 0.9,
-        inputTokens: 180000,
-        contextLength: 200000,
-      }),
-    ).toEqual({
-      inputTokens: 180000,
-      contextLength: 200000,
-      // 过渡语义：窗口剩余量，Stage 2C 换成扣除输出预留与安全缓冲的可用预算。
-      availableTokens: 20000,
-      contextPercentage: 0.9,
-      exceedsContext: true,
-    });
-  });
+const snapshot = {
+  inputTokens: 25,
+  contextLength: 100,
+  availableTokens: 80,
+  contextPercentage: 0.25,
+  exceedsContext: false,
+};
 
-  it("tolerates a compile result without token counts", () => {
-    expect(
-      fullConversationMetricsFromCompileResult({
-        didPrune: false,
-        contextPercentage: 0.1,
-      }),
-    ).toMatchObject({ inputTokens: 0, contextLength: 0, availableTokens: 0 });
-  });
-
-  it("reads a legacy disk snapshot as value-only (no freshness identity)", () => {
-    const legacy = {
-      didPrune: false,
-      contextPercentage: 0.25,
-      inputTokens: 25,
-      contextLength: 100,
-    };
-    const restored = persistedContextMetricsToRuntime(legacy);
-    expect(restored.metrics).toMatchObject({
-      inputTokens: 25,
-      contextLength: 100,
-      contextPercentage: 0.25,
-      exceedsContext: false,
-    });
-    // No identity on disk ⇒ the gate must treat it as stale.
-    expect(restored.meta).toBeUndefined();
-  });
-
-  it("reads a persisted full Result as value plus identity", () => {
-    // Stage 2D: `history/save` writes this shape; freshness is then decided by the
-    // gate comparing revision + construction identity + schema.
+describe("normalizePersistedContextMetrics (方案.md §五.16.5)", () => {
+  it("restores a complete Result as value plus identity", () => {
     const result = {
-      metrics: {
-        inputTokens: 25,
-        contextLength: 100,
-        availableTokens: 80,
-        contextPercentage: 0.31,
-        exceedsContext: false,
-      },
+      metrics: snapshot,
       meta: {
         conversationRevision: 4,
         constructionIdentity: "identity",
         schemaVersion: FULL_CONVERSATION_METRICS_SCHEMA_VERSION,
       },
     };
-    expect(persistedContextMetricsToRuntime(result)).toEqual({
+    expect(normalizePersistedContextMetrics(result)).toEqual({
       metrics: result.metrics,
       meta: result.meta,
+      // 「可比较」：带完整身份。是否真的匹配当前环境由 selector 判定。
+      freshness: "fresh",
     });
   });
 
-  it("writes the legacy field shape when a legacy host needs one", () => {
-    const snapshot = {
-      inputTokens: 25,
-      contextLength: 100,
-      availableTokens: 80,
-      contextPercentage: 0.25,
-      exceedsContext: true,
-    };
-    expect(legacyDiskContextMetricsFromFullConversation(snapshot)).toEqual({
-      didPrune: true,
-      contextPercentage: 0.25,
-      inputTokens: 25,
-      contextLength: 100,
-    });
-  });
-
-  it("keeps absent metrics absent in both directions", () => {
-    expect(persistedContextMetricsToRuntime(undefined)).toEqual({});
+  it("keeps a Result's numbers but downgrades a malformed meta to stale", () => {
     expect(
-      legacyDiskContextMetricsFromFullConversation(undefined),
-    ).toBeUndefined();
+      normalizePersistedContextMetrics({
+        metrics: snapshot,
+        // 缺 schemaVersion：不能拿它当身份用。
+        meta: { conversationRevision: 0, constructionIdentity: "" } as any,
+      }),
+    ).toEqual({ metrics: snapshot, freshness: "stale" });
+  });
+
+  it("treats a Result whose numbers are incomplete as unavailable", () => {
+    expect(
+      normalizePersistedContextMetrics({
+        metrics: { inputTokens: 1, contextLength: 2 } as any,
+        meta: {
+          conversationRevision: 0,
+          constructionIdentity: "i",
+          schemaVersion: 1,
+        },
+      }),
+    ).toEqual({ freshness: "unavailable" });
+  });
+
+  it("restores a bare snapshot as stale (no identity on disk)", () => {
+    expect(normalizePersistedContextMetrics(snapshot)).toEqual({
+      metrics: snapshot,
+      freshness: "stale",
+    });
+  });
+
+  it("converts the legacy didPrune shape and marks it stale", () => {
+    const normalized = normalizePersistedContextMetrics({
+      didPrune: true,
+      contextPercentage: 0.9,
+      inputTokens: 180,
+      contextLength: 200,
+    });
+    expect(normalized.freshness).toBe("stale");
+    expect(normalized.meta).toBeUndefined();
+    expect(normalized.metrics).toEqual({
+      inputTokens: 180,
+      contextLength: 200,
+      // 反推值：legacy 形状没有预算信息，只能给窗口剩余。
+      availableTokens: 20,
+      contextPercentage: 0.9,
+      exceedsContext: true,
+    });
+  });
+
+  it("tolerates a legacy shape without token counts", () => {
+    expect(
+      normalizePersistedContextMetrics({
+        didPrune: false,
+        contextPercentage: 0.1,
+      }),
+    ).toEqual({
+      metrics: {
+        inputTokens: 0,
+        contextLength: 0,
+        availableTokens: 0,
+        contextPercentage: 0.1,
+        exceedsContext: false,
+      },
+      freshness: "stale",
+    });
+  });
+
+  it("refuses a legacy shape it cannot convert reliably", () => {
+    // 没有百分比就无法画出占用环 —— 这不是「0%」，是「不可用」。
+    expect(normalizePersistedContextMetrics({ didPrune: true } as any)).toEqual(
+      {
+        freshness: "unavailable",
+      },
+    );
+    expect(
+      normalizePersistedContextMetrics({
+        didPrune: true,
+        contextPercentage: Number.NaN,
+      } as any),
+    ).toEqual({ freshness: "unavailable" });
+    expect(
+      normalizePersistedContextMetrics({
+        didPrune: "yes",
+        contextPercentage: 0.5,
+      } as any),
+    ).toEqual({ freshness: "unavailable" });
+  });
+
+  it("reports absent metrics as unavailable, not as zero", () => {
+    expect(normalizePersistedContextMetrics(undefined)).toEqual({
+      freshness: "unavailable",
+    });
   });
 
   it("exposes the schema version the gate compares", () => {

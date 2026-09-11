@@ -1807,8 +1807,9 @@ describe("sessionPersistence — full-conversation measurement (Stage 2D-2)", ()
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.fullConversationMetrics).toEqual(METRICS);
     expect(session.fullConversationMetricsMeta?.conversationRevision).toBe(0);
-    // Legacy projection refreshed in the same transaction.
-    expect(session.contextPercentage).toBe(0.05);
+    // The construction-environment stamp is stored with it, so freshness stays an
+    // O(1) comparison instead of a per-render identity recompute (方案.md §五.16.6).
+    expect(session.fullConversationMetricsEnvironment).toBeDefined();
   });
 
   it("rejects a measurement whose identity no longer matches", async () => {

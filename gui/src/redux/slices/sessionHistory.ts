@@ -413,10 +413,6 @@ export function mergeSplitReplies(
  */
 export type StreamUpdateTarget = {
   history: ChatHistoryItemWithMessageId[];
-  isPruned?: boolean;
-  contextPercentage?: number;
-  contextInputTokens?: number;
-  contextLength?: number;
   // UI 设置：默认 true=不合并气泡。true 时 thinking 之后的 assistant 内容
   // 保持原有行为（新建条目），false 时才续接前一个 assistant 条目。
   dontMergeReplyBubbles?: boolean;
@@ -424,9 +420,13 @@ export type StreamUpdateTarget = {
 
 /**
  * 只携带编译元数据的流式消息：由 `BaseLLM.streamChat` 在后端自己编译
- * （`precompiled !== true`）时产出，内容为空，只带裁剪/占用信息，供前端免去
- * 一次单独的 compile 请求。它不是会话内容 —— 它不写入任何 message/tool 字段，
- * 只写 `StreamUpdateTarget` 上的展示元数据。
+ * （`precompiled !== true`）时产出，内容为空，只带**发送载荷**的裁剪/占用信息。
+ * 它不是会话内容，因此不写入任何 message/tool 字段。
+ *
+ * Stage 2E 起它也不再写入任何指标：ContextStatus 的唯一数据源是**完整逻辑会话**指标
+ * （`fullConversationMetrics`，由 Core 在保存锁内或 `history/measureConversation` 计量），
+ * 而发送载荷指标是请求局部变量（方案.md §五.16.5「不进 Redux」）。识别它仍然必要 ——
+ * 这样它不会退化成「一个空的 assistant 帧」而被误判成会话写入（§五.16.4 步骤 2）。
  */
 function isCompileMetadataMessage(message: ChatMessage): boolean {
   return (
@@ -462,11 +462,7 @@ export function applyStreamUpdatesToHistory(
     // the backend compiles non-precompiled messages). These carry context
     // pruning info so the frontend doesn't need a separate compile request.
     if (isCompileMetadataMessage(message)) {
-      target.isPruned = !!(message.metadata as any).didPrune;
-      target.contextPercentage =
-        (message.metadata as any).contextPercentage ?? 0;
-      target.contextInputTokens = (message.metadata as any).contextInputTokens;
-      target.contextLength = (message.metadata as any).contextLength;
+      // 发送载荷的裁剪/占用信息到此为止：不写 history、不写指标、不 arm 终态提交。
       continue;
     }
 

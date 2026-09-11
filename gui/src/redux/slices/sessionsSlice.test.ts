@@ -25,6 +25,8 @@ import {
   clearSessionConversationSummary,
   setSessionHistory,
   setSessionFullConversationMetrics,
+  beginSessionFullConversationMetricsMeasure,
+  endSessionFullConversationMetricsMeasure,
   setSessionFirstTurn,
   setSessionMode,
   prependSessionHistory,
@@ -51,6 +53,24 @@ function item(
   return {
     message: { id, role, content } as ChatHistoryItemWithMessageId["message"],
     contextItems: [],
+  };
+}
+
+/** 方案.md §五.16.6: the construction-environment stamp a caller validated. */
+function envStamp() {
+  return {
+    rules: [],
+    tools: [],
+    experimental: undefined,
+    skipBaseSystemMessage: false,
+    modelsByRole: [],
+    selectedModelByRole: undefined,
+    toolSettings: {},
+    toolGroupSettings: {},
+    ruleSettings: {},
+    chatModelTitle: "gpt-4o",
+    mode: "chat" as const,
+    hasReasoningEnabled: undefined,
   };
 }
 
@@ -192,8 +212,7 @@ describe("sessionsSlice — ownership", () => {
         conversationRevision: 0,
         schemaVersion: 1,
       },
-      isPruned: false,
-      contextPercentage: 0.42,
+      fullConversationMetricsEnvironment: envStamp(),
     });
     const revisionBefore = state.sessionsById.s1.conversationRevision;
 
@@ -207,7 +226,10 @@ describe("sessionsSlice — ownership", () => {
     );
 
     expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
-    expect(state.sessionsById.s1.contextPercentage).toBe(0.42);
+    // Bookkeeping does not invalidate freshness: the environment stamp survives.
+    expect(state.sessionsById.s1.fullConversationMetricsEnvironment).toEqual(
+      envStamp(),
+    );
     expect(state.sessionsById.s1.conversationRevision).toBe(revisionBefore);
     // Still must be re-saved.
     expect(state.sessionsById.s1.dirty).toBe(true);
@@ -304,8 +326,12 @@ describe("sessionsSlice — ownership", () => {
     expect(state.sessionsById.s1.conversationRevision).toBe(before + 1);
     // Last-known value kept visible; only the freshness identity is cleared.
     expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
-    expect(state.sessionsById.s1.contextPercentage).toBe(0.3);
     expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
+    // …and with the identity gone, the environment stamp is meaningless: dropped
+    // together with it so freshness can never be claimed from half state.
+    expect(
+      state.sessionsById.s1.fullConversationMetricsEnvironment,
+    ).toBeUndefined();
 
     // A stale terminal (a different live request) is a no-op.
     const after = state.sessionsById.s1.conversationRevision;
@@ -398,16 +424,18 @@ describe("sessionsSlice — ownership", () => {
       conversationRevision: 0,
       schemaVersion: 1,
     };
+    const seeded = {
+      inputTokens: 0,
+      contextLength: 0,
+      availableTokens: 0,
+      contextPercentage: 0.2,
+      exceedsContext: false,
+    };
     let state = stateWith({
       history: [item("u1", "user", "hi")],
-      fullConversationMetrics: {
-        inputTokens: 0,
-        contextLength: 0,
-        availableTokens: 0,
-        contextPercentage: 0.2,
-        exceedsContext: false,
-      },
+      fullConversationMetrics: seeded,
       fullConversationMetricsMeta: meta,
+      fullConversationMetricsEnvironment: envStamp(),
     });
     state = sessionsSlice.reducer(
       state,
@@ -429,8 +457,12 @@ describe("sessionsSlice — ownership", () => {
         ],
       }),
     );
-    // The prune info is kept, but it is not conversation content.
-    expect(state.sessionsById.s1.isPruned).toBe(true);
+    // The prune metadata is history payload, not conversation content: the
+    // snapshot keeps its last-known value AND its freshness identity. (The legacy
+    // `isPruned` projection that used to mirror the chunk is gone in Stage 2E —
+    // `exceedsContext` now only ever comes from a real measurement.)
+    expect(state.sessionsById.s1.fullConversationMetrics).toBe(seeded);
+    expect(state.sessionsById.s1.fullConversationMetricsMeta).toBe(meta);
 
     state = sessionsSlice.reducer(
       state,
@@ -904,8 +936,10 @@ describe("sessionsSlice — ownership", () => {
       );
 
       expect(state.sessionsById.s1.fullConversationMetrics).toBe(metrics);
-      expect(state.sessionsById.s1.contextPercentage).toBeUndefined();
       expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
+      expect(
+        state.sessionsById.s1.fullConversationMetricsEnvironment,
+      ).toBeUndefined();
     }
   });
 
@@ -1515,7 +1549,7 @@ describe("sessionsSlice — full conversation metrics", () => {
     },
   });
 
-  it("stores the result and projects it onto the legacy UI fields", () => {
+  it("stores the result together with the validated environment stamp", () => {
     let state = stateWith({ history: [item("u1", "user", "hi")] });
     const before = state.sessionsById.s1.conversationRevision;
 
@@ -1524,6 +1558,7 @@ describe("sessionsSlice — full conversation metrics", () => {
       setSessionFullConversationMetrics({
         sessionId: "s1",
         result: result(before),
+        environment: envStamp(),
       }),
     );
 
@@ -1533,11 +1568,10 @@ describe("sessionsSlice — full conversation metrics", () => {
     expect(state.sessionsById.s1.fullConversationMetricsMeta).toEqual(
       result(before).meta,
     );
-    // 过渡投影：ContextStatus 仍读这些零散字段（Stage 2E 才改读完整指标）。
-    expect(state.sessionsById.s1.isPruned).toBe(false);
-    expect(state.sessionsById.s1.contextPercentage).toBe(0.1);
-    expect(state.sessionsById.s1.contextInputTokens).toBe(10);
-    expect(state.sessionsById.s1.contextLength).toBe(100);
+    // fresh 判定要它做 O(1) 比较（§五.16.6）：没有它就只能算 stale。
+    expect(state.sessionsById.s1.fullConversationMetricsEnvironment).toEqual(
+      envStamp(),
+    );
   });
 
   it("rejects a result for another conversation revision", () => {
@@ -1552,12 +1586,49 @@ describe("sessionsSlice — full conversation metrics", () => {
       setSessionFullConversationMetrics({
         sessionId: "s1",
         result: result(before + 1),
+        environment: envStamp(),
       }),
     );
 
     expect(state.sessionsById.s1.fullConversationMetrics).toBeUndefined();
     expect(state.sessionsById.s1.fullConversationMetricsMeta).toBeUndefined();
-    expect(state.sessionsById.s1.contextPercentage).toBeUndefined();
+    expect(
+      state.sessionsById.s1.fullConversationMetricsEnvironment,
+    ).toBeUndefined();
+  });
+
+  it("counts in-flight measurements and clears the count at zero", () => {
+    // 方案.md §五.16.6 `measuring`: a counter, so two overlapping requests cannot
+    // clear each other's state.
+    let state = stateWith();
+    const begin = () =>
+      (state = sessionsSlice.reducer(
+        state,
+        beginSessionFullConversationMetricsMeasure({ sessionId: "s1" }),
+      ));
+    const end = () =>
+      (state = sessionsSlice.reducer(
+        state,
+        endSessionFullConversationMetricsMeasure({ sessionId: "s1" }),
+      ));
+
+    expect(
+      state.sessionsById.s1.fullConversationMetricsMeasuring,
+    ).toBeUndefined();
+    begin();
+    begin();
+    expect(state.sessionsById.s1.fullConversationMetricsMeasuring).toBe(2);
+    end();
+    expect(state.sessionsById.s1.fullConversationMetricsMeasuring).toBe(1);
+    end();
+    expect(
+      state.sessionsById.s1.fullConversationMetricsMeasuring,
+    ).toBeUndefined();
+    // An extra end (never begun) must not go negative.
+    end();
+    expect(
+      state.sessionsById.s1.fullConversationMetricsMeasuring,
+    ).toBeUndefined();
   });
 });
 
