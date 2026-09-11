@@ -16,6 +16,8 @@
  * reference to the queue.
  */
 
+import { mergeMeasurementIntent } from "./sessionSaveIntent";
+
 /**
  * 方案.md §五.16.4「保存边界（按显式开关，不按 reason）」：**调用方**声明本次保存是否
  * 建立了一个新的完整会话内容版本，以及是哪一个版本。
@@ -61,8 +63,30 @@ export function getPendingSave(sessionId: string): PendingSave | undefined {
   return pendingSaves.get(sessionId);
 }
 
+/**
+ * Coalesce a new pending save into the session's single slot (方案.md §五.16.4).
+ *
+ * `revision` / `reason` are last-write-wins — the newest snapshot is the one that
+ * must reach disk. The **measurement intent is merged** instead: a later
+ * bookkeeping save (`none`) must not silently swallow a `conversation-version`
+ * obligation that a terminal established while the previous save was running.
+ * Merging the intent is safe because the payload builder still checks the stated
+ * revision against the session's current one.
+ */
 export function setPendingSave(sessionId: string, entry: PendingSave): void {
-  pendingSaves.set(sessionId, entry);
+  const previous = pendingSaves.get(sessionId);
+  pendingSaves.set(
+    sessionId,
+    previous
+      ? {
+          ...entry,
+          measurementIntent: mergeMeasurementIntent(
+            previous.measurementIntent,
+            entry.measurementIntent,
+          ),
+        }
+      : entry,
+  );
 }
 
 export function deletePendingSave(sessionId: string): void {

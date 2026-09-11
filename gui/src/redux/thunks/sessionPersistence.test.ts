@@ -9,6 +9,7 @@ import {
   initialSessionRuntime,
   markSessionDirty,
   setSessionHistory,
+  updateHistoryItemByMessageId,
 } from "../slices/sessionsSlice";
 import { loadMoreHistory } from "./sessionPaging";
 import {
@@ -1605,6 +1606,156 @@ describe("sessionPersistence — full-conversation measurement (Stage 2D-2)", ()
       ([type]) => type === "history/save",
     )![1] as any;
     expect(payload.fullConversationMeasurement).toBeUndefined();
+  });
+
+  /**
+   * Holds `history/save` in flight until `release()`, then lets every later save
+   * through immediately — the save loop drains the whole queue, so a mock that
+   * resolves only one promise would deadlock the second iteration.
+   */
+  function revisionOf(store: ReturnType<typeof makeStore>) {
+    return selectSessionById(store.getState() as any, "s1")!
+      .conversationRevision;
+  }
+
+  function heldSaves(store: ReturnType<typeof makeStore>) {
+    const ok = {
+      status: "success",
+      content: { firstTurnItems: [], totalHistoryCount: 2 },
+      done: true,
+    };
+    let waiting: ((value: any) => void)[] = [];
+    let released = false;
+    store.mockIdeMessenger.request = vi.fn((type: string) =>
+      Promise.resolve(
+        type !== "history/save"
+          ? { status: "success", content: {}, done: true }
+          : released
+            ? ok
+            : new Promise((resolve) => waiting.push(resolve)),
+      ),
+    ) as any;
+    return {
+      async started() {
+        await vi.waitFor(() => expect(waiting.length).toBeGreaterThan(0));
+      },
+      release() {
+        released = true;
+        const pending = waiting;
+        waiting = [];
+        pending.forEach((resolve) => resolve(ok));
+      },
+      savePayloads() {
+        return (store.mockIdeMessenger.request as any).mock.calls
+          .filter(([type]: any[]) => type === "history/save")
+          .map(([, payload]: any[]) => payload);
+      },
+    };
+  }
+
+  it("does not let a coalesced bookkeeping save swallow a terminal measurement", async () => {
+    // 方案.md §五.16.4: the pending slot holds one snapshot per session, but a
+    // measurement obligation must survive coalescing — a checkpoint queued while
+    // the terminal save waits must not silently replace it.
+    const store = makeStore({ chatModelTitle: "gpt-4o" }, {}, [CHAT_MODEL]);
+    const save = heldSaves(store);
+
+    const first = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "USER_SUBMITTED",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
+    await save.started();
+
+    const revision = revisionOf(store);
+    const terminal = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "STREAM_COMPLETED",
+        measurementIntent: {
+          kind: "conversation-version",
+          conversationRevision: revision,
+        },
+      }),
+    );
+    const bookkeeping = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "STREAM_CHECKPOINT:regular",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
+
+    save.release();
+    await Promise.all([first, terminal, bookkeeping]);
+
+    // The coalesced save that actually ran still asked Core to measure, naming
+    // the terminal's content version.
+    expect(
+      save
+        .savePayloads()
+        .some(
+          (payload: any) =>
+            payload.fullConversationMeasurement?.conversationRevision ===
+            revision,
+        ),
+    ).toBe(true);
+  });
+
+  it("drops a kept intent whose version moved on before the save ran", async () => {
+    // Merging keeps an unfulfilled obligation, but the payload still compares the
+    // stated revision: content that moved on must not be measured as a stale
+    // version and then stamped onto the new one.
+    const store = makeStore({ chatModelTitle: "gpt-4o" }, {}, [CHAT_MODEL]);
+    const save = heldSaves(store);
+
+    const first = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "USER_SUBMITTED",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
+    await save.started();
+
+    const staleRevision = revisionOf(store);
+    const terminal = run(
+      store,
+      saveSession({
+        sessionId: "s1",
+        reason: "STREAM_COMPLETED",
+        measurementIntent: {
+          kind: "conversation-version",
+          conversationRevision: staleRevision,
+        },
+      }),
+    );
+    // Content moves on while the queued save is still waiting to run.
+    store.dispatch(
+      updateHistoryItemByMessageId({
+        sessionId: "s1",
+        messageId: "a1",
+        updates: { message: item("a1", "assistant", "edited").message },
+      }),
+    );
+    expect(revisionOf(store)).not.toBe(staleRevision);
+
+    save.release();
+    await Promise.all([first, terminal]);
+
+    expect(
+      save
+        .savePayloads()
+        .every(
+          (payload: any) => payload.fullConversationMeasurement === undefined,
+        ),
+    ).toBe(true);
   });
 
   it("drops the measurement when the stated revision is no longer current", async () => {

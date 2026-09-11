@@ -36,6 +36,40 @@ export function conversationVersionIntent(
 }
 
 /**
+ * 合并保存队列 coalescing 时的两个意图。
+ *
+ * 队列每个 session 只有一个 pending 槽位：入队是 last-write-wins，但**计量义务不能被
+ * 后来的簿记保存吞掉**。可达场景：
+ *
+ * ```text
+ * save A 正在运行
+ * → terminal save B 入队 conversation-version(12)
+ * → 一个 checkpoint/bookkeeping save C 入队 none     ← 覆盖了 B 的槽位
+ * → A 结束，循环消费 C ⇒ terminal 建立的权威计量被静默丢弃
+ * ```
+ *
+ * 规则（最新 intent 优先，但 none 不会抹掉尚未兑现的 conversation-version）：
+ *
+ * ```text
+ * next 是 conversation-version  ⇒ 用 next（更新的快照已包含旧内容）
+ * next 是 none 且 previous 是 conversation-version ⇒ 保留 previous
+ * 两个都是 none                  ⇒ none
+ * ```
+ *
+ * 保留的旧 intent 仍要过 `buildSessionPayload` 的当前 revision 校验：内容已经推进到更
+ * 新版本时不携带计量（磁盘 metrics 保持原值、继续 stale），因此不会把旧版本计成 fresh。
+ */
+export function mergeMeasurementIntent(
+  previous: SessionSaveMeasurementIntent,
+  next: SessionSaveMeasurementIntent,
+): SessionSaveMeasurementIntent {
+  if (next.kind === "conversation-version") {
+    return next;
+  }
+  return previous;
+}
+
+/**
  * 比较一次边界前后的 revision：**只有真的推进了**才算建立了新的内容版本。
  *
  * 这是聊天终态（`finishSessionStreamWorkflow`）使用的判据 —— 「无输出的终态不 commit」
