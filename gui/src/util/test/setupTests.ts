@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom";
+import { resetLegacyMessageIdObservabilityForTests } from "../../redux/util/legacyMessageIdObservability";
 
 // Node 25+ ships its own experimental `localStorage` global whose getter
 // returns undefined when web storage is not configured. Because the key
@@ -42,6 +43,10 @@ for (const key of ["localStorage", "sessionStorage"] as const) {
 
 afterEach(() => {
   vi.clearAllMocks();
+  // P5a: the telemetry permission and the event sink are module-level (one
+  // probe per webview lifetime), so they must not leak between test files or
+  // cases. Reset both to their boot state after every test.
+  resetLegacyMessageIdObservabilityForTests();
 });
 
 afterAll(() => {

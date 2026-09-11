@@ -86,7 +86,11 @@ function diskStore(
       },
       sessionsById: {},
     },
-    runtimeCapabilities: { historyMigrateIds: capability, probeAttempts: 0 },
+    runtimeCapabilities: {
+      historyMigrateIds: capability,
+      probeAttempts: 0,
+      host: "other",
+    },
     config: configWithUi(ui),
   });
 }
@@ -119,7 +123,11 @@ function runtimeStore(
       },
       sessionsById: { s1 },
     },
-    runtimeCapabilities: { historyMigrateIds: capability, probeAttempts: 0 },
+    runtimeCapabilities: {
+      historyMigrateIds: capability,
+      probeAttempts: 0,
+      host: "other",
+    },
     config: configWithUi({
       lazyLoadHistory: true,
       lazyLoadHistoryInitialCount: 2,

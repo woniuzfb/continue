@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
+import type { TelemetryHost } from "../util/legacyMessageIdObservability";
 
 /**
  * Host capabilities declared by the IDE (方案.md §九.13 / P4a of the legacy
@@ -42,6 +43,13 @@ export type RuntimeCapabilitiesState = {
    * state transition, up to `MAX_CAPABILITY_PROBE_ATTEMPTS`.
    */
   probeAttempts: number;
+  /**
+   * Normalised host dimension (P5a), derived from the **same** `getIdeInfo`
+   * response the capability probe already parses — never from a second request.
+   * A probe that never got an answer leaves it at `"other"`, which is the
+   * honest value: the host was not identified.
+   */
+  host: TelemetryHost;
 };
 
 /**
@@ -54,6 +62,7 @@ export const MAX_CAPABILITY_PROBE_ATTEMPTS = 3;
 export const initialRuntimeCapabilitiesState: RuntimeCapabilitiesState = {
   historyMigrateIds: "unknown",
   probeAttempts: 0,
+  host: "other",
 };
 
 export const runtimeCapabilitiesSlice = createSlice({
@@ -69,12 +78,16 @@ export const runtimeCapabilitiesSlice = createSlice({
     registerCapabilityProbeAttempt: (state) => {
       state.probeAttempts += 1;
     },
+    setTelemetryHost: (state, action: PayloadAction<TelemetryHost>) => {
+      state.host = action.payload;
+    },
   },
 });
 
 export const {
   setHistoryMigrateIdsCapability,
   registerCapabilityProbeAttempt,
+  setTelemetryHost,
 } = runtimeCapabilitiesSlice.actions;
 
 /**
@@ -84,5 +97,9 @@ export const {
 export const selectMessageIdMigrationCapability = (state: {
   runtimeCapabilities: RuntimeCapabilitiesState;
 }): MessageIdMigrationCapability => state.runtimeCapabilities.historyMigrateIds;
+
+export const selectTelemetryHost = (state: {
+  runtimeCapabilities: RuntimeCapabilitiesState;
+}): TelemetryHost => state.runtimeCapabilities.host;
 
 export default runtimeCapabilitiesSlice.reducer;

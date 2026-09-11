@@ -3,7 +3,11 @@ import { Session } from "core";
 import { selectSessionById } from "../selectors/sessions";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
 import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
-import { selectMessageIdMigrationCapability } from "../slices/runtimeCapabilitiesSlice";
+import { emitLegacyFallbackMintedEvent } from "../util/legacyMessageIdObservability";
+import {
+  selectMessageIdMigrationCapability,
+  selectTelemetryHost,
+} from "../slices/runtimeCapabilitiesSlice";
 import { upsertSessionMetadata } from "../slices/sessionCatalogSlice";
 import type {
   ChatHistoryItemWithMessageId,
@@ -206,6 +210,11 @@ async function performSave(
         sessionId,
         mintedCount: firstTurnReport.mintedCount,
         hostCapability: selectMessageIdMigrationCapability(getState()),
+      });
+      emitLegacyFallbackMintedEvent({
+        mintedCount: firstTurnReport.mintedCount,
+        host: selectTelemetryHost(getState()),
+        messenger: extra.ideMessenger,
       });
     }
     dispatch(

@@ -5,9 +5,16 @@ import {
   MAX_CAPABILITY_PROBE_ATTEMPTS,
   registerCapabilityProbeAttempt,
   setHistoryMigrateIdsCapability,
+  setTelemetryHost,
   type MessageIdMigrationCapability,
 } from "../slices/runtimeCapabilitiesSlice";
 import { setMessageIdMigrationState } from "../slices/sessionsSlice";
+import {
+  emitLegacyMessageIdEventIfEnabled,
+  LEGACY_MESSAGE_ID_EVENT_NAME,
+  telemetryHostFromIdeType,
+  type TelemetryHost,
+} from "../util/legacyMessageIdObservability";
 import type {
   AppThunkDispatch,
   RootState,
@@ -172,6 +179,10 @@ async function runCapabilityProbe(api: CapabilityProbeApi): Promise<void> {
   api.dispatch(registerCapabilityProbeAttempt());
 
   let next: MessageIdMigrationCapability;
+  // The same `getIdeInfo` response that decides the capability also identifies
+  // the host — P5 reuses it rather than sending a second request. A probe that
+  // never got an answer leaves the host unidentified ("other").
+  let host: TelemetryHost = "other";
   try {
     const result = await api.extra.ideMessenger.request(
       "getIdeInfo",
@@ -180,12 +191,15 @@ async function runCapabilityProbe(api: CapabilityProbeApi): Promise<void> {
         timeoutMs: IDE_INFO_TIMEOUT_MS,
       },
     );
-    next =
-      result.status === "success"
-        ? result.content?.capabilities?.historyMigrateIds === true
+    if (result.status === "success") {
+      host = telemetryHostFromIdeType(result.content?.ideType);
+      next =
+        result.content?.capabilities?.historyMigrateIds === true
           ? "supported"
-          : "unsupported"
-        : "probe-failed";
+          : "unsupported";
+    } else {
+      next = "probe-failed";
+    }
   } catch {
     // A failed probe is a fact about *asking*, not about the host: it never
     // becomes `unsupported`, so a stalled transport cannot permanently disable
@@ -198,6 +212,35 @@ async function runCapabilityProbe(api: CapabilityProbeApi): Promise<void> {
     return;
   }
   api.dispatch(setHistoryMigrateIdsCapability(next));
+  api.dispatch(setTelemetryHost(host));
+
+  // P5a: the capability settles exactly once — `supported`/`unsupported` never
+  // retry. A probe failure is only reported once the bounded budget is spent,
+  // not on every transient miss (three retries are one decision procedure).
+  if (next === "supported" || next === "unsupported") {
+    void emitLegacyMessageIdEventIfEnabled(
+      {
+        name: LEGACY_MESSAGE_ID_EVENT_NAME,
+        stage: "capability",
+        outcome: next,
+        host,
+      },
+      api.extra.ideMessenger,
+    );
+  } else if (
+    api.getState().runtimeCapabilities.probeAttempts >=
+    MAX_CAPABILITY_PROBE_ATTEMPTS
+  ) {
+    void emitLegacyMessageIdEventIfEnabled(
+      {
+        name: LEGACY_MESSAGE_ID_EVENT_NAME,
+        stage: "capability",
+        outcome: "probe_failed",
+        host,
+      },
+      api.extra.ideMessenger,
+    );
+  }
 }
 
 /**
@@ -290,6 +333,19 @@ export const maybeMigrateSessionMessageIds = createAsyncThunk<
           },
         }),
       );
+      // P5a: the event carries only the stable outcome enum, never the raw
+      // error text (which can carry a path) or the session id.
+      void emitLegacyMessageIdEventIfEnabled(
+        {
+          name: LEGACY_MESSAGE_ID_EVENT_NAME,
+          stage: "migration",
+          outcome: isIdeRequestTimeoutError(error)
+            ? "request_timeout"
+            : "migration_failed",
+          host: getState().runtimeCapabilities.host,
+        },
+        extra.ideMessenger,
+      );
       return;
     }
 
@@ -311,6 +367,18 @@ export const maybeMigrateSessionMessageIds = createAsyncThunk<
           },
         }),
       );
+      void emitLegacyMessageIdEventIfEnabled(
+        {
+          name: LEGACY_MESSAGE_ID_EVENT_NAME,
+          stage: "migration",
+          outcome:
+            response.errorCode === "SESSION_FILE_INVALID"
+              ? "session_file_invalid"
+              : "migration_failed",
+          host: getState().runtimeCapabilities.host,
+        },
+        extra.ideMessenger,
+      );
       return;
     }
 
@@ -323,6 +391,17 @@ export const maybeMigrateSessionMessageIds = createAsyncThunk<
           addedCount: response.content.addedCount,
         },
       }),
+    );
+    // `migrated: false` is a success no-op, not an error — the event keeps the
+    // two apart so a host that never needed migration is not read as a failure.
+    void emitLegacyMessageIdEventIfEnabled(
+      {
+        name: LEGACY_MESSAGE_ID_EVENT_NAME,
+        stage: "migration",
+        outcome: response.content.migrated ? "written" : "noop",
+        host: getState().runtimeCapabilities.host,
+      },
+      extra.ideMessenger,
     );
   },
 );

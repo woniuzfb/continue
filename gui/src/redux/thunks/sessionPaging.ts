@@ -16,7 +16,11 @@ import {
 } from "../util/historyTarget";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
 import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
-import { selectMessageIdMigrationCapability } from "../slices/runtimeCapabilitiesSlice";
+import { emitLegacyFallbackMintedEvent } from "../util/legacyMessageIdObservability";
+import {
+  selectMessageIdMigrationCapability,
+  selectTelemetryHost,
+} from "../slices/runtimeCapabilitiesSlice";
 import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 
 /**
@@ -95,6 +99,11 @@ export const loadMoreHistory = createAsyncThunk<
           sessionId,
           mintedCount: itemsReport.mintedCount,
           hostCapability: selectMessageIdMigrationCapability(getState()),
+        });
+        emitLegacyFallbackMintedEvent({
+          mintedCount: itemsReport.mintedCount,
+          host: selectTelemetryHost(getState()),
+          messenger: extra.ideMessenger,
         });
       }
       dispatch(
@@ -194,6 +203,11 @@ export const loadFullHistory = createAsyncThunk<
         sessionId,
         mintedCount: mergedReport.mintedCount,
         hostCapability: selectMessageIdMigrationCapability(getState()),
+      });
+      emitLegacyFallbackMintedEvent({
+        mintedCount: mergedReport.mintedCount,
+        host: selectTelemetryHost(getState()),
+        messenger: extra.ideMessenger,
       });
     }
     dispatch(

@@ -53,6 +53,12 @@ const DEFAULT_MOCK_CORE_RESPONSES: MockResponses = {
     extensionVersion: "0.0.0",
     isPrerelease: false,
   },
+  /**
+   * The mock host answers the opt-out predicate but opts **out**, so the P5a
+   * telemetry gate stays fail-closed by default. Tests that exercise emission
+   * set this to `true` explicitly.
+   */
+  isTelemetryEnabled: false,
   "history/save": {
     firstTurnItems: [],
     totalHistoryCount: 0,

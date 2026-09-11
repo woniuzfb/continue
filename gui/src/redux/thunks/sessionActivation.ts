@@ -17,7 +17,11 @@ import type { ThunkApiType } from "../store";
 import { mergeSettings } from "../util/mergeSettings";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
 import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
-import { selectMessageIdMigrationCapability } from "../slices/runtimeCapabilitiesSlice";
+import { emitLegacyFallbackMintedEvent } from "../util/legacyMessageIdObservability";
+import {
+  selectMessageIdMigrationCapability,
+  selectTelemetryHost,
+} from "../slices/runtimeCapabilitiesSlice";
 import { extractFirstTurnItems } from "core/util/firstTurn";
 import { latestSummaryOf } from "../slices/sessionHistory";
 import type { ChatHistoryItem } from "core";
@@ -128,6 +132,13 @@ export const loadSessionRuntime = createAsyncThunk<
           sessionId,
           mintedCount,
           hostCapability: selectMessageIdMigrationCapability(getState()),
+        });
+        // P5a: a separate, closed-allow-list event — the P4b report is never
+        // spread into it (it carries `sessionId`).
+        emitLegacyFallbackMintedEvent({
+          mintedCount,
+          host: selectTelemetryHost(getState()),
+          messenger: extra.ideMessenger,
         });
       }
       const runtime = initialSessionRuntime(sessionId, session.title, {

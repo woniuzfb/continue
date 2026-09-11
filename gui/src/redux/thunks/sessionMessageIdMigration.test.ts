@@ -105,7 +105,11 @@ function makeStore(
       ),
       sessionsById,
     },
-    runtimeCapabilities: { historyMigrateIds: capability, probeAttempts: 0 },
+    runtimeCapabilities: {
+      historyMigrateIds: capability,
+      probeAttempts: 0,
+      host: "other",
+    },
     config: INITIAL_CONFIG_SLICE,
   });
 }
@@ -118,6 +122,21 @@ function session(store: Store, id = "s1") {
 
 function requestTypes(store: Store, request: { mock: { calls: any[][] } }) {
   return request.mock.calls.map((call) => call[0]);
+}
+
+/**
+ * P5a: the opt-out probe (`isTelemetryEnabled`) is issued by the telemetry
+ * gate, not by the migration itself. These sequence assertions describe the
+ * migration protocol, so the gate's probe is filtered out — it is asserted in
+ * `legacyMessageIdEmissions.test.ts` instead.
+ */
+function migrationRequestTypes(
+  store: Store,
+  request: { mock: { calls: any[][] } },
+) {
+  return requestTypes(store, request).filter(
+    (messageType) => messageType !== "isTelemetryEnabled",
+  );
 }
 
 function run(store: Store, thunk: any) {
@@ -150,7 +169,7 @@ describe("scheduleMessageIdMigrationIfSafe — host capability", () => {
 
     await run(store, scheduleMessageIdMigrationIfSafe({ sessionId: "s1" }));
 
-    expect(requestTypes(store, request)).toEqual(["getIdeInfo"]);
+    expect(migrationRequestTypes(store, request)).toEqual(["getIdeInfo"]);
     expect(
       (store.getState() as any).runtimeCapabilities.historyMigrateIds,
     ).toBe("unsupported");
@@ -167,7 +186,7 @@ describe("scheduleMessageIdMigrationIfSafe — host capability", () => {
     expect(request).toHaveBeenCalledWith("getIdeInfo", undefined, {
       timeoutMs: IDE_INFO_TIMEOUT_MS,
     });
-    expect(requestTypes(store, request)).toEqual(["getIdeInfo"]);
+    expect(migrationRequestTypes(store, request)).toEqual(["getIdeInfo"]);
     expect((store.getState() as any).runtimeCapabilities.probeAttempts).toBe(1);
   });
 
@@ -187,7 +206,9 @@ describe("scheduleMessageIdMigrationIfSafe — host capability", () => {
       { id: "s1" },
       { timeoutMs: MESSAGE_ID_MIGRATION_TIMEOUT_MS },
     );
-    expect(requestTypes(store, request)).toEqual(["history/migrateIds"]);
+    expect(migrationRequestTypes(store, request)).toEqual([
+      "history/migrateIds",
+    ]);
     expect(session(store).messageIdMigration).toEqual({
       state: "succeeded",
       migrated: true,
@@ -255,12 +276,15 @@ describe("scheduleMessageIdMigrationIfSafe — host capability", () => {
     await run(store, scheduleMessageIdMigrationIfSafe({ sessionId: "s1" }));
     await run(store, scheduleMessageIdMigrationIfSafe({ sessionId: "s1" }));
 
-    expect(request).toHaveBeenCalledTimes(3);
+    // Only the three bounded `getIdeInfo` flights; the one `isTelemetryEnabled`
+    // call is the P5 gate's probe, triggered once when the budget is spent.
+    expect(requestTypesSeen.filter((t) => t === "getIdeInfo")).toHaveLength(3);
     expect(maxConcurrent).toBe(1);
     expect(requestTypesSeen).toEqual([
       "getIdeInfo",
       "getIdeInfo",
       "getIdeInfo",
+      "isTelemetryEnabled",
     ]);
   });
 
@@ -494,7 +518,9 @@ describe("maybeMigrateSessionMessageIds — outcomes", () => {
     await run(store, scheduleMessageIdMigrationIfSafe({ sessionId: "s1" }));
     await run(store, maybeMigrateSessionMessageIds({ sessionId: "s1" }));
 
-    expect(requestTypes(store, request)).toEqual(["history/migrateIds"]);
+    expect(migrationRequestTypes(store, request)).toEqual([
+      "history/migrateIds",
+    ]);
     expect(session(store).messageIdMigration).toMatchObject({
       state: "succeeded",
     });

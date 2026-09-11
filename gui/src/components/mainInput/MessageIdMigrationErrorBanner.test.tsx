@@ -2,6 +2,10 @@ import { render, screen } from "@testing-library/react";
 import { Provider } from "react-redux";
 import { describe, expect, it, vi } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
+import {
+  setLegacyMessageIdEventSink,
+  type LegacyMessageIdEvent,
+} from "../../redux/util/legacyMessageIdObservability";
 import type { MessageIdMigrationState } from "../../redux/slices/sessionsSlice";
 import {
   initialSessionRuntime,
@@ -194,6 +198,39 @@ describe("MessageIdMigrationErrorBanner", () => {
     expect(container.textContent).toContain("Couldn't save this session");
     expect(container.textContent).toContain("Retry save");
     expect(container.textContent).toContain("Message ID migration failed");
+  });
+
+  it("emits no telemetry event on mount or re-render (P5a: never from a component)", () => {
+    const events: LegacyMessageIdEvent[] = [];
+    setLegacyMessageIdEventSink((event) => {
+      events.push(event);
+    });
+    const store = makeStore(
+      {
+        s1: { messageIdMigration: failed("SESSION_FILE_INVALID") },
+        s2: { messageIdMigration: { state: "not-requested" } },
+      },
+      "s2",
+    );
+
+    const view = renderFor(store, "s1");
+    // Force several re-renders; emission points must all live outside React.
+    view.rerender(
+      <Provider store={store}>
+        <SessionScope sessionId="s1">
+          <MessageIdMigrationErrorBanner />
+        </SessionScope>
+      </Provider>,
+    );
+    view.rerender(
+      <Provider store={store}>
+        <SessionScope sessionId="s1">
+          <MessageIdMigrationErrorBanner />
+        </SessionScope>
+      </Provider>,
+    );
+
+    expect(events).toEqual([]);
   });
 
   it("changes nothing: no metrics invalidation, no dirty flag, no request", () => {
