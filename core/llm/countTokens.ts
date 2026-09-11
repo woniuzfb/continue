@@ -435,6 +435,204 @@ function pruneRawPromptFromTop(
 }
 
 /**
+ * 方案.md §7.1.1/§7.1.2：**唯一的 token 预算计算**。`compileChatMessages`（发送路径的
+ * prune 决策与指标）与 `measureChatMessagesNoPrune`（完整会话计量）必须共用这一处，
+ * 禁止各自复制公式 —— 否则两边的 `availableTokens` / 安全缓冲 / 输出预留会漂移。
+ */
+export type ChatTokenBudget = {
+  contextLength: number;
+  countingSafetyBuffer: number;
+  /** 为输出保留的 token：`min(MIN_RESPONSE_TOKENS, maxTokens)`。 */
+  minOutputTokens: number;
+  /** 供输入使用的预算：`contextLength − countingSafetyBuffer − minOutputTokens`。 */
+  availableTokens: number;
+};
+
+export function resolveChatTokenBudget({
+  knownContextLength,
+  maxTokens,
+}: {
+  knownContextLength: number | undefined;
+  maxTokens: number;
+}): ChatTokenBudget {
+  const contextLength = knownContextLength ?? DEFAULT_PRUNING_LENGTH;
+  const countingSafetyBuffer = getTokenCountingBufferSafety(contextLength);
+  const minOutputTokens = Math.min(MIN_RESPONSE_TOKENS, maxTokens);
+  return {
+    contextLength,
+    countingSafetyBuffer,
+    minOutputTokens,
+    availableTokens: contextLength - countingSafetyBuffer - minOutputTokens,
+  };
+}
+
+/**
+ * 方案.md §7.1.1：**唯一的「一条消息算多少 token」口径**，含
+ * `excludeToolOutputsFromTokenCount` 的「大 tool 输出算 0」规则。compile 与 measure 共用。
+ *
+ * 被排除的 tool 消息连 wrapper token（base/extra/toolCallId）一起算 0：相对于 tool 输出
+ * 载荷可以忽略，而规则保持「一条大 tool 消息就是 0」这一简单形态。
+ */
+export function createBudgetMessageCounter({
+  modelName,
+  excludeToolOutputsFromTokenCount,
+  excludeToolOutputsFromTokenCountMinTokens,
+}: {
+  modelName: string;
+  excludeToolOutputsFromTokenCount?: boolean;
+  excludeToolOutputsFromTokenCountMinTokens?: number;
+}): {
+  /** 单条 tool 消息被算 0 的门槛（默认 6000）。 */
+  excludedToolOutputMinimum: number;
+  countMessage(message: ChatMessage): number;
+} {
+  const excludedToolOutputMinimum =
+    excludeToolOutputsFromTokenCountMinTokens ?? 6000;
+  return {
+    excludedToolOutputMinimum,
+    countMessage: (message: ChatMessage): number => {
+      const tokens = countChatMessageTokens(modelName, message);
+      if (
+        excludeToolOutputsFromTokenCount &&
+        message.role === "tool" &&
+        tokens > excludedToolOutputMinimum
+      ) {
+        return 0;
+      }
+      return tokens;
+    },
+  };
+}
+
+/**
+ * 方案.md §7.1.1：compile 与 measure 共用的**消息分区**，步骤与顺序完全一致：
+ *
+ * ```text
+ * 1. 浅拷贝输入（绝不修改调用方的数组/对象）
+ * 2. 模型不支持图片时，把数组 content 渲染成字符串
+ * 3. 取出 system message（第一条）
+ * 4. 过滤 `chatMessageIsEmpty`，再 `addSpaceToAnyEmptyMessages`
+ * 5. 从尾部抽出必须整体保留的序列（user 或 assistant+tool 组合）
+ * ```
+ *
+ * `history` 是可按下标裁剪的历史（compile 的前缀裁剪对象）；`lastSequence` 是不可裁剪项。
+ * 抽取失败时（例如过滤后一条不剩、或 tool 输出找不到对应 tool call）**不抛**：
+ * 记下 `extractionError` 并让 `history` 保持原样，由 compile 决定是否原样抛出 ——
+ * 计量路径按 §7.1.2 必须不抛。
+ */
+export type PreparedMessagesForBudget = {
+  copies: ChatMessage[];
+  systemMessage?: ChatMessage;
+  lastSequence: ChatMessage[];
+  history: ChatMessage[];
+  lastSequenceExtracted: boolean;
+  extractionError?: Error;
+};
+
+export function prepareMessagesForBudget(
+  msgs: ChatMessage[],
+  supportsImages: boolean,
+): PreparedMessagesForBudget {
+  const copies: ChatMessage[] = msgs.map((m) => ({ ...m }));
+
+  if (!supportsImages) {
+    for (const msg of copies) {
+      if ("content" in msg && Array.isArray(msg.content)) {
+        msg.content = renderChatMessage(msg);
+      }
+    }
+  }
+
+  const systemMessage = copies.find((msg) => msg.role === "system");
+  // Explicitly widened: the filter's inferred type predicate excludes
+  // SystemChatMessage, which `addSpaceToAnyEmptyMessages` returns as ChatMessage[].
+  let remaining: ChatMessage[] = copies.filter((msg) => msg.role !== "system");
+  remaining = remaining.filter((msg) => !chatMessageIsEmpty(msg));
+  remaining = addSpaceToAnyEmptyMessages(remaining);
+  const beforeExtraction = [...remaining];
+
+  try {
+    const lastSequence = extractToolSequence(remaining);
+    return {
+      copies,
+      systemMessage,
+      lastSequence,
+      history: remaining,
+      lastSequenceExtracted: true,
+    };
+  } catch (e) {
+    return {
+      copies,
+      systemMessage,
+      lastSequence: [],
+      history: beforeExtraction,
+      lastSequenceExtracted: false,
+      extractionError: e as Error,
+    };
+  }
+}
+
+/**
+ * 方案.md §7.1.3（C.3）：**影响计量的有效输入清单**，供后续（Stage 2D）生成
+ * `constructionIdentity` 时纳入 —— Stage 2A 的身份只覆盖构造环境（model / mode /
+ * reasoning / rules / tools / system / completion options / summary 语义），
+ * `supportsImages` 与 exclude-tool-output 这一类**只影响 token 计数**的模型/全局配置
+ * 当时不可见，必须在这里显式列出。
+ *
+ * 注意：`toolNames` 只用于可读性；tool 定义的完整形状（name/description/parameters）
+ * 决定 `toolTokens`，而它已经作为 `effectiveTools` 进入 Stage 2A 的构造身份。
+ */
+export type MeasurementInputsAffectingTokens = {
+  modelName: string;
+  /** 解析后的窗口（`knownContextLength ?? DEFAULT_PRUNING_LENGTH`）。 */
+  contextLength: number;
+  maxTokens: number;
+  /** 派生但影响预算，必须一起纳入身份。 */
+  minOutputTokens: number;
+  countingSafetyBuffer: number;
+  supportsImages: boolean;
+  toolNames: string[];
+  excludeToolOutputsFromTokenCount: boolean;
+  excludeToolOutputsFromTokenCountMinTokens: number;
+};
+
+export function measurementInputsAffectingTokens({
+  modelName,
+  knownContextLength,
+  maxTokens,
+  supportsImages,
+  tools,
+  excludeToolOutputsFromTokenCount,
+  excludeToolOutputsFromTokenCountMinTokens,
+}: {
+  modelName: string;
+  knownContextLength: number | undefined;
+  maxTokens: number;
+  supportsImages: boolean;
+  tools?: Tool[];
+  excludeToolOutputsFromTokenCount?: boolean;
+  excludeToolOutputsFromTokenCountMinTokens?: number;
+}): MeasurementInputsAffectingTokens {
+  const budget = resolveChatTokenBudget({ knownContextLength, maxTokens });
+  const { excludedToolOutputMinimum } = createBudgetMessageCounter({
+    modelName,
+    excludeToolOutputsFromTokenCount,
+    excludeToolOutputsFromTokenCountMinTokens,
+  });
+  return {
+    modelName,
+    contextLength: budget.contextLength,
+    maxTokens,
+    minOutputTokens: budget.minOutputTokens,
+    countingSafetyBuffer: budget.countingSafetyBuffer,
+    supportsImages,
+    toolNames: (tools ?? []).map((tool) => tool.function.name),
+    excludeToolOutputsFromTokenCount: !!excludeToolOutputsFromTokenCount,
+    excludeToolOutputsFromTokenCountMinTokens: excludedToolOutputMinimum,
+  };
+}
+
+/**
  * Reconciles chat messages with available context length by intelligently pruning older messages
  * while preserving critical conversation elements.
  *
@@ -510,25 +708,21 @@ function compileChatMessages({
 }): CompiledMessagesResult {
   let didPrune = false;
 
-  // Count a message toward the token budget/metrics, treating tool outputs as
-  // free when the caller opted in AND the single-message token count exceeds
-  // the configured threshold. Wrapper tokens (base/extra/toolCallId) are also
-  // dropped for excluded tool messages; they are negligible next to the tool
-  // output payload and keeping the rule "a large tool message costs 0" simple.
-  const minTokens = excludeToolOutputsFromTokenCountMinTokens ?? 6000;
-  const countMsgForBudget = (msg: ChatMessage): number => {
-    const tokens = countChatMessageTokens(modelName, msg);
-    if (
-      excludeToolOutputsFromTokenCount &&
-      msg.role === "tool" &&
-      tokens > minTokens
-    ) {
-      return 0;
-    }
-    return tokens;
-  };
+  // 方案.md §7.1.1: the counter, the message partition and the budget all come from
+  // the shared helpers so `measureChatMessagesNoPrune` cannot drift from this path.
+  const { countMessage: countMsgForBudget } = createBudgetMessageCounter({
+    modelName,
+    excludeToolOutputsFromTokenCount,
+    excludeToolOutputsFromTokenCountMinTokens,
+  });
 
-  let msgsCopy: ChatMessage[] = msgs.map((m) => ({ ...m }));
+  const prepared = prepareMessagesForBudget(msgs, supportsImages);
+  const { copies: msgsCopy, systemMessage: systemMsg, history } = prepared;
+  const toolSequence = prepared.lastSequence;
+  if (!prepared.lastSequenceExtracted) {
+    // Identical failure to the previous inline extraction, including the message.
+    throw prepared.extractionError;
+  }
 
   // Resolve the protected set against the copied objects before any filtering
   // mutates the array, so indexes always refer to the caller's input.
@@ -541,28 +735,6 @@ function compileChatMessages({
       }
     }
   }
-
-  // If images not supported, convert MessagePart[] to string
-  if (!supportsImages) {
-    for (const msg of msgsCopy) {
-      if ("content" in msg && Array.isArray(msg.content)) {
-        const content = renderChatMessage(msg);
-        msg.content = content;
-      }
-    }
-  }
-
-  // Extract system message
-  const systemMsg = msgsCopy.find((msg) => msg.role === "system");
-  msgsCopy = msgsCopy.filter((msg) => msg.role !== "system");
-
-  // Remove any empty messages or non-user/tool trailing messages
-  msgsCopy = msgsCopy.filter((msg) => !chatMessageIsEmpty(msg));
-
-  msgsCopy = addSpaceToAnyEmptyMessages(msgsCopy);
-
-  // Extract the tool sequence from the end of the message array
-  const toolSequence = extractToolSequence(msgsCopy);
 
   // Count tokens for all messages in the tool sequence. Tool outputs here are
   // part of the always-preserved last sequence, but when excluded they should
@@ -585,20 +757,16 @@ function compileChatMessages({
     toolTokens = countToolsTokens(tools, modelName);
   }
 
-  const contextLength = knownContextLength ?? DEFAULT_PRUNING_LENGTH;
-  const countingSafetyBuffer = getTokenCountingBufferSafety(contextLength);
-  const minOutputTokens = Math.min(MIN_RESPONSE_TOKENS, maxTokens);
+  const {
+    contextLength,
+    countingSafetyBuffer,
+    minOutputTokens,
+    availableTokens,
+  } = resolveChatTokenBudget({ knownContextLength, maxTokens });
 
-  let inputTokensAvailable = contextLength;
-
-  // Leave space for output/safety
-  inputTokensAvailable -= countingSafetyBuffer;
-  inputTokensAvailable -= minOutputTokens;
-
-  // Non-negotiable messages
-  inputTokensAvailable -= toolTokens;
-  inputTokensAvailable -= systemMsgTokens;
-  inputTokensAvailable -= lastMessagesTokens;
+  // Leave space for output/safety, then for the non-negotiable messages.
+  let inputTokensAvailable =
+    availableTokens - toolTokens - systemMsgTokens - lastMessagesTokens;
 
   // Make sure there's enough context for the non-excludable items
   if (knownContextLength !== undefined && inputTokensAvailable < 0) {
@@ -618,7 +786,7 @@ function compileChatMessages({
   // toward the budget when excluded, so large read_file/MCP results never
   // trigger eviction of older history (deferred pruning).
   let currentTotal = 0;
-  const historyWithTokens = msgsCopy.map((message) => {
+  const historyWithTokens = history.map((message) => {
     const tokens = countMsgForBudget(message);
     currentTotal += tokens;
     return {
@@ -668,8 +836,6 @@ function compileChatMessages({
 
   const inputTokens =
     currentTotal + systemMsgTokens + toolTokens + lastMessagesTokens;
-  const availableTokens =
-    contextLength - countingSafetyBuffer - minOutputTokens;
   const contextPercentage = inputTokens / availableTokens;
   return {
     compiledChatMessages: reassembled,
@@ -677,6 +843,95 @@ function compileChatMessages({
     contextPercentage,
     inputTokens,
     contextLength,
+  };
+}
+
+/**
+ * 方案.md §7.1.2：**完整逻辑会话的 no-prune 计量**。
+ *
+ * 与 `compileChatMessages` 共用同一套预算、计数口径与消息分区（`resolveChatTokenBudget` /
+ * `createBudgetMessageCounter` / `prepareMessagesForBudget`），但：
+ *
+ * ```text
+ * 不裁剪消息
+ * 不生成 compiledChatMessages
+ * 不抛 "Not enough context"（空 history / tool 序列不匹配都只是照实计量）
+ * 允许 contextPercentage > 1
+ * 不修改入参
+ * ```
+ *
+ * `protectedMessageIndexes` 不属于计量输入：它只影响发送路径「宁可报错也不发半截提示词」的
+ * 决策，计量必须覆盖完整会话。
+ *
+ * `availableTokens` 是**输入可用预算**（`contextLength − 安全缓冲 − 输出预留`），
+ * `exceedsContext = inputTokens > availableTokens` —— 这与 §7.1.1 的最终语义一致，
+ * 与 Stage 2A 过渡期「窗口剩余量」的临时写法不同。
+ */
+export type ChatTokenMeasurement = {
+  inputTokens: number;
+  contextLength: number;
+  availableTokens: number;
+  contextPercentage: number;
+  exceedsContext: boolean;
+};
+
+function measureChatMessagesNoPrune({
+  modelName,
+  msgs,
+  knownContextLength,
+  maxTokens,
+  supportsImages,
+  tools,
+  excludeToolOutputsFromTokenCount,
+  excludeToolOutputsFromTokenCountMinTokens,
+}: {
+  modelName: string;
+  msgs: ChatMessage[];
+  knownContextLength: number | undefined;
+  maxTokens: number;
+  supportsImages: boolean;
+  tools?: Tool[];
+  excludeToolOutputsFromTokenCount?: boolean;
+  excludeToolOutputsFromTokenCountMinTokens?: number;
+}): ChatTokenMeasurement {
+  const { countMessage } = createBudgetMessageCounter({
+    modelName,
+    excludeToolOutputsFromTokenCount,
+    excludeToolOutputsFromTokenCountMinTokens,
+  });
+  const prepared = prepareMessagesForBudget(msgs, supportsImages);
+  const { availableTokens, contextLength } = resolveChatTokenBudget({
+    knownContextLength,
+    maxTokens,
+  });
+
+  const systemMsgTokens = prepared.systemMessage
+    ? countChatMessageTokens(modelName, prepared.systemMessage)
+    : 0;
+  const toolTokens = tools ? countToolsTokens(tools, modelName) : 0;
+
+  let messagesTokens = 0;
+  for (const message of prepared.history) {
+    messagesTokens += countMessage(message);
+  }
+  for (const message of prepared.lastSequence) {
+    messagesTokens += countMessage(message);
+  }
+
+  const inputTokens = systemMsgTokens + toolTokens + messagesTokens;
+  return {
+    inputTokens,
+    contextLength,
+    availableTokens,
+    // 预算非正只可能来自「输出预留 ≥ 窗口」这类配置异常；此时仍要给出超限信号，
+    // 而不是 NaN。`exceedsContext` 才是权威判断。
+    contextPercentage:
+      availableTokens > 0
+        ? inputTokens / availableTokens
+        : inputTokens > 0
+          ? Number.POSITIVE_INFINITY
+          : 0,
+    exceedsContext: inputTokens > availableTokens,
   };
 }
 
@@ -692,6 +947,7 @@ export {
   countTokens,
   countTokensAsync,
   extractToolSequence,
+  measureChatMessagesNoPrune,
   pruneLinesFromBottom,
   pruneLinesFromTop,
   pruneRawPromptFromTop,
