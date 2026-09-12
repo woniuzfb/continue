@@ -10,7 +10,6 @@ import {
   initialSessionRuntime,
   removeSessionRuntime,
   setActiveSessionId,
-  setSessionChatModelTitle,
   setSessionClosing,
   setSessionInterrupted,
   setTabLoadState,
@@ -47,23 +46,6 @@ import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
  * persists the model selection — that belongs to an explicit user change.
  */
 
-/**
- * 方案.md §7.3.1: a session that never chose a model used to resolve it **live** from
- * `config.selectedModelByRole.chat` — the profile-level value that `ModelSelect` rewrites (and
- * persists) on every change. Picking a model in one window therefore moved every other window
- * whose session had no title of its own: the reported "changing the model in one window affects
- * the others".
- *
- * The fallback is now **frozen** when the session is projected for the first time: the session
- * adopts whatever the default is at that moment as its own `chatModelTitle` (runtime-only — this
- * thunk still performs no save, no `updateConfig` and no `config/updateSelectedModel` IPC). Later
- * changes to the profile default therefore reach **new** sessions only, which is the intended
- * "your last choice becomes the default" behaviour, while an open window keeps the model it was
- * showing.
- *
- * Guarded by the same "am I still the visible tab" check as the projection itself: a slow
- * activation that finishes after the user switched away must not write to any session.
- */
 export const projectSessionModelToActiveUi = createAsyncThunk<
   void,
   { sessionId: string; chatModelTitle?: string },
@@ -79,22 +61,12 @@ export const projectSessionModelToActiveUi = createAsyncThunk<
       return;
     }
     const models = getState().config.config?.modelsByRole?.chat ?? [];
-    const own = chatModelTitle
+    const model = chatModelTitle
       ? (models.find((m) => m.title === chatModelTitle) ?? null)
       : null;
-    const adopted = own ?? getState().config.config?.selectedModelByRole?.chat;
-    if (!own && adopted?.title) {
-      // Freeze the default into the session so a later change elsewhere cannot move this window.
-      dispatch(
-        setSessionChatModelTitle({
-          sessionId,
-          chatModelTitle: adopted.title,
-        }),
-      );
-    }
     // Runtime projection only: no updateConfig, no config/updateSelectedModel
     // IPC, no markSessionDirty (方案.md §五.17).
-    dispatch(setActiveSessionModelProjection({ model: adopted ?? null }));
+    dispatch(setActiveSessionModelProjection({ model }));
   },
 );
 
