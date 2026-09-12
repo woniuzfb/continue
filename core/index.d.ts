@@ -310,6 +310,24 @@ export type PersistedContextMetrics =
   | LegacyContextMetricsSnapshot
   | FullConversationMetricsResult;
 
+/**
+ * 方案.md §7.5.4: the **stable identity** of a selected chat model, shared by the GUI and Core.
+ *
+ * A title is a display/config-lookup field, not an identity: two entries can share one. This ref is
+ * what a session owns, what a turn snapshots, and what resolution must match **uniquely** —
+ * otherwise the send is refused instead of silently using another model.
+ *
+ * It is defined here (next to `Session`, which persists it) because both sides of the protocol need
+ * the same shape: the GUI decides which model a session owns, Core is the side that turns that
+ * decision into a concrete model instance. A second definition on either side would be a second
+ * resolution semantics.
+ */
+export interface SessionChatModelRef {
+  title: string;
+  provider: string;
+  model: string;
+}
+
 export interface Session {
   sessionId: string;
   title: string;
@@ -319,6 +337,21 @@ export interface Session {
   mode?: MessageModes;
   /** Optional: title of the selected chat model for this session */
   chatModelTitle?: string | null;
+  /**
+   * Stable identity of the session's own chat-model choice (方案.md §7.5.4).
+   *
+   * - written together with `chatModelTitle` by every save, so a session that has an identity keeps
+   *   it across a reload instead of being re-derived from a title;
+   * - absent on legacy files (title only) — the GUI upgrades those on load only when the title
+   *   matches exactly one entry, otherwise the session is "unresolved" and sending is refused;
+   * - resolution must match all three fields uniquely: a partial match (title only) is exactly the
+   *   ambiguity this field exists to remove.
+   *
+   * `null` in a **save payload** means "this save states no identity", which Core reads as "keep the
+   * one on disk" rather than as "erase it" — losing an identity would silently downgrade the session
+   * to the title-only ambiguity on the next restart (`core/util/history.ts`).
+   */
+  chatModelRef?: SessionChatModelRef | null;
   /** Optional: cumulative usage and cost for all LLM API calls in this session */
   usage?: SessionUsage;
   /**

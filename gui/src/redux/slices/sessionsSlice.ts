@@ -8,6 +8,7 @@ import {
   MessageContent,
   MessageModes,
   RuleMetadata,
+  SessionChatModelRef,
   SetCodeToEditPayload,
   ToolCallState,
 } from "core";
@@ -177,17 +178,11 @@ export type MessageIdMigrationState =
   | { state: "unsupported" };
 
 /**
- * 方案.md §7.5.4: the stable identity of a session's model choice.
- *
- * A title is a display/config-lookup field, not an identity: two entries can share one. The ref is
- * what the session owns, what the turn snapshots, and what resolution must match **uniquely** —
- * otherwise the send is refused instead of silently using something else.
+ * 方案.md §7.5.4: the stable identity of a session's model choice now lives in the shared protocol
+ * type (`core`'s `SessionChatModelRef`, next to the `Session` that persists it) so the GUI and Core
+ * cannot drift into two shapes. Re-exported here because this slice is where the GUI reads it from.
  */
-export type SessionChatModelRef = {
-  title: string;
-  provider: string;
-  model: string;
-};
+export type { SessionChatModelRef };
 
 export type SessionRuntimeState = {
   id: string;
@@ -1196,6 +1191,14 @@ export const sessionsSlice = createSlice({
         status: "idle",
         requestId: action.payload.requestId,
         aborter: session.stream.aborter,
+        /**
+         * 方案.md §7.5.3/§7.5.4: the turn is still live, so its **captured identity** must survive
+         * the pause. Waiting for tool approval pauses the stream and resumes it through
+         * `continueToolLoop`; dropping the ref here made the continuation re-resolve the model, so a
+         * model switched while the approval bar was up could change the identity of a turn that had
+         * already started.
+         */
+        chatModelRef: session.stream.chatModelRef,
         // The turn is still live: whatever it already wrote is still committed
         // by this request's terminal (方案.md §五.16.4 step 2).
         hasConversationMutation:
@@ -1267,7 +1270,9 @@ export const sessionsSlice = createSlice({
         status: "failed",
         requestId: action.payload.requestId,
         error: action.payload.error,
-        // A failure after partial output still formed a turn that must commit.
+        // A failure after partial output still formed a turn that must commit — and still the same
+        // turn, so its captured identity stays with it until the terminal (方案.md §7.5.3).
+        chatModelRef: session.stream.chatModelRef,
         hasConversationMutation:
           session.stream.hasConversationMutation ?? false,
       };

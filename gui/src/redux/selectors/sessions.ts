@@ -1,5 +1,11 @@
 import { createSelector } from "@reduxjs/toolkit";
 import type { ModelDescription } from "core";
+import {
+  resolveSessionChatModel,
+  resolveSessionChatModelByRef,
+  sessionChatModelRefOf as sessionChatModelRefOfShared,
+  type SessionChatModelResolution,
+} from "core/util/sessionChatModel";
 import type { RootState } from "../store";
 import type {
   SessionRuntimeState,
@@ -62,33 +68,37 @@ export const selectSessionPendingApprovalCount = (
 ): number => state.sessions.sessionsById[sessionId]?.pendingApprovalCount ?? 0;
 
 /**
- * Model used by a session's own request (方案.md §五.17/§五.20).
+ * Model used by a session's own request (方案.md §五.17/§五.20, §7.5.4).
  *
  * `selectSelectedChatModel` returns the *active tab's* projection, which must
  * never leak into a background session's stream. This selector resolves the
- * session's own `chatModelTitle` and falls back to the persisted user choice —
- * never to `activeSessionModelProjection`.
+ * session's own choice and falls back to the persisted user choice — never to
+ * `activeSessionModelProjection`.
+ *
+ * The rule itself lives in Core (`resolveSessionChatModel`) so the GUI and Core cannot drift into
+ * two resolutions of the same session: what the toolbar shows, what a turn snapshots and what Core
+ * ends up calling must all be one decision, taken in one place.
  */
+export const selectSessionChatModelResolution = (
+  state: RootState,
+  sessionId: string,
+): SessionChatModelResolution<ModelDescription> => {
+  const session = state.sessions.sessionsById[sessionId];
+  const models = state.config.config?.modelsByRole?.chat ?? [];
+  return resolveSessionChatModel(models, {
+    ref: session?.chatModelRef,
+    title: session?.chatModelTitle,
+    defaultModel: state.config.config.selectedModelByRole.chat ?? undefined,
+  });
+};
+
+/** The resolved model, or `undefined` when the session's choice cannot be proven unique. */
 export const selectSessionChatModel = (
   state: RootState,
   sessionId: string,
 ): ModelDescription | undefined => {
-  const session = state.sessions.sessionsById[sessionId];
-  const models = state.config.config?.modelsByRole?.chat ?? [];
-
-  if (session?.chatModelRef) {
-    return selectChatModelByRef(state, session.chatModelRef);
-  }
-
-  if (session?.chatModelTitle) {
-    // Legacy sessions (and the window between choosing a model and storing its ref) carry only the
-    // title. 方案.md §7.5.1/§7.5.4: a session that has its own choice must never silently resolve
-    // to another model, and a title is not an identity — an ambiguous title is unresolvable.
-    const matches = models.filter((m) => m.title === session.chatModelTitle);
-    return matches.length === 1 ? matches[0] : undefined;
-  }
-
-  return state.config.config.selectedModelByRole.chat ?? undefined;
+  const resolution = selectSessionChatModelResolution(state, sessionId);
+  return resolution.status === "resolved" ? resolution.model : undefined;
 };
 
 /** 方案.md §7.5.4: unique exact match on the stable identity, or nothing. */
@@ -97,21 +107,13 @@ export const selectChatModelByRef = (
   ref: SessionChatModelRef,
 ): ModelDescription | undefined => {
   const models = state.config.config?.modelsByRole?.chat ?? [];
-  const matches = models.filter(
-    (m) =>
-      m.title === ref.title &&
-      m.provider === ref.provider &&
-      m.model === ref.model,
-  );
-  return matches.length === 1 ? matches[0] : undefined;
+  const resolution = resolveSessionChatModelByRef(models, ref);
+  return resolution.status === "resolved" ? resolution.model : undefined;
 };
 
 export const sessionChatModelRefOf = (
   model: ModelDescription | undefined,
-): SessionChatModelRef | undefined =>
-  model
-    ? { title: model.title, provider: model.provider, model: model.model }
-    : undefined;
+): SessionChatModelRef | undefined => sessionChatModelRefOfShared(model);
 
 export const selectHasPendingApproval = (
   state: RootState,

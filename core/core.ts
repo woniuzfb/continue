@@ -49,9 +49,11 @@ import {
   ModelDescription,
   Position,
   RangeInFile,
+  SessionChatModelRef,
   ToolCall,
   type ContextItem,
   type IDE,
+  type ILLM,
 } from ".";
 
 import { ConfigYaml } from "@continuedev/config-yaml";
@@ -92,6 +94,7 @@ import type { IMessenger, Message } from "./protocol/messenger";
 import { ContinueError, ContinueErrorReason } from "./util/errors";
 import { shareSession } from "./util/historyUtils";
 import { Logger } from "./util/Logger.js";
+import { resolveCoreRequestChatModel } from "./util/sessionChatModel";
 
 export class Core {
   configHandler: ConfigHandler;
@@ -353,6 +356,36 @@ export class Core {
         targetModel,
         logTimings: config?.ui?.showSubmitLatencyLogs === true,
       };
+    };
+
+    /**
+     * 方案.md §7.5.4：**发送路径**的模型解析，`llm/compileChat` 与 `llm/streamChat` 共用。
+     *
+     * 这是"两个解析口径"问题的收口点：GUI 已经用 `resolveSessionChatModel` 决定了会话属于哪个
+     * 模型，Core 这边只把它**执行**出来 —— 同一个纯函数、同一条优先级、同样的失败语义。因此
+     * compile 与 stream 一定落在同一个模型上，而不是一个按 `selectedModelByRole.chat`（profile
+     * 默认，可能属于另一个 tab）编译、另一个按 turn 的 ref 发送。
+     *
+     * Fail-closed 的规则本身在 `resolveCoreRequestChatModel`（`util/sessionChatModel.ts`）：
+     * 带 ref ⇒ 只按 ref 唯一命中；不带 ref ⇒ 旧协议按 title 唯一命中（显式分叉）；两种情况
+     * 0/多命中都抛错，**绝不**回退 profile 默认、**绝不**再按 title 猜一次。
+     *
+     * 日志只写 ref 的三个字段（就是工具栏显示的那三个）：没有 key、没有 endpoint、没有 prompt。
+     */
+    const resolveRequestChatModel = async (request: {
+      modelRef?: SessionChatModelRef;
+      title?: string;
+    }): Promise<ILLM> => {
+      const { config } = await this.configHandler.loadConfig();
+      const models = config?.modelsByRole.chat ?? [];
+      if (models.length === 0) {
+        throw new Error("No chat model selected");
+      }
+      const model = resolveCoreRequestChatModel(models, request);
+      if (!model) {
+        throw new Error("No chat model selected");
+      }
+      return model;
     };
 
     on("history/save", async (msg) => {
@@ -706,6 +739,9 @@ export class Core {
         msg,
         this.ide,
         this.messenger,
+        // 方案.md §7.5.4: the stream's model comes from the request's identity, resolved by the same
+        // rule as `llm/compileChat` — never from `selectedModelByRole.chat`.
+        { resolveChatModel: resolveRequestChatModel },
       );
     });
 
@@ -727,13 +763,14 @@ export class Core {
     on("llm/listModels", this.handleListModels.bind(this));
 
     on("llm/compileChat", async (msg) => {
-      const { messages, options, protectedMessageIndexes } = msg.data;
-      const model = (await this.configHandler.loadConfig()).config
-        ?.selectedModelByRole.chat;
-
-      if (!model) {
-        throw new Error("No chat model selected");
-      }
+      const { messages, options, protectedMessageIndexes, modelRef, title } =
+        msg.data;
+      // 方案.md §7.5.4: compile with the **request's** identity. Reading
+      // `selectedModelByRole.chat` here (the profile default, possibly another tab's model) made the
+      // token budget and prune decision describe a different model than the one that answered.
+      // A request without a ref is the old title-only protocol, resolved the same way as the stream
+      // resolves it, so both steps of one send still land on the same model.
+      const model = await resolveRequestChatModel({ modelRef, title });
 
       return model.compileChatMessages(
         messages,

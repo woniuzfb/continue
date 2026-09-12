@@ -3,6 +3,7 @@ import {
   LLMFullCompletionOptions,
   ModelDescription,
   PromptLog,
+  SessionChatModelRef,
   Tool,
 } from "core";
 import { getRuleId } from "core/llm/rules/getSystemMessageWithRules";
@@ -320,6 +321,14 @@ type TurnContext = {
   requestId: string;
   depth: number;
   aborter: AbortController;
+  /**
+   * 方案.md §7.5.3/§7.5.4: the identity **this logical turn is sent with**, captured once when the
+   * turn started (or inherited from the predecessor by a continuation / retry). Every step of the
+   * turn — completion options, tools, image capability, system message, compile, stream, promptLog
+   * telemetry — reads this value and nothing else. A model chosen in this window mid-turn changes
+   * what the *next* turn uses, never this one.
+   */
+  chatModelRef: SessionChatModelRef | undefined;
   legacySlashCommandData?: ToCoreProtocol["llm/streamChat"][0]["legacySlashCommandData"];
 };
 
@@ -622,11 +631,12 @@ async function streamModelTurn(
 
   // The turn's captured identity wins over the session's current choice: switching the model in
   // this window while the turn runs must not change what the turn is sent with (方案.md §7.5.3).
-  // 方案.md §7.5.3/§7.5.4: the turn's captured identity is the **only** source for the model this
-  // request uses. Without it there is no verified identity for the turn, so the request fails
-  // through the existing "no chat model" path instead of re-resolving the current session/default
-  // (which is how a turn could end up sent with a different model than it started with).
-  const turnModelRef = session.stream.chatModelRef;
+  // The ref comes from the turn context, so a **continuation** re-sends the identity its turn
+  // started with even after the user picked another model in between. Without it there is no
+  // verified identity for the turn, so the request fails through the existing "no chat model" path
+  // instead of re-resolving the current session/default (which is how a turn could end up sent with
+  // a different model than it started with).
+  const turnModelRef = ctx.chatModelRef;
   const selectedChatModel = turnModelRef
     ? selectChatModelByRef(state, turnModelRef)
     : undefined;
@@ -734,6 +744,13 @@ async function streamModelTurn(
     messages,
     options: completionOptions,
     protectedMessageIndexes,
+    // 方案.md §7.5.4: the request states the turn's identity so Core compiles with the **same**
+    // model the stream will call. Compiling against `selectedModelByRole.chat` (the profile
+    // default, possibly another tab's model) made the token budget and prune decision describe a
+    // different model than the one that actually answered.
+    modelRef: turnModelRef,
+    // Compat/old-host lookup key only: Core judges a request that carries a ref by that ref alone.
+    title: selectedChatModel.title,
   });
 
   if (precompiledRes.status === "error") {
@@ -768,6 +785,10 @@ async function streamModelTurn(
       {
         completionOptions,
         title: selectedChatModel.title,
+        // 方案.md §7.5.4: the authoritative identity — Core resolves the model by this ref and never
+        // falls back to the profile default. `title` is kept for old hosts (and for logs); it is
+        // display/compat only.
+        modelRef: turnModelRef,
         messages: compiledChatMessages,
         legacySlashCommandData: ctx.legacySlashCommandData,
         messageOptions: { precompiled: true },
@@ -910,19 +931,28 @@ async function runSessionStreamImpl(
 
   const requestId = uuidv4();
   const aborter = new AbortController();
+  // 方案.md §7.5.3/§7.5.4: the turn's identity is captured **once**, when the turn starts.
+  //
+  // A continuation (`input.requestId`) is the same logical turn asking the model again after a tool
+  // result or a retry, so it inherits the live request's ref verbatim — re-resolving here would let
+  // a model switched mid-turn change the identity of a turn that already started (the reducer keeps
+  // the predecessor's value, but the resolution below would still have been wasted work on the
+  // wrong value).
+  //
+  // A fresh turn resolves the session's choice and snapshots the result: resolving here and storing
+  // the *resolved* identity is what makes the turn immune to a later switch, and it is also the one
+  // place where "no choice of its own ⇒ profile default" is allowed to apply (方案.md §7.5.4). A
+  // session whose own choice cannot be resolved uniquely resolves to nothing, and the request then
+  // fails closed in `streamModelTurn` instead of being sent with another model.
+  const turnChatModelRef: SessionChatModelRef | undefined = input.requestId
+    ? session.stream.chatModelRef
+    : sessionChatModelRefOf(selectSessionChatModel(getState(), sessionId));
   dispatch(
     beginSessionStream({
       sessionId,
       requestId,
       aborter,
-      // 方案.md §7.5.3: capture the **resolved** model identity once per logical turn — not
-      // `session.chatModelRef`, which is absent for a legacy title-only session or one that is
-      // still running on the profile default. Resolving here and snapshotting the result is what
-      // makes the turn immune to a later switch; leaving it undefined would just re-resolve at send
-      // time and let the turn drift. The reducer keeps the predecessor's value for a continuation.
-      chatModelRef: sessionChatModelRefOf(
-        selectSessionChatModel(getState(), sessionId),
-      ),
+      chatModelRef: turnChatModelRef,
     }),
   );
   checkpointBaselines.set(sessionId, {
@@ -935,6 +965,9 @@ async function runSessionStreamImpl(
     requestId,
     depth,
     aborter,
+    // 方案.md §7.5.3/§7.5.4: one value for the whole turn — every step below reads it and nothing
+    // re-reads the session's current choice, the profile default or the active-tab projection.
+    chatModelRef: turnChatModelRef,
     legacySlashCommandData: input.legacySlashCommandData,
   };
 

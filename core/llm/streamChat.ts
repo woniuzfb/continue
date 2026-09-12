@@ -1,6 +1,6 @@
 import { fetchwithRequestOptions } from "@continuedev/fetch";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { ChatMessage, IDE, PromptLog } from "..";
+import { ChatMessage, IDE, ILLM, PromptLog, SessionChatModelRef } from "..";
 import { ConfigHandler } from "../config/ConfigHandler";
 import { FromCoreProtocol, ToCoreProtocol } from "../protocol";
 import { IMessenger, Message } from "../protocol/messenger";
@@ -181,6 +181,20 @@ export async function* llmStreamChat(
   msg: Message<ToCoreProtocol["llm/streamChat"][0]>,
   ide: IDE,
   messenger: IMessenger<ToCoreProtocol, FromCoreProtocol>,
+  options: {
+    /**
+     * 方案.md §7.5.4: the request's chat model, resolved by the identity the request carries.
+     *
+     * Injected rather than read from `config.selectedModelByRole.chat` because that is the profile
+     * default — possibly another tab's model — and it is exactly the fallback that made this call and
+     * `llm/compileChat` able to disagree. Throws when the identity does not resolve uniquely, and it
+     * must not be swallowed: a turn whose model cannot be proven is not sent at all.
+     */
+    resolveChatModel: (request: {
+      modelRef?: SessionChatModelRef;
+      title?: string;
+    }) => Promise<ILLM>;
+  },
 ): AsyncGenerator<ChatMessage, PromptLog> {
   const { config } = await configHandler.loadConfig();
   if (!config) {
@@ -197,9 +211,11 @@ export async function* llmStreamChat(
     completionOptions,
     messages,
     messageOptions,
+    modelRef,
+    title,
   } = msg.data;
 
-  const model = config.selectedModelByRole.chat;
+  const model = await options.resolveChatModel({ modelRef, title });
 
   if (!model) {
     throw new Error("No chat model selected");

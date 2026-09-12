@@ -82,6 +82,10 @@ export async function getSessionPage(
     history: items,
     mode: meta.mode,
     chatModelTitle: meta.chatModelTitle,
+    // 方案.md §7.5.4: the paged response is a complete session's metadata, so the stable identity
+    // travels with it — dropping it here would silently downgrade a session to title-only on every
+    // lazy load, which is the ambiguity the ref exists to remove.
+    chatModelRef: meta.chatModelRef,
     contextMetrics: meta.contextMetrics,
     hasReasoningEnabled: meta.hasReasoningEnabled,
     reasoningPreferenceSource: meta.reasoningPreferenceSource,

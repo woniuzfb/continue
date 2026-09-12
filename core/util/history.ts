@@ -1,7 +1,7 @@
 import * as fs from "fs";
 
 import { BaseSessionMetadata, Session } from "../index.js";
-import type { PersistedContextMetrics } from "../index.js";
+import type { PersistedContextMetrics, SessionChatModelRef } from "../index.js";
 import {
   isJsonSafeMetricsSnapshot,
   type FullConversationMetricsResult,
@@ -288,15 +288,33 @@ export type SaveHistoryOptions = {
 function readContextMetricsFromDisk(
   sessionId: string,
 ): PersistedContextMetrics | undefined {
+  return readPreservedFieldsFromDisk(sessionId).contextMetrics;
+}
+
+/**
+ * 磁盘上**不是由当前请求载荷决定**、必须原样保留的字段，一次解析读回（§7.5.4）。
+ *
+ * `chatModelRef` 与 `contextMetrics` 是同一类东西：载荷里没有它时，磁盘上的值才是权威 ——
+ * metrics 由 Core 的锁内计量掌管，会话模型身份由 GUI 的显式选择掌管，两者的保存路径都
+ * 可能"只带一半"。文件缺失/不可解析一律返回空对象：没有可信的原值，且**不能**因此中断保存。
+ */
+function readPreservedFieldsFromDisk(sessionId: string): {
+  contextMetrics?: PersistedContextMetrics;
+  /** `null` is preserved as the fact "the file states no identity", like an absent field. */
+  chatModelRef?: SessionChatModelRef | null;
+} {
   try {
     const sessionFilePath = getSessionFilePath(sessionId);
     if (!fs.existsSync(sessionFilePath)) {
-      return undefined;
+      return {};
     }
     const raw = JSON.parse(fs.readFileSync(sessionFilePath, "utf8")) as Session;
-    return raw.contextMetrics;
+    return {
+      contextMetrics: raw.contextMetrics,
+      chatModelRef: raw.chatModelRef,
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -448,6 +466,7 @@ export class HistoryManager {
       | "title"
       | "mode"
       | "chatModelTitle"
+      | "chatModelRef"
       | "workspaceDirectory"
       | "contextMetrics"
       | "hasReasoningEnabled"
@@ -482,6 +501,10 @@ export class HistoryManager {
         title: session.title,
         mode: session.mode,
         chatModelTitle: session.chatModelTitle,
+        // 方案.md §7.5.4: the paged load is a *complete* session's metadata, so it carries the
+        // stable identity too — otherwise a restart on the lazy path would downgrade a session that
+        // has a ref to "title only" and lose the one thing that removes the ambiguity.
+        chatModelRef: session.chatModelRef,
         workspaceDirectory: session.workspaceDirectory,
         contextMetrics: session.contextMetrics,
         hasReasoningEnabled: session.hasReasoningEnabled,
@@ -671,10 +694,9 @@ export class HistoryManager {
     // 不携带计量的保存**不得**改动磁盘上已有的 metrics：GUI 载荷里的
     // `Session.contextMetrics` 因此不再被采信（它只是历史遗留字段），磁盘值才是权威。
     // 无计量时把原值读回来原样写回；文件不存在/不可解析时按"没有 metrics"处理。
+    const preserved = readPreservedFieldsFromDisk(session.sessionId);
     const preservedContextMetrics =
-      fullConversationMetrics ??
-      readContextMetricsFromDisk(session.sessionId) ??
-      undefined;
+      fullConversationMetrics ?? preserved.contextMetrics ?? undefined;
 
     const orderedSession: Session = {
       sessionId: session.sessionId,
@@ -687,6 +709,24 @@ export class HistoryManager {
     }
     if (session.chatModelTitle !== undefined) {
       orderedSession.chatModelTitle = session.chatModelTitle;
+    }
+    // 方案.md §7.5.4: the stable identity round-trips **as written**. Core never re-derives it from
+    // the title (that is where a wrong ref would come from), and a payload that states none keeps the
+    // on-disk value rather than dropping an identity the session already had. A save that clears the
+    // title clears the ref with it — the session then has no choice of its own again.
+    const requestedRef =
+      typeof session.chatModelRef === "object" && session.chatModelRef !== null
+        ? session.chatModelRef
+        : undefined;
+    if (requestedRef) {
+      orderedSession.chatModelRef = requestedRef;
+    } else if (orderedSession.chatModelTitle != null) {
+      // The title is still there, so the identity it stands for must not be dropped — but note the
+      // `!= null`: a payload that explicitly clears the title (with no ref) also clears the identity.
+      const existingRef = preserved.chatModelRef;
+      if (existingRef) {
+        orderedSession.chatModelRef = existingRef;
+      }
     }
     if (session.usage !== undefined) {
       orderedSession.usage = session.usage;

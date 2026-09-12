@@ -11,10 +11,16 @@ import {
   removeSessionRuntime,
   setActiveSessionId,
   setSessionClosing,
+  setSessionChatModelTitle,
   setSessionInterrupted,
   setTabLoadState,
   refreshSessionFullConversationMetricsEnvironment,
 } from "../slices/sessionsSlice";
+import type { SessionChatModelRef } from "core";
+import {
+  resolveSessionChatModel,
+  sessionChatModelRefOf,
+} from "core/util/sessionChatModel";
 import type { ThunkApiType } from "../store";
 import { mergeSettings } from "../util/mergeSettings";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
@@ -48,11 +54,18 @@ import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 
 export const projectSessionModelToActiveUi = createAsyncThunk<
   void,
-  { sessionId: string; chatModelTitle?: string },
+  {
+    sessionId: string;
+    chatModelTitle?: string;
+    chatModelRef?: SessionChatModelRef;
+  },
   ThunkApiType
 >(
   "sessions/projectModelToActiveUi",
-  async ({ sessionId, chatModelTitle }, { dispatch, getState }) => {
+  async (
+    { sessionId, chatModelTitle, chatModelRef },
+    { dispatch, getState },
+  ) => {
     // 方案.md §五.17/§五.20: the projection describes the *visible* tab. A slow
     // activation that finishes after the user switched away must not overwrite
     // the newer tab's projection — guarded here as well as at the call site so
@@ -60,13 +73,59 @@ export const projectSessionModelToActiveUi = createAsyncThunk<
     if (getState().sessions.activeSessionId !== sessionId) {
       return;
     }
-    const models = getState().config.config?.modelsByRole?.chat ?? [];
-    const model = chatModelTitle
-      ? (models.find((m) => m.title === chatModelTitle) ?? null)
-      : null;
+    // 方案.md §7.5.4: the projection must describe the same model the session's sends will use, so
+    // it resolves through the same rule — by the stable ref when there is one, by a title only when
+    // that title names exactly one entry, and never by "the first entry with this title".
+    const resolution = resolveSessionChatModel(
+      getState().config.config?.modelsByRole?.chat ?? [],
+      { ref: chatModelRef, title: chatModelTitle },
+    );
+    const model = resolution.status === "resolved" ? resolution.model : null;
     // Runtime projection only: no updateConfig, no config/updateSelectedModel
     // IPC, no markSessionDirty (方案.md §五.17).
     dispatch(setActiveSessionModelProjection({ model }));
+  },
+);
+
+/**
+ * 方案.md §7.5.4, the **legacy upgrade**: a session file written before the stable identity existed
+ * carries only `chatModelTitle`.
+ *
+ * The upgrade has exactly one legitimate source — a title that names **one** entry in the current
+ * config — and it is a runtime-only write: no save, no config update, no dirty flag. Deriving a ref
+ * from an ambiguous or missing title is how the wrong model gets frozen into a session, so those
+ * two cases deliberately stay unresolved (the UI shows the session's model as unusable and the send
+ * is refused) rather than being "repaired" into something that only looks like an identity.
+ */
+export const upgradeLegacySessionChatModelRef = createAsyncThunk<
+  void,
+  { sessionId: string },
+  ThunkApiType
+>(
+  "sessions/upgradeLegacyChatModelRef",
+  async ({ sessionId }, { dispatch, getState }) => {
+    const session = selectSessionById(getState(), sessionId);
+    if (!session || session.chatModelRef || !session.chatModelTitle) {
+      return;
+    }
+    const resolution = resolveSessionChatModel(
+      getState().config.config?.modelsByRole?.chat ?? [],
+      { title: session.chatModelTitle },
+    );
+    if (resolution.status !== "resolved") {
+      return;
+    }
+    const chatModelRef = sessionChatModelRefOf(resolution.model);
+    if (!chatModelRef) {
+      return;
+    }
+    dispatch(
+      setSessionChatModelTitle({
+        sessionId,
+        chatModelTitle: session.chatModelTitle,
+        chatModelRef,
+      }),
+    );
   },
 );
 
@@ -158,6 +217,10 @@ export const loadSessionRuntime = createAsyncThunk<
           : extractFirstTurnItems(history),
         mode: session.mode ?? "chat",
         chatModelTitle: session.chatModelTitle ?? undefined,
+        // 方案.md §7.5.4: an identity that was persisted comes back **as persisted**. Absent means
+        // either "no choice of its own" (the profile default applies) or a legacy title-only file,
+        // which `upgradeLegacySessionChatModelRef` may promote — but only from a unique title match.
+        chatModelRef: session.chatModelRef ?? undefined,
         hasReasoningEnabled: session.hasReasoningEnabled,
         reasoningPreferenceSource: session.reasoningPreferenceSource,
         // 方案.md §十一: without the authoritative summary a lazy-loaded
@@ -213,6 +276,10 @@ export const loadSessionRuntime = createAsyncThunk<
       // trigger goes through the same schedule thunk, so none of them owns any
       // part of the "is it safe" decision.
       void dispatch(scheduleMessageIdMigrationIfSafe({ sessionId }));
+      // 方案.md §7.5.4: the runtime exists now and the compiled model list is available, so a legacy
+      // title-only file can be promoted to a stable identity — but only from a unique title match.
+      // Runtime-only: nothing is saved here, so a config change cannot leave a wrong ref on disk.
+      void dispatch(upgradeLegacySessionChatModelRef({ sessionId }));
     } catch (e) {
       // Keep the descriptor (retry UI) and never create a pseudo-empty
       // runtime (方案.md §五.23).
@@ -247,10 +314,13 @@ export const completeSessionActivation = createAsyncThunk<
     if (getState().sessions.activeSessionId !== sessionId) {
       return;
     }
+    void dispatch(upgradeLegacySessionChatModelRef({ sessionId }));
+    const projected = selectSessionById(getState(), sessionId);
     void dispatch(
       projectSessionModelToActiveUi({
         sessionId,
-        chatModelTitle: loaded.chatModelTitle,
+        chatModelTitle: projected?.chatModelTitle ?? loaded.chatModelTitle,
+        chatModelRef: projected?.chatModelRef,
       }),
     );
     // 方案.md §五.16: a missing or stale metrics snapshot is recomputed on

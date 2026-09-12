@@ -42,6 +42,7 @@ import {
   RangeInFileWithNextEditInfo,
   SerializedContinueConfig,
   Session,
+  SessionChatModelRef,
   SiteIndexingConfig,
   SlashCommandDescWithSource,
   StreamDiffLinesPayload,
@@ -226,6 +227,7 @@ export interface LoadPageHistoryResponse {
     | "title"
     | "mode"
     | "chatModelTitle"
+    | "chatModelRef"
     | "workspaceDirectory"
     | "contextMetrics"
     | "hasReasoningEnabled"
@@ -406,6 +408,21 @@ export type ToCoreFromIdeOrWebviewProtocol = {
       messages: ChatMessage[];
       completionOptions: LLMFullCompletionOptions;
       title: string;
+      /**
+       * 方案.md §7.5.4: the **authoritative** model identity of this request — the identity the
+       * turn captured (UI ref = turn ref = request ref = the model Core calls).
+       *
+       * - present: Core resolves it by `{title, provider, model}` against exactly one entry in
+       *   `config.modelsByRole.chat`. 0 or ≥2 matches is an error; Core never falls back to
+       *   `selectedModelByRole.chat` and never retries with `title` alone, because a ref that does
+       *   not resolve uniquely proves nothing about which model the user chose — sending anyway is
+       *   precisely the "显示 A、实际发 B" defect.
+       * - absent: an old client speaking the title-only protocol. Accepted (title → exactly one
+       *   match) so existing GUIs keep working; new GUIs always send the ref.
+       *
+       * `title` stays for display, logs and that compatibility path only.
+       */
+      modelRef?: SessionChatModelRef;
       messageOptions?: MessageOption;
       legacySlashCommandData?: {
         command: SlashCommandDescWithSource;
@@ -430,6 +447,15 @@ export type ToCoreFromIdeOrWebviewProtocol = {
        * dropping the first turn.
        */
       protectedMessageIndexes?: number[];
+      /**
+       * 方案.md §7.5.4: the identity the send path captured. Compiling against
+       * `selectedModelByRole.chat` used the profile default — possibly another tab's model — so the
+       * token budget and prune decision described a different model than the one that answered.
+       * Same resolution rule and failure semantics as `llm/streamChat`.
+       */
+      modelRef?: SessionChatModelRef;
+      /** Legacy/compat lookup key, used only when `modelRef` is absent. */
+      title?: string;
     },
     CompiledMessagesResult,
   ];

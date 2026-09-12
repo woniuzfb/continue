@@ -194,6 +194,16 @@ function buildSessionPayload(
     history: wireHistory,
     mode: session.mode,
     chatModelTitle: session.chatModelTitle ?? null,
+    // 方案.md §7.5.4: the session's **stable identity** is saved next to the title. Written only
+    // when the session has one — a session that runs on the profile default stores neither, and a
+    // legacy title-only session stays title-only until a unique match upgrades it. Never derived
+    // here: deriving from a title at save time is exactly how a wrong ref would get persisted.
+    //
+    // `null` is a **deliberate** statement, not a missing field: it means "this save carries no
+    // ref", and Core then keeps the on-disk one instead of erasing an identity some other save path
+    // established. Only clearing the choice (no title) removes the identity, and that is expressed
+    // by clearing both fields together.
+    chatModelRef: session.chatModelRef ?? null,
     // 懒加载合并保存：把分页标记传给后端，save 时保留未加载的头部。
     historyTruncated: session.pagination.truncated,
     historyLoadedOffset: session.pagination.loadedOffset,
