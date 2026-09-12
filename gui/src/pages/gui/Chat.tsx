@@ -330,6 +330,7 @@ export function Chat() {
                 ? { targetMessageId: position.targetMessageId }
                 : {}),
             attachments,
+            origin: "editor",
           }),
         );
 
