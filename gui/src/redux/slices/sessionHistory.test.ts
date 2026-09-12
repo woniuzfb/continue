@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ChatHistoryItemWithMessageId } from "./sessionHistory";
-import { mergeSplitReplies } from "./sessionHistory";
+import {
+  applyStreamUpdatesToHistory,
+  mergeSplitReplies,
+} from "./sessionHistory";
 
 function item(
   id: string,
@@ -167,5 +170,137 @@ describe("mergeSplitReplies provenance", () => {
     ];
 
     expect(mergeSplitReplies(history)[3].conversationSummary).toBeUndefined();
+  });
+});
+
+describe("tool call states keep one identity per call (方案.md §7.4)", () => {
+  function item(role: "user" | "assistant"): ChatHistoryItemWithMessageId {
+    return {
+      message: { id: `m-${role}-${Math.random()}`, role, content: "" } as any,
+      contextItems: [],
+    };
+  }
+
+  function stream(history: ChatHistoryItemWithMessageId[], messages: any[]) {
+    applyStreamUpdatesToHistory(
+      { history, dontMergeReplyBubbles: true },
+      messages,
+    );
+    return history[history.length - 1];
+  }
+
+  it("adopts an unidentified fragment instead of pushing a second state", () => {
+    // Reported: the approval bar showed two rows for ONE terminal command (only the first row
+    // carried the key hints). Cause: the opening fragment has no id, so the state is created with
+    // `toolCallId: ""`; the next fragment carries the real id, matches nothing, and the old code
+    // pushed a second state.
+    const history = [item("user"), item("assistant")];
+    const last = stream(history, [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            type: "function",
+            function: { name: "run_terminal_command", arguments: "" },
+          },
+        ],
+      },
+    ]);
+    stream(history, [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: {
+              name: "run_terminal_command",
+              arguments: '{"command":"git status"}',
+            },
+          },
+        ],
+      },
+    ]);
+
+    const states = history[history.length - 1].toolCallStates ?? [];
+    expect(states).toHaveLength(1);
+    expect(states[0].toolCallId).toBe("call_1");
+    expect(states[0].toolCall.function.arguments).toBe(
+      '{"command":"git status"}',
+    );
+    expect(last).toBeTruthy();
+  });
+
+  it("keeps two genuinely parallel calls apart", () => {
+    // The safety side of the same rule: two identified calls must never be merged.
+    const history = [item("user"), item("assistant")];
+    stream(history, [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: {
+              name: "run_terminal_command",
+              arguments: '{"command":"ls"}',
+            },
+          },
+          {
+            id: "call_2",
+            type: "function",
+            function: {
+              name: "run_terminal_command",
+              arguments: '{"command":"pwd"}',
+            },
+          },
+        ],
+      },
+    ]);
+    expect(
+      (history[history.length - 1].toolCallStates ?? []).map(
+        (s) => s.toolCallId,
+      ),
+    ).toEqual(["call_1", "call_2"]);
+  });
+
+  it("does not adopt a placeholder belonging to another tool", () => {
+    const history = [item("user"), item("assistant")];
+    stream(history, [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            type: "function",
+            function: { name: "read_file", arguments: '{"filepath":"a.ts"}' },
+          },
+        ],
+      },
+    ]);
+    stream(history, [
+      {
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          {
+            id: "call_2",
+            type: "function",
+            function: {
+              name: "run_terminal_command",
+              arguments: '{"command":"ls"}',
+            },
+          },
+        ],
+      },
+    ]);
+    expect(
+      (history[history.length - 1].toolCallStates ?? []).map(
+        (s) => `${s.toolCallId}:${s.toolCall.function.name}`,
+      ),
+    ).toEqual([":read_file", "call_2:run_terminal_command"]);
   });
 });

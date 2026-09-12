@@ -11,11 +11,17 @@ export function addToolCallDeltaToState(
 ): ToolCallState {
   const currentCall = currentState?.toolCall;
 
-  // If we have a current state and the delta has a different ID, ignore the delta
+  // Ignore a delta that carries a *different, known* ID than the state it was matched to.
+  //
+  // 方案.md §7.4: an empty ID means "not identified yet", not "a different call". A fragment that
+  // arrives before any ID existed creates such a state; the next fragment with the real ID must
+  // be allowed to name it (otherwise the caller has to invent a second state for one call, which
+  // showed up as two approval rows for one command).
   if (
     currentState &&
     toolCallDelta.id &&
-    currentCall?.id !== toolCallDelta.id
+    currentCall?.id &&
+    currentCall.id !== toolCallDelta.id
   ) {
     return currentState;
   }
