@@ -16,7 +16,8 @@ import {
   useSessionIsHistoryLoading,
   useSessionIsStreaming,
 } from "../../redux/selectors/sessionView";
-import { setSessionVisibleHistoryCount } from "../../redux/slices/sessionsSlice";
+import { setSessionHistoryKeepFloor } from "../../redux/slices/sessionsSlice";
+import { recordSubmitLatency } from "../../util/submitLatency";
 
 /**
  * Only reset scroll state when a new user message is added to the chat.
@@ -261,15 +262,24 @@ export const useAutoScroll = (
   }, [history.length, ref]);
 
   /**
-   * 方案.md §7.2.8: report how many trailing window rows the viewport is showing, so the
-   * post-save trim can never delete a row the user is looking at.
+   * 方案.md §7.2.8: report how many trailing window rows this view needs to stay **visually
+   * stable**, so the post-save trim releases only rows the user cannot see.
    *
-   * Counted from the first row whose bottom edge is still below the container's top edge — the
-   * rows above it are off-screen and free to release. Deliberately reports `0` when no row can
-   * be found: "nothing measurable on screen" must not keep rows alive by accident.
+   * Two parts, and the second one is why this is measured in pixels:
    *
-   * Dispatched only when the number changes, and the reducer ignores equal values, so scroll
-   * traffic cannot turn into render traffic.
+   * 1. every row from the first one whose bottom edge is still below the container's top edge
+   *    (the rows above it are off-screen and free to release);
+   * 2. enough rows **above** that to leave one viewport of scroll room. Counting rows is not
+   *    enough: a row whose content renders nothing (`tool`, an empty `thinking` row) still has a
+   *    `data-message-id` wrapper and zero height, so four "buffer rows" can add zero pixels —
+   *    and leaving the transcript with no scroll room is exactly the condition the
+   *    fill-viewport pagination below reacts to, which prepends a page straight back (the
+   *    reported "scrollbar suddenly grew, then went back"). The walk stops at the top of the
+   *    window, which then reports the whole window and therefore trims nothing.
+   *
+   * Reports `0` when no row can be found: "nothing measurable on screen" must not keep rows
+   * alive by accident. Dispatched on layout, scroll and resize, and the reducer ignores equal
+   * values, so scroll traffic cannot turn into render traffic.
    */
   const reportVisibleRows = useCallback(() => {
     const elem = ref.current;
@@ -280,20 +290,38 @@ export const useAutoScroll = (
     ) {
       // Measurement is best-effort: a container without layout cannot report visibility, and a
       // stale floor would pin memory for rows nobody can see. "Nothing measured" is 0.
-      dispatch(setSessionVisibleHistoryCount({ sessionId, count: 0 }));
+      dispatch(setSessionHistoryKeepFloor({ sessionId, count: 0 }));
       return;
     }
     const containerTop = elem.getBoundingClientRect().top;
-    const firstVisible = Array.from(
+    const rows = Array.from(
       elem.querySelectorAll<HTMLElement>("[data-message-id]"),
-    ).find((node) => node.getBoundingClientRect().bottom > containerTop);
-    const messageId = firstVisible?.dataset.messageId;
+    );
+    const firstVisible = rows.findIndex(
+      (node) => node.getBoundingClientRect().bottom > containerTop,
+    );
+    if (firstVisible < 0) {
+      dispatch(setSessionHistoryKeepFloor({ sessionId, count: 0 }));
+      return;
+    }
+
+    // One viewport of history above the visible band keeps the transcript scrollable, so a trim
+    // can never hand the fill-viewport pagination the state it is written to remove.
+    const bufferPx = elem.clientHeight;
+    let keepFrom = firstVisible;
+    let buffered = 0;
+    while (keepFrom > 0 && buffered < bufferPx) {
+      keepFrom -= 1;
+      buffered += Math.max(0, rows[keepFrom].getBoundingClientRect().height);
+    }
+
+    const messageId = rows[keepFrom]?.dataset.messageId;
     const index =
       messageId === undefined
         ? -1
         : history.findIndex((item) => item.message.id === messageId);
     dispatch(
-      setSessionVisibleHistoryCount({
+      setSessionHistoryKeepFloor({
         sessionId,
         count: index < 0 ? 0 : history.length - index,
       }),
@@ -302,11 +330,31 @@ export const useAutoScroll = (
 
   // Re-measure whenever the window changes (a new turn, a prepend, a trim) and once per paint
   // after layout settles — rows change height as markdown and code blocks render.
+  const previousLengthRef = useRef(history.length);
   useLayoutEffect(() => {
     reportVisibleRows();
     const frame = requestAnimationFrame(reportVisibleRows);
     return () => cancelAnimationFrame(frame);
   }, [reportVisibleRows]);
+
+  // 方案.md §7.2.8: a shrinking window is the one layout change at the end of a reply, and
+  // whether the transcript still overflows afterwards decides whether the lazy-load machinery
+  // reacts to it. Logged here (the only place with the container) and only when it shrank.
+  useLayoutEffect(() => {
+    const previous = previousLengthRef.current;
+    previousLengthRef.current = history.length;
+    if (history.length >= previous) {
+      return;
+    }
+    const elem = ref.current;
+    recordSubmitLatency({
+      phase: "history-shrunk",
+      sessionId,
+      items: history.length,
+      viewportPx: elem?.clientHeight,
+      contentPx: elem?.scrollHeight,
+    });
+  }, [history.length, sessionId, ref]);
 
   // 方案.md §7.2.8: the view owns this measurement, so it also owns clearing it. When this view
   // stops showing this session, its number must not linger: a stale floor would hold rows alive
@@ -314,7 +362,7 @@ export const useAutoScroll = (
   // itself to find out (§五.20 — only the shell reads `activeSessionId`).
   useLayoutEffect(() => {
     return () => {
-      dispatch(setSessionVisibleHistoryCount({ sessionId, count: 0 }));
+      dispatch(setSessionHistoryKeepFloor({ sessionId, count: 0 }));
     };
   }, [sessionId, dispatch]);
 
@@ -467,6 +515,16 @@ export const useAutoScroll = (
         if (isPrependingRef.current) return;
         // 不足一屏（无滚动空间，scroll handler 无法触发）
         if (elem.scrollHeight <= elem.clientHeight) {
+          // The deadlock breaker firing. If this appears right after a `history-trim` or a
+          // `history-shrunk`, the trim left the transcript with no scroll room — which is what
+          // the keep floor's scroll buffer exists to prevent (方案.md §7.2.8).
+          recordSubmitLatency({
+            phase: "fill-viewport",
+            sessionId,
+            items: history.length,
+            viewportPx: elem.clientHeight,
+            contentPx: elem.scrollHeight,
+          });
           fillViewportAttemptsRef.current += 1;
           isPrependingRef.current = true;
           prevScrollHeightRef.current = elem.scrollHeight;

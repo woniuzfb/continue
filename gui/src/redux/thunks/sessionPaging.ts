@@ -492,19 +492,18 @@ export const reconcilePaginationAfterPersist = createAsyncThunk<
     // 方案.md §7.2.8: the floor comes from the session's own runtime state, written by the view
     // that is showing it and zeroed when that view stops showing it. This thunk must never
     // resolve the visible session itself (§五.20: only the shell reads `activeSessionId`), and
-    // it must not need to: a background session's view already zeroed its count on the way out.
+    // it must not need to: a background session's view already zeroed its floor on the way out.
     //
-    // The scroll buffer matters as much as the floor: keeping exactly the visible rows leaves the
-    // transcript with no overflow, which is the state `useAutoScroll`'s fill-viewport pagination
-    // reacts to — it would prepend a page straight back and the scrollbar would jump up and
-    // return. One page's worth of rows above the visible ones keeps the container scrollable.
-    const visibleFloor = session.visibleHistoryCount;
+    // The floor already includes a scroll buffer, measured by the view in **pixels**: a row can
+    // render nothing (`tool`, an empty `thinking` row) and count zero height, so a row count
+    // cannot promise the transcript still overflows — and "no scroll room" is the state the
+    // fill-viewport pagination reacts to.
+    const keepFloor = session.historyKeepFloor;
     const plan = planHistoryTrim(
       session,
       getLazyLoadTrimLimit(ui.lazyLoadHistoryInitialCount),
       totalHistoryCount,
-      visibleFloor,
-      getLazyLoadTrimLimit(ui.lazyLoadHistoryPageSize),
+      keepFloor,
     );
     if (!plan) {
       return false;
@@ -517,7 +516,7 @@ export const reconcilePaginationAfterPersist = createAsyncThunk<
       sessionId,
       items: session.history.length,
       keepItems: plan.keepCount,
-      floorItems: visibleFloor,
+      floorItems: keepFloor,
     });
 
     dispatch(

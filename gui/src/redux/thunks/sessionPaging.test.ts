@@ -640,11 +640,11 @@ describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", ()
 
   function storeWithWindow(
     count: number,
-    visibleHistoryCount: number,
+    keepFloor: number,
     options: { lazyLoad?: boolean; activeSessionId?: string } = {},
   ) {
     const session = windowed(count);
-    session.visibleHistoryCount = visibleHistoryCount;
+    session.historyKeepFloor = keepFloor;
     return createMockStore({
       sessions: {
         activeSessionId: options.activeSessionId ?? "s1",
@@ -671,11 +671,9 @@ describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", ()
     });
   }
 
-  it("keeps every row the viewport is showing, plus a page of scroll buffer", async () => {
-    // 20 rows with 8 of them visible: the trim may release the 8 off-screen rows and must keep
-    // the visible ones **plus** a page (4 rows, `lazyLoadHistoryPageSize`), otherwise the
-    // transcript would be left with no overflow — the state the fill-viewport pagination reacts
-    // to, which prepends a page straight back.
+  it("keeps the view's floor and releases everything above it", async () => {
+    // 20 rows, the view needs 8 (its floor already includes a viewport of scroll room): the 12
+    // rows above are off-screen and are what a trim may release.
     const store = storeWithWindow(20, 8);
     await run(
       store,
@@ -688,10 +686,6 @@ describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", ()
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.history.map((i) => i.message.id)).toEqual([
-      "m8",
-      "m9",
-      "m10",
-      "m11",
       "m12",
       "m13",
       "m14",
@@ -701,7 +695,25 @@ describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", ()
       "m18",
       "m19",
     ]);
-    expect(session.pagination.loadedOffset).toBe(18);
+    expect(session.pagination.loadedOffset).toBe(22);
+  });
+
+  it("releases only the rows above the view's floor", async () => {
+    // The reported case: a 12-row window whose view needs 10 (5 visible + a viewport of scroll
+    // room). Only those 2 rows may go, and the transcript keeps its overflow.
+    const store = storeWithWindow(12, 10);
+    await run(
+      store,
+      reconcilePaginationAfterPersist({
+        sessionId: "s1",
+        savedRevision: 3,
+        totalHistoryCount: 10 + 12,
+      }),
+    );
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.history).toHaveLength(10);
+    expect(session.history[0].message.id).toBe("m2");
+    expect(session.pagination.loadedOffset).toBe(12);
   });
 
   it("trims down to the limit when nothing is on screen", async () => {
@@ -733,26 +745,10 @@ describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", ()
         totalHistoryCount: 10 + 20,
       }),
     );
-    // 5 visible + one page of buffer.
+    // The floor is used verbatim (everything above it is off-screen).
     expect(
       selectSessionById(store.getState() as any, "s1")!.history,
-    ).toHaveLength(9);
-  });
-
-  it("trims nothing when the floor plus the buffer covers the whole window", async () => {
-    // 12 rows, 8 visible, 4 of buffer: there is nothing left to release.
-    const store = storeWithWindow(12, 8);
-    await run(
-      store,
-      reconcilePaginationAfterPersist({
-        sessionId: "s1",
-        savedRevision: 3,
-        totalHistoryCount: 10 + 12,
-      }),
-    );
-    const session = selectSessionById(store.getState() as any, "s1")!;
-    expect(session.history).toHaveLength(12);
-    expect(session.pagination.loadedOffset).toBe(10);
+    ).toHaveLength(5);
   });
 
   it("does not trim at all while the reply is still streaming", async () => {

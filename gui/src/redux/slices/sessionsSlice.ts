@@ -178,15 +178,21 @@ export type SessionRuntimeState = {
   conversationRevision: number;
   firstTurnItems: ChatHistoryItemWithMessageId[];
   /**
-   * 方案.md §7.2.8: how many trailing window rows the viewport is showing right now (from the
-   * first visible row to the end of the window); `0` when nothing is on screen.
+   * 方案.md §7.2.8: how many trailing window rows the view needs to stay visually stable — the
+   * rows covering the viewport **plus** enough rows above them to leave a scroll buffer; `0`
+   * when the session is not on screen.
+   *
+   * Measured in pixels by the view, not counted from the visible-row count alone: a row whose
+   * content renders nothing (`tool`, an empty `thinking` row) still occupies a
+   * `data-message-id` wrapper with zero height, so N extra rows do not promise N extra pixels
+   * of scroll room — and "no scroll room" is exactly the state `useAutoScroll`'s fill-viewport
+   * pagination reacts to.
    *
    * Presentation-only and runtime-only: it never reaches the `Session` protocol, never marks
    * the session dirty, never advances `conversationRevision` and never invalidates the
-   * metrics. Its single consumer is the post-save trim floor — a trim must not remove a row
-   * the user is looking at.
+   * metrics. Its single consumer is the post-save trim floor.
    */
-  visibleHistoryCount: number;
+  historyKeepFloor: number;
   latestConversationSummary?: {
     sourceMessageId: string;
     /** Absolute index in the full history (方案.md §十一 synthetic separator). */
@@ -308,7 +314,7 @@ export function initialSessionRuntime(
     mode: "chat",
     symbols: {},
     isInEdit: false,
-    visibleHistoryCount: 0,
+    historyKeepFloor: 0,
     codeBlockApplyStates: { states: [], curIndex: 0 },
     newestToolbarPreviewForInput: {},
     compactionLoading: {},
@@ -1011,11 +1017,12 @@ export const sessionsSlice = createSlice({
      * therefore never advance it (方案.md §五.16.1 / 已知限制 #64).
      */
     /**
-     * 方案.md §7.2.8: the viewport reports how many trailing window rows it is showing.
-     * Written only when the number actually changes (it is dispatched from scroll / resize /
-     * layout passes), and it touches exactly one field: no dirty mark, no revision, no metrics.
+     * 方案.md §7.2.8: the view reports the trailing-row floor it needs to stay visually stable.
+     * Written only when the number actually changes (it is dispatched from layout / scroll /
+     * resize passes), and it touches exactly one field: no dirty mark, no revision change, no
+     * metrics invalidation.
      */
-    setSessionVisibleHistoryCount: (
+    setSessionHistoryKeepFloor: (
       state,
       action: PayloadAction<{ sessionId: string; count: number }>,
     ) => {
@@ -1024,8 +1031,8 @@ export const sessionsSlice = createSlice({
         return;
       }
       const count = Math.max(0, Math.floor(action.payload.count));
-      if (session.visibleHistoryCount !== count) {
-        session.visibleHistoryCount = count;
+      if (session.historyKeepFloor !== count) {
+        session.historyKeepFloor = count;
       }
     },
     setSessionFirstTurn: (
@@ -2057,7 +2064,7 @@ export const {
   deleteTurnByMessageId,
   truncateHistoryAfterMessageId,
   setSessionFirstTurn,
-  setSessionVisibleHistoryCount,
+  setSessionHistoryKeepFloor,
   setSessionConversationSummary,
   clearSessionConversationSummary,
   beginSessionStream,

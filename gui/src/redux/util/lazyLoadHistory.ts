@@ -48,21 +48,23 @@ export function getLazyLoadTrimLimit(initialCount: number | undefined): number {
  *   trimming into the visible area collapses the transcript under the reader at
  *   the exact moment the reply finishes (a 12-row window dropped to 4 rows
  *   right after the terminal save).
- * @param scrollBuffer 方案.md §7.2.8: rows kept **above** the visible ones so the
- *   transcript still overflows after the trim. Keeping exactly the visible rows
- *   leaves `scrollHeight === clientHeight`, which is the precise condition
- *   `useAutoScroll`'s fill-viewport pagination exists to detect: it prepends a
- *   page straight away, the content grows back, and the user sees the scrollbar
- *   jump up and return (real trace: `history-trim items=12 keepItems=5
- *   floorItems=5`, then "the scrollbar suddenly grew, then went back"). The
- *   buffer also absorbs a measurement that is up to one scroll behind.
+ * @param keepFloor 方案.md §7.2.8: how many trailing window rows the view needs to
+ *   stay visually stable — the rows covering the viewport **plus** enough rows
+ *   above them to leave a scroll buffer (`useAutoScroll` measures it in pixels,
+ *   because rows with no rendered content exist and count zero height). `0` for
+ *   a session that is not on screen. The trim exists to release memory, and it
+ *   may only release rows the user cannot see: trimming into the visible area
+ *   collapses the transcript under the reader at the exact moment the reply
+ *   finishes, and leaving no scroll room at all hands
+ *   `useAutoScroll`'s fill-viewport pagination the exact condition it exists to
+ *   detect, so it prepends a page straight back and the scrollbar jumps up and
+ *   returns.
  */
 export function planHistoryTrim(
   session: SessionRuntimeState,
   limit: number,
   fullDiskItemCount: number | undefined,
-  visibleFloor = 0,
-  scrollBuffer = 0,
+  keepFloor = 0,
 ): HistoryTrimPlan | null {
   const length = session.history.length;
   const safeLimit = getLazyLoadTrimLimit(limit);
@@ -95,8 +97,7 @@ export function planHistoryTrim(
   const keepCount = Math.max(
     safeLimit,
     currentTurnLength,
-    Math.max(0, Math.floor(visibleFloor)) +
-      Math.max(0, Math.floor(scrollBuffer)),
+    Math.max(0, Math.floor(keepFloor)),
   );
   if (keepCount >= length) {
     return null;

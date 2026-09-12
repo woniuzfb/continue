@@ -247,19 +247,27 @@ describe("planHistoryTrim", () => {
     ).toBe(4);
   });
 
-  it("keeps a page of overflow above the visible rows", () => {
-    // 方案.md §7.2.8: keeping *exactly* the visible rows leaves the transcript with
-    // `scrollHeight === clientHeight`, which is the condition `useAutoScroll`'s fill-viewport
-    // pagination looks for — it prepends a page straight back, so the scrollbar jumps up and
-    // returns. The buffer keeps at least one row above the visible ones.
+  it("takes the floor from the view as-is", () => {
+    // The floor already carries the scroll buffer (the view measures it in pixels, 方案.md
+    // §7.2.8), so the planner only has to refuse to go below it.
     const history = turns(10); // 20 rows
     const session = runtime(history, { loadedOffset: 10, loadedDiskCount: 20 });
-    const withBuffer = planHistoryTrim(session, 4, 30, 5, 4);
-    expect(withBuffer?.keepCount).toBe(9);
-    expect(withBuffer!.keepCount).toBeGreaterThan(5);
+    expect(planHistoryTrim(session, 4, 30, 9)?.keepCount).toBe(9);
+    // A floor below the limit or the current turn never lowers them.
+    expect(planHistoryTrim(session, 4, 30, 1)?.keepCount).toBe(4);
+  });
 
-    // Without a buffer the trim would land exactly on the visible rows — the hazard above.
-    expect(planHistoryTrim(session, 4, 30, 5)?.keepCount).toBe(5);
+  it("trims nothing when the view's floor already covers the window", () => {
+    // A floor equal to the whole window is what the view reports when it cannot spare a row
+    // (for example when every row above the viewport renders zero height), and it must trim
+    // nothing at all — not even by one row.
+    const session = runtime(turns(6), {
+      loadedOffset: 10,
+      loadedDiskCount: 12,
+    }); // 12 rows
+    expect(planHistoryTrim(session, 4, 22, 12)).toBeNull();
+    // One row of slack is enough to allow a (small) trim again.
+    expect(planHistoryTrim(session, 4, 22, 11)?.keepCount).toBe(11);
   });
 
   it("ignores a nonsensical floor", () => {
@@ -268,10 +276,9 @@ describe("planHistoryTrim", () => {
     // A negative or fractional measurement can only come from a broken measurement; it must
     // never make the trim keep fewer rows than the limit.
     expect(planHistoryTrim(session, 4, 22, -5)?.keepCount).toBe(4);
+    // A fractional floor floors rather than rounding up: keeping one row fewer than asked is
+    // still above the limit and the current turn.
     expect(planHistoryTrim(session, 4, 22, 5.7)?.keepCount).toBe(5);
-    // A negative or fractional buffer is clamped the same way.
-    expect(planHistoryTrim(session, 4, 22, 5, -3)?.keepCount).toBe(5);
-    expect(planHistoryTrim(session, 4, 22, 5, 2.4)?.keepCount).toBe(7);
   });
 
   it("does not mutate the input history", () => {

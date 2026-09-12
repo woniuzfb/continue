@@ -46,7 +46,9 @@ export type SubmitLatencyPhase =
   | "terminal-commit"
   | "terminal-identity"
   | "terminal-save-workflow"
-  | "history-trim";
+  | "history-trim"
+  | "history-shrunk"
+  | "fill-viewport";
 
 export type SubmitLatencyEvent = {
   phase: SubmitLatencyPhase;
@@ -80,6 +82,10 @@ export type SubmitLatencyEvent = {
   keepItems?: number;
   /** Rows the viewport was showing, i.e. the floor a trim had to respect (`history-trim`). */
   floorItems?: number;
+  /** The scroll container's visible height in pixels, when the phase is about layout. */
+  viewportPx?: number;
+  /** The scroll container's content height in pixels, when the phase is about layout. */
+  contentPx?: number;
   /** Size of a stream chunk in characters (never its content). */
   chars?: number;
   /**
@@ -182,6 +188,12 @@ export function recordSubmitLatency(event: SubmitLatencyEvent): void {
     }
     if (event.floorItems !== undefined) {
       details.push(`floorItems=${event.floorItems}`);
+    }
+    if (event.viewportPx !== undefined) {
+      details.push(`viewportPx=${event.viewportPx}`);
+    }
+    if (event.contentPx !== undefined) {
+      details.push(`contentPx=${event.contentPx}`);
     }
     if (event.after !== undefined) {
       details.push(`after=${event.after}`);

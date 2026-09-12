@@ -44,7 +44,12 @@ class FakeScrollElement {
   querySelectorAll() {
     return this.rows.map((row) => ({
       dataset: row.dataset,
-      getBoundingClientRect: () => ({ top: row.top, bottom: row.bottom }),
+      getBoundingClientRect: () => ({
+        top: row.top,
+        bottom: row.bottom,
+        // The keep floor measures its buffer in pixels (方案.md §7.2.8), like the DOM does.
+        height: row.bottom - row.top,
+      }),
     })) as unknown as NodeListOf<HTMLElement>;
   }
   private _scrollTop = 0;
@@ -263,7 +268,12 @@ class ShrinkwrapScrollElement {
   querySelectorAll() {
     return this.rows.map((row) => ({
       dataset: row.dataset,
-      getBoundingClientRect: () => ({ top: row.top, bottom: row.bottom }),
+      getBoundingClientRect: () => ({
+        top: row.top,
+        bottom: row.bottom,
+        // The keep floor measures its buffer in pixels (方案.md §7.2.8), like the DOM does.
+        height: row.bottom - row.top,
+      }),
     })) as unknown as NodeListOf<HTMLElement>;
   }
   private listeners: Array<() => void> = [];
@@ -554,7 +564,7 @@ describe("useAutoScroll visible-row reporting (方案.md §7.2.8)", () => {
   }
 
   const reported = () =>
-    (store.getState() as any).sessions.sessionsById.s1.visibleHistoryCount;
+    (store.getState() as any).sessions.sessionsById.s1.historyKeepFloor;
 
   /** Rows are laid out 100px tall starting at the container top (0). */
   function layoutFrom(firstVisibleRow: number, items = history) {
@@ -565,11 +575,33 @@ describe("useAutoScroll visible-row reporting (方案.md §7.2.8)", () => {
     }));
   }
 
-  it("reports the rows from the first visible row to the end", () => {
+  it("reports the visible rows plus one viewport of scroll room above them", () => {
     // Rows 0-5 are above the container top (bottom <= 0), so rows 6 and 7 are what is visible.
+    // The floor then walks **up** until it has one container height (100px) of buffer, which is
+    // one more 100px row: rows 5-7 = 3.
     layoutFrom(6);
     mount();
-    expect(reported()).toBe(2);
+    expect(reported()).toBe(3);
+  });
+
+  it("counts the buffer in pixels, not in rows", () => {
+    // 方案.md §7.2.8: `tool` rows and empty `thinking` rows render nothing but still occupy a
+    // `data-message-id` wrapper, so "four buffer rows" can be zero pixels — and no scroll room
+    // is the exact condition the fill-viewport pagination reacts to. Zero-height rows must be
+    // walked over instead of counted.
+    element.rows = history.map((row, index) => {
+      const height = index === 6 || index === 7 ? 100 : 0;
+      return {
+        dataset: { messageId: row.message.id },
+        top: index <= 5 ? -100 : index === 6 ? 0 : 100,
+        bottom: index <= 5 ? -100 : index === 6 ? 100 : 200,
+        height,
+      } as any;
+    });
+    mount();
+    // Rows 6-7 are visible; rows 5,4,3,2,1,0 add 0px each, so the walk reaches the window top
+    // and the floor becomes the whole window — which then trims nothing at all.
+    expect(reported()).toBe(8);
   });
 
   it("reports the whole window when nothing has scrolled past the top", () => {
@@ -589,13 +621,13 @@ describe("useAutoScroll visible-row reporting (方案.md §7.2.8)", () => {
     const hooks = mount();
     expect(reported()).toBe(history.length);
 
-    // The user scrolled down: only the last row is still visible.
+    // The user scrolled down: only the last row is still visible (+ one row of buffer).
     layoutFrom(history.length - 1);
     act(() => {
       element.dispatchScroll();
       flushFrames();
     });
-    expect(reported()).toBe(1);
+    expect(reported()).toBe(2);
 
     // A row removed from the window (or a re-layout) shortens the count again.
     hooks.unmount();
@@ -607,7 +639,8 @@ describe("useAutoScroll visible-row reporting (方案.md §7.2.8)", () => {
     // never resolves the visible session itself (§五.20).
     layoutFrom(2);
     const hooks = mount();
-    expect(reported()).toBe(6);
+    // Rows 2-7 visible (6) + row 1 as the buffer.
+    expect(reported()).toBe(7);
 
     hooks.unmount();
     expect(reported()).toBe(0);
