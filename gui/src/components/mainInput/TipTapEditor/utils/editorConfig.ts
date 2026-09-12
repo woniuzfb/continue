@@ -37,6 +37,7 @@ import {
   useSessionIsStreaming,
 } from "../../../../redux/selectors/sessionView";
 import { useSessionId } from "../SessionScope";
+import { tippyContainerId } from "./tippyContainer";
 
 export function getPlaceholderText(
   placeholder: TipTapEditorProps["placeholder"],
@@ -146,6 +147,10 @@ export function createEditorConfig(options: {
     props.availableSlashCommands,
   );
   const { prevRef, nextRef, addRef } = useInputHistory(props.historyKey);
+
+  // 方案.md §7.3.2: the suggestion popups mount into this editor's own container, never into a
+  // document-wide id (every tab is mounted, so a shared id is ambiguous).
+  const popupContainerId = tippyContainerId(sessionId, props.inputId);
 
   const enterSubmenu = async (editor: Editor, providerId: string) => {
     const contents = editor.getText();
@@ -395,6 +400,7 @@ export function createEditorConfig(options: {
       Mention.configure({
         suggestion: getContextProviderDropdownOptions(
           availableContextProvidersRef,
+          popupContainerId,
           getSubmenuContextItemsRef,
           enterSubmenu,
           onClose,
@@ -406,11 +412,11 @@ export function createEditorConfig(options: {
       SlashCommand.configure({
         suggestion: getSlashCommandDropdownOptions(
           availableSlashCommandsRef,
+          popupContainerId,
           onClose,
           onOpen,
           ideMessenger,
           dispatch,
-          props.inputId,
         ),
       }),
       PromptBlock,

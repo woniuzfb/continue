@@ -36,6 +36,7 @@ import { useMainEditor } from "./MainEditorProvider";
 import { setUserInputStaticHtml } from "../userInputHtmlCache";
 import "./TipTapEditor.css";
 import { createEditorConfig, getPlaceholderText } from "./utils/editorConfig";
+import { tippyContainerId } from "./utils/tippyContainer";
 import { handleImageFile } from "./utils/imageUtils";
 import { useEditorEventHandlers } from "./utils/keyHandlers";
 import {
@@ -101,8 +102,6 @@ export interface TipTapEditorProps {
    * so the user's click lands in a focused, editable editor. */
   autoFocusOnMount?: boolean;
 }
-
-export const TIPPY_DIV_ID = "tippy-js-div";
 
 /**
  * Small square file chip rendered inline with the toolbar buttons.
@@ -738,7 +737,10 @@ function TipTapEditorInner(props: TipTapEditorProps) {
         ) && (
           <DragOverlay show={showDragOverMsg} setShow={setShowDragOverMsg} />
         )}
-      <div id={TIPPY_DIV_ID} className="fixed z-50" />
+      <div
+        id={tippyContainerId(sessionId, props.inputId)}
+        className="fixed z-50"
+      />
     </InputBoxDiv>
   );
 }
@@ -756,19 +758,70 @@ function toolbarOptionsEqual(a?: ToolbarOptions, b?: ToolbarOptions) {
   );
 }
 
-const MemoInner = memo(
-  TipTapEditorInner,
-  (prev, next) =>
+/**
+ * 方案.md §7.5.6: "same length" is not "same content".
+ *
+ * The comparator used to compare the *lengths* of `availableSlashCommands` /
+ * `availableContextProviders`. Every tab stays mounted (§九.1/§九.2), so a hidden tab whose command
+ * list changed from `[foo]` to `[bar]` — or whose providers changed while the count stayed the
+ * same after a config refresh — compared equal, the editor never re-rendered, `useUpdatingRef`
+ * never received the new props, and that window's `/` and `@` menus kept serving the old set (the
+ * reported "some windows show the command list, others do nothing, and the pattern moves").
+ *
+ * A stable identity comparison keeps both properties: a real content change re-renders, while an
+ * upstream rebuild of an equivalent array does not (which is why the reviewer asked for this
+ * rather than simply dropping the fields from the comparator).
+ */
+type SuggestionItemIdentity = {
+  id?: string;
+  title?: string;
+  /** `ContextProviderDescription` carries `title`; commands carry `id`. */
+  displayTitle?: string;
+};
+
+export function suggestionItemsEqual(
+  previous: SuggestionItemIdentity[] | undefined,
+  next: SuggestionItemIdentity[] | undefined,
+): boolean {
+  if (previous === next) {
+    return true;
+  }
+  if (!previous || !next || previous.length !== next.length) {
+    return false;
+  }
+  return previous.every((item, index) => {
+    const candidate = next[index];
+    return (
+      item.id === candidate.id &&
+      item.title === candidate.title &&
+      item.displayTitle === candidate.displayTitle
+    );
+  });
+}
+
+/** Exported for tests: the memo equality of the editor. */
+export function tipTapEditorPropsEqual(
+  prev: TipTapEditorProps,
+  next: TipTapEditorProps,
+): boolean {
+  return (
     prev.isMainInput === next.isMainInput &&
     prev.placeholder === next.placeholder &&
     prev.historyKey === next.historyKey &&
     prev.inputId === next.inputId &&
     toolbarOptionsEqual(prev.toolbarOptions, next.toolbarOptions) &&
-    (prev.availableContextProviders?.length || 0) ===
-      (next.availableContextProviders?.length || 0) &&
-    (prev.availableSlashCommands?.length || 0) ===
-      (next.availableSlashCommands?.length || 0),
-);
+    suggestionItemsEqual(
+      prev.availableContextProviders,
+      next.availableContextProviders,
+    ) &&
+    suggestionItemsEqual(
+      prev.availableSlashCommands,
+      next.availableSlashCommands,
+    )
+  );
+}
+
+const MemoInner = memo(TipTapEditorInner, tipTapEditorPropsEqual);
 
 export function TipTapEditor(props: TipTapEditorProps) {
   return (
