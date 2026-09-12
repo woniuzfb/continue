@@ -59,10 +59,7 @@ import {
   intentFromRevisionDelta,
 } from "../util/sessionSaveIntent";
 import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
-import {
-  buildRequestHistoryForSession,
-  type RequestHistoryMode,
-} from "../util/requestHistory";
+import { buildRequestHistoryForSession } from "../util/requestHistory";
 import { generateSessionTitle } from "./sessionTitle";
 import { loadFullRequestHistory } from "./sessionPaging";
 import { isLocalConversationModel } from "core/llm/localConversation";
@@ -540,7 +537,6 @@ async function resolveRequestHistoryForSend(
   localConversation: boolean,
 ): Promise<{
   history: ChatHistoryItemWithMessageId[];
-  mode: RequestHistoryMode;
   latestConversationSummary?: SessionRuntimeState["latestConversationSummary"];
 } | null> {
   const { dispatch, getState } = api;
@@ -559,7 +555,6 @@ async function resolveRequestHistoryForSend(
       // (方案.md §十三 Phase 5: Local Provider fast path or an untruncated window).
       return {
         history: plan.requestHistory,
-        mode: plan.mode,
         latestConversationSummary: session.latestConversationSummary,
       };
     }
@@ -588,7 +583,6 @@ async function resolveRequestHistoryForSend(
       }
       return {
         history: snapshot.history,
-        mode: "full-history",
         latestConversationSummary: snapshot.latestConversationSummary,
       };
     } catch (e) {
@@ -687,14 +681,6 @@ async function streamModelTurn(
     return { kind: "gone" };
   }
   const historyForRequest = resolved.history;
-
-  // 方案.md §五.16: only the complete logical conversation may update the
-  // context metrics. Use the builder's explicit mode, never
-  // `pagination.truncated`: the Local Provider fast path returns a reduced
-  // request even when the window is not truncated yet (firstTurnItems + a
-  // reliable baseline is enough). The reduced compile still drives the actual
-  // send / prune / out-of-context decision.
-  const requestUsesReducedHistory = resolved.mode === "first-turn-plus-current";
 
   const { messages, appliedRules, appliedRulesSourceMessageId } =
     constructMessages(

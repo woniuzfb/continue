@@ -211,15 +211,6 @@ export const loadFullHistory = createAsyncThunk<
           `a partial context and overwrite the session file; aborting send.`,
       );
     }
-    if (merged.kind === "window-moved") {
-      // The guards above already returned for a moved window, so this is unreachable here; the
-      // helper models it because the read-only request loader re-reads the window at a different
-      // point. Fail closed rather than send or persist a partial history.
-      throw new Error(
-        `loadFullHistory: the window moved while the disk was read (${sessionId})`,
-      );
-    }
-
     const mergedReport = ensureMessageIdsWithReport(merged.history);
     if (mergedReport.mintedCount > 0) {
       reportMessageIdFallback({
@@ -376,12 +367,6 @@ export const loadFullRequestHistory = createAsyncThunk<
           `refusing to build a request from a partial history`,
       );
     }
-    if (merged.kind === "window-moved") {
-      // Unreachable (the offset guard above already rejected a moved window); modelled by
-      // the shared rule because `loadFullHistory` re-reads the window at a different point.
-      throw new Error("loadFullRequestHistory: the window moved while loading");
-    }
-
     const report = ensureMessageIdsWithReport(merged.history);
     if (report.mintedCount > 0) {
       // Same reporting as hydration: the request is built from ids we just minted, and the

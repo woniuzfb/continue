@@ -1,7 +1,7 @@
 /**
  * 方案.md §7.2.6：**磁盘冻结头部 + 当前 runtime 尾部**的合并规则，只有这一份实现。
  *
- * 三个调用方共用一个语义，禁止各写一遍（复制一份就意味着某天只有一处改了去重或 provenance
+ * 两个调用方共用一个语义，禁止各写一遍（复制一份就意味着某天只有一处改了去重或 provenance
  * 规则）：
  *
  * ```text
@@ -26,14 +26,20 @@ export type MergeDiskHeadResult<T> =
       kind: "merged";
       history: T[];
     }
-  /** 磁盘比窗口声称的冻结头部还短：合并会丢掉头部，必须中止而不是降级成截断历史。 */
-  | { kind: "disk-shorter-than-head"; diskLength: number; headCount: number }
-  /** 窗口此刻已经不是发起时的那个（generation / offset 变了）：调用方重新取或中止。 */
-  | { kind: "window-moved" };
+  /**
+   * 磁盘比窗口声称的冻结头部还短：合并会丢掉头部，必须中止而不是降级成截断历史。
+   *
+   * 只有这两种结果。**窗口是否还是发起时那个不由这里判断** —— 本函数没有 generation /
+   * expected-offset 输入，那是调用方在 await 之后、调用本函数之前必须自己做的门禁
+   * （`loadFullHistory` 比 generation + offset，`loadFullRequestHistory` 还要比 revision 与尾部
+   * 身份）。把「窗口移动了」放进这里的返回类型只会多出一个没有实现的分支。
+   */
+  | { kind: "disk-shorter-than-head"; diskLength: number; headCount: number };
 
 /**
- * 纯函数：不读 state、不 dispatch、不 await。调用方负责在 await 之后重新读取 `runtimeHistory`
- * 并做自己的门禁（generation / offset / revision），这里只负责合并语义本身：
+ * 纯函数：不读 state、不 dispatch、不 await，也不做门禁。调用方负责在 await 之后重新读取
+ * `runtimeHistory` 并自己证明「窗口没变」（generation / offset / revision / 尾部身份），
+ * 这里只负责合并语义本身：
  *
  * ```text
  * [disk.slice(0, min(loadedOffset, disk.length)), ...runtimeHistory]
