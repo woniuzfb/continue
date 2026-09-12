@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
 import { initialSessionRuntime } from "../slices/sessionsSlice";
-import { selectSessionChatModel } from "./sessions";
+import { selectSessionChatModel, sessionChatModelRefOf } from "./sessions";
+import { setSessionChatModelAndSave } from "../thunks/sessionChanges";
 
 /**
  * 方案.md §7.5.1: a session's model choice must not silently become another model.
@@ -165,5 +166,64 @@ describe("stable identity (方案.md §7.5.4)", () => {
     expect(
       (store.getState() as any).sessions.sessionsById.A.chatModelTitle,
     ).toBe("model-b");
+  });
+});
+
+describe("fresh turn captures the resolved identity (方案.md §7.5.3)", () => {
+  /** The ref a fresh turn would snapshot: resolved model → identity, or nothing. */
+  const turnRefOf = (state: any, sessionId: string) =>
+    sessionChatModelRefOf(selectSessionChatModel(state, sessionId));
+
+  it("captures a legacy title-only session's resolved model", () => {
+    const store = storeWith([MODEL_A, MODEL_B], "model-a", MODEL_B);
+    expect(turnRefOf(store.getState(), "A")).toEqual({
+      title: "model-a",
+      provider: "openai",
+      model: "a",
+    });
+  });
+
+  it("captures the profile default for a session that has no choice yet", () => {
+    const store = storeWith([MODEL_A, MODEL_B], undefined, MODEL_B);
+    expect(turnRefOf(store.getState(), "A")).toEqual({
+      title: "model-b",
+      provider: "openai",
+      model: "b",
+    });
+  });
+
+  it("captures nothing when the session's choice cannot be resolved", () => {
+    // The stream then fails through the existing "no chat model" path: no compile, no llmStreamChat.
+    const store = storeWith([MODEL_B], "model-a", MODEL_B);
+    expect(turnRefOf(store.getState(), "A")).toBeUndefined();
+  });
+});
+
+describe("choosing a model identifies it by ref, not by title (方案.md §7.5.4)", () => {
+  it("stores the clicked entry even when another shares its title", async () => {
+    const anthropicA = { title: "model-a", provider: "anthropic", model: "a" };
+    const store = storeWith([MODEL_A, anthropicA], undefined, MODEL_A);
+    await store.dispatch(
+      setSessionChatModelAndSave({
+        sessionId: "A",
+        chatModelRef: { title: "model-a", provider: "anthropic", model: "a" },
+      }) as any,
+    );
+    expect(
+      (store.getState() as any).sessions.sessionsById.A.chatModelRef,
+    ).toEqual({ title: "model-a", provider: "anthropic", model: "a" });
+  });
+
+  it("keeps the current choice when the selection cannot be resolved", async () => {
+    const store = storeWith([MODEL_A, MODEL_B], "model-a", MODEL_B);
+    await store.dispatch(
+      setSessionChatModelAndSave({
+        sessionId: "A",
+        chatModelRef: { title: "gone", provider: "openai", model: "gone" },
+      }) as any,
+    );
+    const session = (store.getState() as any).sessions.sessionsById.A;
+    expect(session.chatModelTitle).toBe("model-a");
+    expect(session.chatModelRef).toBeUndefined();
   });
 });

@@ -26,6 +26,7 @@ import {
   selectChatModelByRef,
   selectSessionById,
   selectSessionChatModel,
+  sessionChatModelRefOf,
 } from "../selectors/sessions";
 import type { SessionRuntimeState } from "../slices/sessionsSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
@@ -621,9 +622,14 @@ async function streamModelTurn(
 
   // The turn's captured identity wins over the session's current choice: switching the model in
   // this window while the turn runs must not change what the turn is sent with (方案.md §7.5.3).
-  const selectedChatModel = session.stream.chatModelRef
-    ? selectChatModelByRef(state, session.stream.chatModelRef)
-    : selectSessionChatModel(state, sessionId);
+  // 方案.md §7.5.3/§7.5.4: the turn's captured identity is the **only** source for the model this
+  // request uses. Without it there is no verified identity for the turn, so the request fails
+  // through the existing "no chat model" path instead of re-resolving the current session/default
+  // (which is how a turn could end up sent with a different model than it started with).
+  const turnModelRef = session.stream.chatModelRef;
+  const selectedChatModel = turnModelRef
+    ? selectChatModelByRef(state, turnModelRef)
+    : undefined;
   if (!selectedChatModel) {
     dispatch(
       setSessionStreamError({
@@ -909,10 +915,14 @@ async function runSessionStreamImpl(
       sessionId,
       requestId,
       aborter,
-      // 方案.md §7.5.3: the identity is captured once per **logical turn**; the reducer keeps the
-      // predecessor's value for a continuation, so a retry or a tool-loop step keeps sending with
-      // the model the turn started with.
-      chatModelRef: session.chatModelRef,
+      // 方案.md §7.5.3: capture the **resolved** model identity once per logical turn — not
+      // `session.chatModelRef`, which is absent for a legacy title-only session or one that is
+      // still running on the profile default. Resolving here and snapshotting the result is what
+      // makes the turn immune to a later switch; leaving it undefined would just re-resolve at send
+      // time and let the turn drift. The reducer keeps the predecessor's value for a continuation.
+      chatModelRef: sessionChatModelRefOf(
+        selectSessionChatModel(getState(), sessionId),
+      ),
     }),
   );
   checkpointBaselines.set(sessionId, {

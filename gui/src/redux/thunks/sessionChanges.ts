@@ -3,7 +3,11 @@ import { MessageModes } from "core";
 import { v4 as uuidv4 } from "uuid";
 import { selectSessionById } from "../selectors/sessions";
 import { setActiveSessionModelProjection } from "../slices/configSlice";
-import { sessionChatModelRefOf } from "../selectors/sessions";
+import {
+  selectChatModelByRef,
+  sessionChatModelRefOf,
+} from "../selectors/sessions";
+import type { SessionChatModelRef } from "../slices/sessionsSlice";
 import {
   deleteTurnByMessageId,
   setSessionChatModelTitle,
@@ -71,21 +75,44 @@ export const setSessionReasoningAndSave = createAsyncThunk<
  */
 export const setSessionChatModelAndSave = createAsyncThunk<
   void,
-  { sessionId: string; chatModelTitle?: string },
+  {
+    sessionId: string;
+    /** Stable identity of the clicked entry; preferred (方案.md §7.5.4). */
+    chatModelRef?: SessionChatModelRef;
+    /** Legacy/compat entry point, used only when no ref is given. */
+    chatModelTitle?: string;
+  },
   ThunkApiType
 >(
   "sessions/setChatModelAndSave",
-  async ({ sessionId, chatModelTitle }, { dispatch, getState }) => {
+  async (
+    { sessionId, chatModelRef, chatModelTitle },
+    { dispatch, getState },
+  ) => {
     const state = getState();
     const models = state.config.config?.modelsByRole?.chat ?? [];
-    // 方案.md §7.5.4: store the stable identity, not just the title.
-    const chosen = chatModelTitle
-      ? (models.find((m) => m.title === chatModelTitle) ?? undefined)
-      : undefined;
+    // 方案.md §7.5.4: resolve by the stable identity when we have one — never by `find(title)`,
+    // which silently picks the first of two entries that share a title. A legacy title is honoured
+    // only when it is unique.
+    const chosen = chatModelRef
+      ? selectChatModelByRef(state, chatModelRef)
+      : chatModelTitle
+        ? (() => {
+            const matches = models.filter((m) => m.title === chatModelTitle);
+            return matches.length === 1 ? matches[0] : undefined;
+          })()
+        : undefined;
+    if (!chosen) {
+      // Unresolvable selection: keep the session's current model — do not write a wrong title, a
+      // wrong ref, a projection or a save.
+      return;
+    }
     dispatch(
       setSessionChatModelTitle({
         sessionId,
-        chatModelTitle,
+        // The resolved entry is the authority for both fields: a caller that passes only a ref must
+        // still get the title stored (方案.md §7.5.4).
+        chatModelTitle: chosen.title,
         chatModelRef: sessionChatModelRefOf(chosen),
       }),
     );

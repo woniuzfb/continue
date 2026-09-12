@@ -13,6 +13,8 @@ import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { updateSelectedModelByRole } from "../../redux/thunks/updateSelectedModelByRole";
 import { setSessionChatModelAndSave } from "../../redux/thunks/sessionChanges";
+import { selectSessionChatModel } from "../../redux/selectors/sessions";
+import type { SessionChatModelRef } from "../../redux/slices/sessionsSlice";
 import { useSessionIsInEdit } from "../../redux/selectors/sessionView";
 import {
   useIsVisibleSession,
@@ -43,6 +45,37 @@ interface Option {
   apiKey?: string;
   sourceFile?: string;
   isAutoDetected?: boolean;
+}
+
+/**
+ * 方案.md §7.5.4: the option value must be the stable identity, not the title. Encoding the ref as
+ * a string keeps the Listbox (typed `string`) unchanged while making a duplicated title
+ * unambiguous.
+ */
+function modelOptionKey(model: {
+  title?: string;
+  provider?: string;
+  model?: string;
+}): string {
+  return JSON.stringify([
+    model.title ?? "",
+    model.provider ?? "",
+    model.model ?? "",
+  ]);
+}
+
+function modelRefFromOptionKey(key: string): SessionChatModelRef | undefined {
+  try {
+    const [title, provider, model] = JSON.parse(key);
+    if (typeof title !== "string" || !title) return undefined;
+    return {
+      title,
+      provider: String(provider ?? ""),
+      model: String(model ?? ""),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function modelSelectTitle(model: any): string {
@@ -133,6 +166,9 @@ function ModelSelect() {
   // not react to the model-selection shortcut.
   const visible = useIsVisibleSession();
   const config = useAppSelector((state) => state.config.config);
+  const sessionChatModel = useAppSelector((state) =>
+    selectSessionChatModel(state, activeSessionId),
+  );
   const isConfigLoading = useAppSelector((state) => state.config.loading);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [options, setOptions] = useState<Option[]>([]);
@@ -147,7 +183,10 @@ function ModelSelect() {
     selectedModel = config.selectedModelByRole.edit;
   }
   if (!selectedModel) {
-    selectedModel = config.selectedModelByRole.chat;
+    // 方案.md §7.5.1/§7.5.4: the chat role belongs to **this** session, and the option identity is
+    // its stable ref — a title can name two entries, and reading the global selection here made
+    // the toolbar describe whichever window chose last.
+    selectedModel = sessionChatModel;
   }
   if (!allModels || allModels.length === 0) {
     allModels = config.modelsByRole.chat;
@@ -168,7 +207,7 @@ function ModelSelect() {
     setOptions(
       allModels.map((model) => {
         return {
-          value: model.title,
+          value: modelOptionKey(model),
           title: modelSelectTitle(model),
           apiKey: model.apiKey,
           sourceFile: model.sourceFile,
@@ -194,7 +233,9 @@ function ModelSelect() {
 
         const direction = event.shiftKey ? -1 : 1;
         const currentIndex = options.findIndex(
-          (option) => option.value === selectedModel?.title,
+          (option) =>
+            option.value ===
+            (selectedModel ? modelOptionKey(selectedModel) : undefined),
         );
         let nextIndex = (currentIndex + 1 * direction) % options.length;
         if (nextIndex < 0) nextIndex = options.length - 1;
@@ -255,19 +296,23 @@ function ModelSelect() {
   return (
     <Listbox
       onChange={async (val: string) => {
-        if (val === selectedModel?.title) return;
+        // The option value is the stable identity key, so a duplicated title cannot be collapsed
+        // into "the first entry with that title" (方案.md §7.5.4).
+        const chatModelRef = modelRefFromOptionKey(val);
+        if (!chatModelRef) return;
+        if (modelOptionKey(selectedModel ?? {}) === val) return;
         void dispatch(
           updateSelectedModelByRole({
             selectedProfile,
             role: isInEdit ? "edit" : "chat",
-            modelTitle: val,
+            modelTitle: chatModelRef.title,
           }),
         );
         if (!isInEdit) {
           void dispatch(
             setSessionChatModelAndSave({
               sessionId: activeSessionId,
-              chatModelTitle: val,
+              chatModelRef,
             }),
           );
         }
