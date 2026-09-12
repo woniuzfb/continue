@@ -671,30 +671,37 @@ describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", ()
     });
   }
 
-  it("keeps every row the viewport is showing", async () => {
-    // 12 rows, 4 of them off-screen: the trim may release those 4 and nothing else.
-    const store = storeWithWindow(12, 8);
+  it("keeps every row the viewport is showing, plus a page of scroll buffer", async () => {
+    // 20 rows with 8 of them visible: the trim may release the 8 off-screen rows and must keep
+    // the visible ones **plus** a page (4 rows, `lazyLoadHistoryPageSize`), otherwise the
+    // transcript would be left with no overflow — the state the fill-viewport pagination reacts
+    // to, which prepends a page straight back.
+    const store = storeWithWindow(20, 8);
     await run(
       store,
       reconcilePaginationAfterPersist({
         sessionId: "s1",
         savedRevision: 3,
-        totalHistoryCount: 10 + 12,
+        totalHistoryCount: 10 + 20,
       }),
     );
 
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.history.map((i) => i.message.id)).toEqual([
-      "m4",
-      "m5",
-      "m6",
-      "m7",
       "m8",
       "m9",
       "m10",
       "m11",
+      "m12",
+      "m13",
+      "m14",
+      "m15",
+      "m16",
+      "m17",
+      "m18",
+      "m19",
     ]);
-    expect(session.pagination.loadedOffset).toBe(14);
+    expect(session.pagination.loadedOffset).toBe(18);
   });
 
   it("trims down to the limit when nothing is on screen", async () => {
@@ -717,7 +724,24 @@ describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", ()
     // §五.20: this thunk must never resolve the visible session itself. The view that shows a
     // session owns both writing this number and clearing it (see the useAutoScroll cleanup), so
     // the active tab is irrelevant here — a background session's view has already zeroed it.
-    const store = storeWithWindow(12, 5, { activeSessionId: "s2" });
+    const store = storeWithWindow(20, 5, { activeSessionId: "s2" });
+    await run(
+      store,
+      reconcilePaginationAfterPersist({
+        sessionId: "s1",
+        savedRevision: 3,
+        totalHistoryCount: 10 + 20,
+      }),
+    );
+    // 5 visible + one page of buffer.
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.history,
+    ).toHaveLength(9);
+  });
+
+  it("trims nothing when the floor plus the buffer covers the whole window", async () => {
+    // 12 rows, 8 visible, 4 of buffer: there is nothing left to release.
+    const store = storeWithWindow(12, 8);
     await run(
       store,
       reconcilePaginationAfterPersist({
@@ -726,9 +750,9 @@ describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", ()
         totalHistoryCount: 10 + 12,
       }),
     );
-    expect(
-      selectSessionById(store.getState() as any, "s1")!.history,
-    ).toHaveLength(5);
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.history).toHaveLength(12);
+    expect(session.pagination.loadedOffset).toBe(10);
   });
 
   it("does not trim at all while the reply is still streaming", async () => {

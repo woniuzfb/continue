@@ -247,6 +247,21 @@ describe("planHistoryTrim", () => {
     ).toBe(4);
   });
 
+  it("keeps a page of overflow above the visible rows", () => {
+    // 方案.md §7.2.8: keeping *exactly* the visible rows leaves the transcript with
+    // `scrollHeight === clientHeight`, which is the condition `useAutoScroll`'s fill-viewport
+    // pagination looks for — it prepends a page straight back, so the scrollbar jumps up and
+    // returns. The buffer keeps at least one row above the visible ones.
+    const history = turns(10); // 20 rows
+    const session = runtime(history, { loadedOffset: 10, loadedDiskCount: 20 });
+    const withBuffer = planHistoryTrim(session, 4, 30, 5, 4);
+    expect(withBuffer?.keepCount).toBe(9);
+    expect(withBuffer!.keepCount).toBeGreaterThan(5);
+
+    // Without a buffer the trim would land exactly on the visible rows — the hazard above.
+    expect(planHistoryTrim(session, 4, 30, 5)?.keepCount).toBe(5);
+  });
+
   it("ignores a nonsensical floor", () => {
     const history = turns(6);
     const session = runtime(history, { loadedOffset: 10, loadedDiskCount: 12 });
@@ -254,6 +269,9 @@ describe("planHistoryTrim", () => {
     // never make the trim keep fewer rows than the limit.
     expect(planHistoryTrim(session, 4, 22, -5)?.keepCount).toBe(4);
     expect(planHistoryTrim(session, 4, 22, 5.7)?.keepCount).toBe(5);
+    // A negative or fractional buffer is clamped the same way.
+    expect(planHistoryTrim(session, 4, 22, 5, -3)?.keepCount).toBe(5);
+    expect(planHistoryTrim(session, 4, 22, 5, 2.4)?.keepCount).toBe(7);
   });
 
   it("does not mutate the input history", () => {

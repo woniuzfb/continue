@@ -47,14 +47,22 @@ export function getLazyLoadTrimLimit(initialCount: number | undefined): number {
  *   exists to release memory, and it may only release rows the user cannot see:
  *   trimming into the visible area collapses the transcript under the reader at
  *   the exact moment the reply finishes (a 12-row window dropped to 4 rows
- *   right after the terminal save) and, once the window is shorter than the
- *   viewport, re-arms the fill-viewport pagination that follows.
+ *   right after the terminal save).
+ * @param scrollBuffer 方案.md §7.2.8: rows kept **above** the visible ones so the
+ *   transcript still overflows after the trim. Keeping exactly the visible rows
+ *   leaves `scrollHeight === clientHeight`, which is the precise condition
+ *   `useAutoScroll`'s fill-viewport pagination exists to detect: it prepends a
+ *   page straight away, the content grows back, and the user sees the scrollbar
+ *   jump up and return (real trace: `history-trim items=12 keepItems=5
+ *   floorItems=5`, then "the scrollbar suddenly grew, then went back"). The
+ *   buffer also absorbs a measurement that is up to one scroll behind.
  */
 export function planHistoryTrim(
   session: SessionRuntimeState,
   limit: number,
   fullDiskItemCount: number | undefined,
   visibleFloor = 0,
+  scrollBuffer = 0,
 ): HistoryTrimPlan | null {
   const length = session.history.length;
   const safeLimit = getLazyLoadTrimLimit(limit);
@@ -87,7 +95,8 @@ export function planHistoryTrim(
   const keepCount = Math.max(
     safeLimit,
     currentTurnLength,
-    Math.max(0, Math.floor(visibleFloor)),
+    Math.max(0, Math.floor(visibleFloor)) +
+      Math.max(0, Math.floor(scrollBuffer)),
   );
   if (keepCount >= length) {
     return null;
