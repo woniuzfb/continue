@@ -4,6 +4,7 @@ import type { RootState } from "../store";
 import type {
   SessionRuntimeState,
   SessionTabDescriptor,
+  SessionChatModelRef,
 } from "../slices/sessionsSlice";
 
 /**
@@ -72,22 +73,45 @@ export const selectSessionChatModel = (
   state: RootState,
   sessionId: string,
 ): ModelDescription | undefined => {
-  const chatModelTitle = state.sessions.sessionsById[sessionId]?.chatModelTitle;
-  if (chatModelTitle) {
-    const models = state.config.config?.modelsByRole?.chat ?? [];
-    // 方案.md §7.5.1: a session that has its own choice must never silently resolve to another
-    // model. Returning the profile default here made "the toolbar shows A, the request is sent
-    // with B" reachable: the moment A is momentarily missing from the compiled list (a config
-    // reload, a renamed entry, a provider that disappeared), the send continued with B while the
-    // projection still described A.
-    //
-    // A title is also not an identity: two entries can share one (different provider/model). An
-    // ambiguous title is therefore treated as unresolvable rather than guessed.
-    const matches = models.filter((m) => m.title === chatModelTitle);
+  const session = state.sessions.sessionsById[sessionId];
+  const models = state.config.config?.modelsByRole?.chat ?? [];
+
+  if (session?.chatModelRef) {
+    return selectChatModelByRef(state, session.chatModelRef);
+  }
+
+  if (session?.chatModelTitle) {
+    // Legacy sessions (and the window between choosing a model and storing its ref) carry only the
+    // title. 方案.md §7.5.1/§7.5.4: a session that has its own choice must never silently resolve
+    // to another model, and a title is not an identity — an ambiguous title is unresolvable.
+    const matches = models.filter((m) => m.title === session.chatModelTitle);
     return matches.length === 1 ? matches[0] : undefined;
   }
+
   return state.config.config.selectedModelByRole.chat ?? undefined;
 };
+
+/** 方案.md §7.5.4: unique exact match on the stable identity, or nothing. */
+export const selectChatModelByRef = (
+  state: RootState,
+  ref: SessionChatModelRef,
+): ModelDescription | undefined => {
+  const models = state.config.config?.modelsByRole?.chat ?? [];
+  const matches = models.filter(
+    (m) =>
+      m.title === ref.title &&
+      m.provider === ref.provider &&
+      m.model === ref.model,
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+};
+
+export const sessionChatModelRefOf = (
+  model: ModelDescription | undefined,
+): SessionChatModelRef | undefined =>
+  model
+    ? { title: model.title, provider: model.provider, model: model.model }
+    : undefined;
 
 export const selectHasPendingApproval = (
   state: RootState,

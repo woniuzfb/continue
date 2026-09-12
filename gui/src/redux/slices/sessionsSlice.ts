@@ -99,6 +99,13 @@ export type SessionPaginationState = {
 export type SessionStreamState = {
   status: "idle" | "streaming" | "failed";
   requestId?: string;
+  /**
+   * The model identity captured when this **logical turn** started: a retry or a tool-loop
+   * continuation keeps it, so switching the model in this window mid-turn cannot change what the
+   * turn is being sent with (方案.md §7.5.3). Cleared by the terminal (`finishSessionStream`
+   * rebuilds the stream state).
+   */
+  chatModelRef?: SessionChatModelRef;
   aborter?: AbortController;
   error?: string;
   /**
@@ -169,6 +176,19 @@ export type MessageIdMigrationState =
     }
   | { state: "unsupported" };
 
+/**
+ * 方案.md §7.5.4: the stable identity of a session's model choice.
+ *
+ * A title is a display/config-lookup field, not an identity: two entries can share one. The ref is
+ * what the session owns, what the turn snapshots, and what resolution must match **uniquely** —
+ * otherwise the send is refused instead of silently using something else.
+ */
+export type SessionChatModelRef = {
+  title: string;
+  provider: string;
+  model: string;
+};
+
 export type SessionRuntimeState = {
   id: string;
   title: string;
@@ -202,6 +222,8 @@ export type SessionRuntimeState = {
 
   mode: MessageModes;
   chatModelTitle?: string;
+  /** Stable identity of `chatModelTitle` once the user has made an explicit choice. */
+  chatModelRef?: SessionChatModelRef;
   hasReasoningEnabled?: boolean;
   reasoningPreferenceSource?: "derived" | "explicit";
 
@@ -1103,6 +1125,8 @@ export const sessionsSlice = createSlice({
         sessionId: string;
         requestId: string;
         aborter?: AbortController;
+        /** Captured by the caller for a fresh turn; inherited by a continuation. */
+        chatModelRef?: SessionChatModelRef;
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
@@ -1112,6 +1136,9 @@ export const sessionsSlice = createSlice({
         // turn, so what the turn already wrote must still be committed by that
         // continuation's terminal. A fresh turn starts with no output.
         const isContinuation = session.stream.requestId !== undefined;
+        const chatModelRef = isContinuation
+          ? session.stream.chatModelRef
+          : action.payload.chatModelRef;
         const hasConversationMutation = isContinuation
           ? (session.stream.hasConversationMutation ?? false)
           : false;
@@ -1120,6 +1147,7 @@ export const sessionsSlice = createSlice({
           requestId: action.payload.requestId,
           aborter: action.payload.aborter,
           hasConversationMutation,
+          chatModelRef,
         };
         // The awaiting-stream window ends here: from now on `isStreaming` is what keeps the
         // animated border on the submitted bubble, so the presentation-only pending state is
@@ -1862,11 +1890,19 @@ export const sessionsSlice = createSlice({
     },
     setSessionChatModelTitle: (
       state,
-      action: PayloadAction<{ sessionId: string; chatModelTitle?: string }>,
+      action: PayloadAction<{
+        sessionId: string;
+        chatModelTitle?: string;
+        chatModelRef?: SessionChatModelRef;
+      }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
         session.chatModelTitle = action.payload.chatModelTitle;
+        // The ref describes the title, so clearing the title clears the ref too.
+        session.chatModelRef = action.payload.chatModelTitle
+          ? action.payload.chatModelRef
+          : undefined;
       }
     },
     setSessionReasoningEnabled: (

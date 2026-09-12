@@ -3,6 +3,7 @@ import { MessageModes } from "core";
 import { v4 as uuidv4 } from "uuid";
 import { selectSessionById } from "../selectors/sessions";
 import { setActiveSessionModelProjection } from "../slices/configSlice";
+import { sessionChatModelRefOf } from "../selectors/sessions";
 import {
   deleteTurnByMessageId,
   setSessionChatModelTitle,
@@ -75,13 +76,21 @@ export const setSessionChatModelAndSave = createAsyncThunk<
 >(
   "sessions/setChatModelAndSave",
   async ({ sessionId, chatModelTitle }, { dispatch, getState }) => {
-    dispatch(setSessionChatModelTitle({ sessionId, chatModelTitle }));
     const state = getState();
+    const models = state.config.config?.modelsByRole?.chat ?? [];
+    // 方案.md §7.5.4: store the stable identity, not just the title.
+    const chosen = chatModelTitle
+      ? (models.find((m) => m.title === chatModelTitle) ?? undefined)
+      : undefined;
+    dispatch(
+      setSessionChatModelTitle({
+        sessionId,
+        chatModelTitle,
+        chatModelRef: sessionChatModelRefOf(chosen),
+      }),
+    );
     if (state.sessions.activeSessionId === sessionId) {
-      const models = state.config.config?.modelsByRole?.chat ?? [];
-      const model = chatModelTitle
-        ? (models.find((m) => m.title === chatModelTitle) ?? null)
-        : null;
+      const model = chosen ?? null;
       dispatch(setActiveSessionModelProjection({ model }));
     }
     void dispatch(

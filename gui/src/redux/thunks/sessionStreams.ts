@@ -23,6 +23,7 @@ import {
   resolveSessionActiveTools,
 } from "../util/sessionRequestOptions";
 import {
+  selectChatModelByRef,
   selectSessionById,
   selectSessionChatModel,
 } from "../selectors/sessions";
@@ -618,7 +619,11 @@ async function streamModelTurn(
     return { kind: "gone" };
   }
 
-  const selectedChatModel = selectSessionChatModel(state, sessionId);
+  // The turn's captured identity wins over the session's current choice: switching the model in
+  // this window while the turn runs must not change what the turn is sent with (方案.md §7.5.3).
+  const selectedChatModel = session.stream.chatModelRef
+    ? selectChatModelByRef(state, session.stream.chatModelRef)
+    : selectSessionChatModel(state, sessionId);
   if (!selectedChatModel) {
     dispatch(
       setSessionStreamError({
@@ -899,7 +904,17 @@ async function runSessionStreamImpl(
 
   const requestId = uuidv4();
   const aborter = new AbortController();
-  dispatch(beginSessionStream({ sessionId, requestId, aborter }));
+  dispatch(
+    beginSessionStream({
+      sessionId,
+      requestId,
+      aborter,
+      // 方案.md §7.5.3: the identity is captured once per **logical turn**; the reducer keeps the
+      // predecessor's value for a continuation, so a retry or a tool-loop step keeps sending with
+      // the model the turn started with.
+      chatModelRef: session.chatModelRef,
+    }),
+  );
   checkpointBaselines.set(sessionId, {
     at: Date.now(),
     chars: sessionContentLength(session),

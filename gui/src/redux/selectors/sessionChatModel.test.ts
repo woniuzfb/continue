@@ -84,3 +84,86 @@ describe("selectSessionChatModel", () => {
     ).toBeUndefined();
   });
 });
+
+describe("stable identity (方案.md §7.5.4)", () => {
+  it("resolves by the session's stable id ref, not by title alone", () => {
+    // Two entries share the title; only the ref distinguishes them.
+    const anthropicA = { title: "model-a", provider: "anthropic", model: "a" };
+    const store = storeWith([MODEL_A, anthropicA], undefined, MODEL_B);
+    store.dispatch({
+      type: "sessions/setSessionChatModelTitle",
+      payload: {
+        sessionId: "A",
+        chatModelTitle: "model-a",
+        chatModelRef: { title: "model-a", provider: "anthropic", model: "a" },
+      },
+    });
+    // Immer replaces the session object, so re-read it after the dispatch.
+    expect(
+      (store.getState() as any).sessions.sessionsById.A.chatModelRef.provider,
+    ).toBe("anthropic");
+    expect(selectSessionChatModel(store.getState() as any, "A")?.provider).toBe(
+      "anthropic",
+    );
+  });
+
+  it("refuses when the ref no longer matches exactly one entry", () => {
+    const store = storeWith([MODEL_B], undefined, MODEL_B);
+    store.dispatch({
+      type: "sessions/setSessionChatModelTitle",
+      payload: {
+        sessionId: "A",
+        chatModelTitle: "model-a",
+        chatModelRef: { title: "model-a", provider: "openai", model: "a" },
+      },
+    });
+    expect(
+      selectSessionChatModel(store.getState() as any, "A"),
+    ).toBeUndefined();
+  });
+
+  it("keeps the turn-captured identity when the model is switched mid-turn", () => {
+    // The snapshot lives on the stream state and is inherited by continuations.
+    const session = initialSessionRuntime("A", "A");
+    session.chatModelRef = { title: "model-a", provider: "openai", model: "a" };
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: "A",
+        tabOrder: ["A"],
+        tabDescriptors: {
+          A: { sessionId: "A", title: "A", loadState: "loaded" },
+        },
+        sessionsById: { A: session },
+      },
+    });
+    store.dispatch({
+      type: "sessions/beginSessionStream",
+      payload: {
+        sessionId: "A",
+        requestId: "r1",
+        chatModelRef: session.chatModelRef,
+      },
+    });
+    store.dispatch({
+      type: "sessions/setSessionChatModelTitle",
+      payload: {
+        sessionId: "A",
+        chatModelTitle: "model-b",
+        chatModelRef: { title: "model-b", provider: "openai", model: "b" },
+      },
+    });
+    // A continuation (new requestId, no explicit ref) keeps the turn's model.
+    store.dispatch({
+      type: "sessions/beginSessionStream",
+      payload: { sessionId: "A", requestId: "r2" },
+    });
+    expect(
+      (store.getState() as any).sessions.sessionsById.A.stream.chatModelRef
+        .title,
+    ).toBe("model-a");
+    // …while the session's own choice is the new one.
+    expect(
+      (store.getState() as any).sessions.sessionsById.A.chatModelTitle,
+    ).toBe("model-b");
+  });
+});
