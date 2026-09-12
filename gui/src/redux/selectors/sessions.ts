@@ -75,10 +75,16 @@ export const selectSessionChatModel = (
   const chatModelTitle = state.sessions.sessionsById[sessionId]?.chatModelTitle;
   if (chatModelTitle) {
     const models = state.config.config?.modelsByRole?.chat ?? [];
-    const model = models.find((m) => m.title === chatModelTitle);
-    if (model) {
-      return model;
-    }
+    // 方案.md §7.5.1: a session that has its own choice must never silently resolve to another
+    // model. Returning the profile default here made "the toolbar shows A, the request is sent
+    // with B" reachable: the moment A is momentarily missing from the compiled list (a config
+    // reload, a renamed entry, a provider that disappeared), the send continued with B while the
+    // projection still described A.
+    //
+    // A title is also not an identity: two entries can share one (different provider/model). An
+    // ambiguous title is therefore treated as unresolvable rather than guessed.
+    const matches = models.filter((m) => m.title === chatModelTitle);
+    return matches.length === 1 ? matches[0] : undefined;
   }
   return state.config.config.selectedModelByRole.chat ?? undefined;
 };
