@@ -12,6 +12,7 @@ import { AddModelForm } from "../../forms/AddModelForm";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { updateSelectedModelByRole } from "../../redux/thunks/updateSelectedModelByRole";
+import { selectSessionChatModel } from "../../redux/selectors/sessions";
 import { setSessionChatModelAndSave } from "../../redux/thunks/sessionChanges";
 import { useSessionIsInEdit } from "../../redux/selectors/sessionView";
 import {
@@ -133,6 +134,14 @@ function ModelSelect() {
   // not react to the model-selection shortcut.
   const visible = useIsVisibleSession();
   const config = useAppSelector((state) => state.config.config);
+  // 方案.md §7.3.1: the chat role is **per session**. Reading `selectedModelByRole.chat` showed
+  // whatever window changed the model last (that value is profile-level and shared), while this
+  // tab's requests use the session's own choice — the toolbar and the send path could disagree.
+  // `selectSessionChatModel` resolves the session's own title and only then falls back to the
+  // persisted default, which is exactly what a send does.
+  const sessionChatModel = useAppSelector((state) =>
+    selectSessionChatModel(state, activeSessionId),
+  );
   const isConfigLoading = useAppSelector((state) => state.config.loading);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [options, setOptions] = useState<Option[]>([]);
@@ -147,7 +156,7 @@ function ModelSelect() {
     selectedModel = config.selectedModelByRole.edit;
   }
   if (!selectedModel) {
-    selectedModel = config.selectedModelByRole.chat;
+    selectedModel = sessionChatModel;
   }
   if (!allModels || allModels.length === 0) {
     allModels = config.modelsByRole.chat;

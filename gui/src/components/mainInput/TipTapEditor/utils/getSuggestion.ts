@@ -10,11 +10,16 @@ import { IIdeMessenger } from "../../../../context/IdeMessenger";
 import { AppDispatch } from "../../../../redux/store";
 import AtMentionDropdown from "../../AtMentionDropdown";
 import { ComboBoxItem, ComboBoxItemType, ComboBoxSubAction } from "../../types";
-import { TIPPY_DIV_ID } from "../TipTapEditor";
 import { SlashCommand } from "../extensions";
 
 function getSuggestion(
   items: (props: { query: string }) => Promise<ComboBoxItem[]>,
+  /**
+   * 方案.md §7.3.2: the id of **this editor's** popup container. It must never be resolved from
+   * a global constant: every tab stays mounted (§九.1/§九.2), so a shared id has many matches and
+   * `getElementById` would return another tab's (often hidden) container.
+   */
+  popupContainerId: string,
   enterSubmenu: (editor: Editor, providerId: string) => void = (editor) => {},
   onClose: () => void = () => {},
   onOpen: () => void = () => {},
@@ -44,10 +49,10 @@ function getSuggestion(
             return;
           }
 
-          const container = document.getElementById(TIPPY_DIV_ID);
+          const container = document.getElementById(popupContainerId);
 
           if (!container) {
-            console.log("no container");
+            console.log("no container", popupContainerId);
             return;
           }
 
@@ -114,6 +119,7 @@ function getSubActionsForSubmenuItem(
 
 export function getContextProviderDropdownOptions(
   availableContextProvidersRef: MutableRefObject<ContextProviderDescription[]>,
+  popupContainerId: string,
   getSubmenuContextItemsRef: MutableRefObject<
     (
       providerTitle: string | undefined,
@@ -190,16 +196,16 @@ export function getContextProviderDropdownOptions(
     });
   };
 
-  return getSuggestion(items, enterSubmenu, onClose, onOpen);
+  return getSuggestion(items, popupContainerId, enterSubmenu, onClose, onOpen);
 }
 
 export function getSlashCommandDropdownOptions(
   availableSlashCommandsRef: MutableRefObject<ComboBoxItem[]>,
+  popupContainerId: string,
   onClose: () => void,
   onOpen: () => void,
   ideMessenger: IIdeMessenger,
   dispatch: AppDispatch,
-  inputId: string,
 ) {
   const items = async ({ query }: { query: string }) => {
     const options = [...availableSlashCommandsRef.current];
@@ -242,5 +248,5 @@ export function getSlashCommandDropdownOptions(
 
     return commandItems;
   };
-  return getSuggestion(items, undefined, onClose, onOpen);
+  return getSuggestion(items, popupContainerId, undefined, onClose, onOpen);
 }

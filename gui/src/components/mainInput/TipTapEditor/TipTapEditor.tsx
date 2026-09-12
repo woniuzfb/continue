@@ -36,6 +36,7 @@ import { useMainEditor } from "./MainEditorProvider";
 import { setUserInputStaticHtml } from "../userInputHtmlCache";
 import "./TipTapEditor.css";
 import { createEditorConfig, getPlaceholderText } from "./utils/editorConfig";
+import { tippyContainerId } from "./utils/tippyContainer";
 import { handleImageFile } from "./utils/imageUtils";
 import { useEditorEventHandlers } from "./utils/keyHandlers";
 import {
@@ -101,8 +102,6 @@ export interface TipTapEditorProps {
    * so the user's click lands in a focused, editable editor. */
   autoFocusOnMount?: boolean;
 }
-
-export const TIPPY_DIV_ID = "tippy-js-div";
 
 /**
  * Small square file chip rendered inline with the toolbar buttons.
@@ -738,7 +737,10 @@ function TipTapEditorInner(props: TipTapEditorProps) {
         ) && (
           <DragOverlay show={showDragOverMsg} setShow={setShowDragOverMsg} />
         )}
-      <div id={TIPPY_DIV_ID} className="fixed z-50" />
+      <div
+        id={tippyContainerId(sessionId, props.inputId)}
+        className="fixed z-50"
+      />
     </InputBoxDiv>
   );
 }
