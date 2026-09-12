@@ -37,6 +37,7 @@ export type SubmitLatencyPhase =
   | "save-enqueue"
   | "save-payload"
   | "save-attempt"
+  | "main-thread-stall"
   | "save-request-sent"
   | "save-response-received"
   | "stream-start"
@@ -168,6 +169,68 @@ export function recordSubmitLatency(event: SubmitLatencyEvent): void {
     );
   } catch {
     // ignore
+  }
+}
+
+const MAIN_THREAD_STALL_THRESHOLD_MS = 250;
+const MAIN_THREAD_STALL_TICK_MS = 100;
+
+/**
+ * How long the main thread was blocked, given how long an interval actually took versus
+ * how long it was asked to wait. Returns `undefined` for a healthy tick.
+ *
+ * Pure so it can be tested without a real stall; the timer below is a thin wrapper.
+ */
+export function stallFromTick(
+  expectedMs: number,
+  actualMs: number,
+  thresholdMs = MAIN_THREAD_STALL_THRESHOLD_MS,
+): number | undefined {
+  const overrun = actualMs - expectedMs;
+  return overrun >= thresholdMs ? overrun : undefined;
+}
+
+let stallTimer: ReturnType<typeof setInterval> | undefined;
+
+/**
+ * Watches for main-thread stalls (workflow "submit latency and retry boundary").
+ *
+ * Why: a save response that the host answered in 8ms was observed taking 3446ms to reach
+ * the GUI, and the whole 3.4s sat **after** Core had answered. Two mechanisms can do that —
+ * the main thread being blocked, or the response queueing behind stream messages — and only
+ * a stall clock can tell them apart. A timer that is late by a lot means the thread was not
+ * running; if it stays on time, the delay is queueing, not blocking.
+ *
+ * Runs only while the debug switch is on.
+ */
+export function startMainThreadStallDetector(): void {
+  if (stallTimer !== undefined) {
+    return;
+  }
+  try {
+    let last = performance.now();
+    stallTimer = setInterval(() => {
+      const now = performance.now();
+      const stall = stallFromTick(MAIN_THREAD_STALL_TICK_MS, now - last);
+      last = now;
+      if (stall !== undefined) {
+        recordSubmitLatency({
+          phase: "main-thread-stall",
+          sessionId: "-",
+          durationMs: stall,
+        });
+      }
+    }, MAIN_THREAD_STALL_TICK_MS);
+  } catch {
+    // ignore
+  }
+}
+
+/** Stops the stall detector (idempotent). */
+export function stopMainThreadStallDetector(): void {
+  if (stallTimer !== undefined) {
+    clearInterval(stallTimer);
+    stallTimer = undefined;
   }
 }
 

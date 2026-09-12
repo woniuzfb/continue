@@ -1,8 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppSelector } from "../hooks";
 import { useSessionId } from "../../components/mainInput/TipTapEditor/SessionScope";
 import type { RootState } from "../store";
-import type { SessionRuntimeState } from "../slices/sessionsSlice";
+import type {
+  PendingSubmission,
+  SessionRuntimeState,
+} from "../slices/sessionsSlice";
 import { absoluteToWindowIndex } from "../util/historyIndex";
 import {
   selectFullConversationMetricsFreshness,
@@ -274,14 +277,50 @@ export function useSessionFullConversationMetrics(): SessionFullConversationMetr
 }
 
 /**
+ * How long a send must already have been preparing before its draft is shown.
+ *
+ * The commit now lands ~13–26ms after Enter, so an always-visible draft meant: row appears →
+ * layout shifts → 26ms later it is replaced by the real turn → layout shifts again. That is
+ * exactly the jitter users see around the message they just sent, and it also flashed the
+ * replace target's dimming. The draft exists for the *slow* case (context resolution taking
+ * hundreds of ms, which it still can), so it is withheld until then; if the turn arrives
+ * first, nothing was ever rendered.
+ */
+export const PENDING_SUBMISSION_SHOW_DELAY_MS = 200;
+
+/**
  * 展示用的 pending 草稿（工作流 "submit latency and retry boundary" 第 3 步）。
  * 只是展示：读它的组件不得据此推断会话内容（它不在 history 里）。
+ *
+ * Delayed on purpose — see `PENDING_SUBMISSION_SHOW_DELAY_MS`. The *state* is not delayed:
+ * the thunk still publishes it immediately, so it keeps gating a second send while one is
+ * in flight; only this presentation hook waits.
  */
 export function useSessionPendingSubmission() {
   const sessionId = useSessionId();
-  return useAppSelector(
+  const pending = useAppSelector(
     (state) => activeRuntimeOf(state, sessionId)?.pendingSubmission,
   );
+  const [shown, setShown] = useState<PendingSubmission | undefined>(undefined);
+
+  useEffect(() => {
+    if (!pending) {
+      setShown(undefined);
+      return;
+    }
+    const elapsed = Date.now() - pending.startedAt;
+    if (elapsed >= PENDING_SUBMISSION_SHOW_DELAY_MS) {
+      setShown(pending);
+      return;
+    }
+    const timer = setTimeout(
+      () => setShown(pending),
+      PENDING_SUBMISSION_SHOW_DELAY_MS - elapsed,
+    );
+    return () => clearTimeout(timer);
+  }, [pending]);
+
+  return shown;
 }
 
 export function useSessionEditState() {

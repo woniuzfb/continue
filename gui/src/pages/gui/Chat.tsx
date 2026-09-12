@@ -69,7 +69,11 @@ import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
 import { stopActiveSessionStream } from "../../redux/thunks/sessionStreams";
 import { getLocalStorage, setLocalStorage } from "../../util/localStorage";
-import { setSubmitLatencyLoggingEnabled } from "../../util/submitLatency";
+import {
+  setSubmitLatencyLoggingEnabled,
+  startMainThreadStallDetector,
+  stopMainThreadStallDetector,
+} from "../../util/submitLatency";
 import { EmptyChatBody } from "./EmptyChatBody";
 import { ExploreDialogWatcher } from "./ExploreDialogWatcher";
 import { useAutoScroll } from "./useAutoScroll";
@@ -185,6 +189,14 @@ export function Chat() {
   // flag into it instead of the module reading Redux (方案.md §7.2: default off).
   useEffect(() => {
     setSubmitLatencyLoggingEnabled(showSubmitLatencyLogs);
+    // The same switch owns the stall clock: it answers "was the main thread blocked?" for
+    // the gap between a host response and this side handling it (方案.md §7.2.2).
+    if (showSubmitLatencyLogs) {
+      startMainThreadStallDetector();
+    } else {
+      stopMainThreadStallDetector();
+    }
+    return () => stopMainThreadStallDetector();
   }, [showSubmitLatencyLogs]);
   const codeToEdit = useSessionEditState()?.codeToEdit ?? [];
   const isInEdit = useSessionIsInEdit();
