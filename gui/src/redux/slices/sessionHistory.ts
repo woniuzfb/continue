@@ -120,19 +120,6 @@ function applyToolCallDelta(
     }
   }
 
-  // 方案.md §7.4: a fragment without an id creates a state whose `toolCallId` is "" (see
-  // `addToolCallDeltaToState`). The next fragment that carries the real id matches nothing by id,
-  // so this used to push a **second** state for one logical call — reproduced as
-  // `[{toolCallId: ""}, {toolCallId: "call_1"}]`, which the approval bar renders as two rows for
-  // one command (only the first row gets the key hints), and the "" row can never be resolved by
-  // the real id. Adopt that single unidentified placeholder instead of duplicating the call.
-  if (existingStateIndex < 0 && toolCallDelta.id) {
-    existingStateIndex = findUnidentifiedPlaceholderIndex(
-      toolCallStates,
-      toolCallDelta,
-    );
-  }
-
   const existingState =
     existingStateIndex >= 0 ? toolCallStates[existingStateIndex] : undefined;
 
@@ -146,44 +133,6 @@ function applyToolCallDelta(
     // Add new tool call state for a newly discovered tool call
     toolCallStates.push(updatedState);
   }
-}
-
-/**
- * 方案.md §7.4: index of the one state that is still missing its identity (`toolCallId === ""`),
- * if this delta is demonstrably that same call.
- *
- * Deliberately conservative — a wrong guess would merge two *different* parallel calls into one
- * and lose an approval row, which is worse than the duplicate it fixes:
- *
- * ```text
- * exactly one unidentified state   (never guess between several)
- * tool name: equal, or unknown on either side
- * arguments: equal prefix (the placeholder is a fragment of this delta)
- * ```
- */
-function findUnidentifiedPlaceholderIndex(
-  toolCallStates: ToolCallState[],
-  toolCallDelta: ToolCallDelta,
-): number {
-  const unidentified = toolCallStates
-    .map((state, index) => ({ state, index }))
-    .filter(({ state }) => !state.toolCallId);
-  if (unidentified.length !== 1) {
-    return -1;
-  }
-
-  const { state, index } = unidentified[0];
-  const name = toolCallDelta.function?.name ?? "";
-  const placeholderName = state.toolCall.function.name ?? "";
-  if (placeholderName && name && placeholderName !== name) {
-    return -1;
-  }
-  const args = toolCallDelta.function?.arguments ?? "";
-  const placeholderArgs = state.toolCall.function.arguments ?? "";
-  if (placeholderArgs && args && !args.startsWith(placeholderArgs)) {
-    return -1;
-  }
-  return index;
 }
 
 /**
