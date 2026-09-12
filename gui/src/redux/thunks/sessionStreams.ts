@@ -27,6 +27,7 @@ import {
   selectSessionChatModel,
 } from "../selectors/sessions";
 import type { SessionRuntimeState } from "../slices/sessionsSlice";
+import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
   applySessionStreamUpdate,
   beginSessionStream,
@@ -60,10 +61,10 @@ import {
 import { scheduleMessageIdMigrationIfSafe } from "./sessionMessageIdMigration";
 import {
   buildRequestHistoryForSession,
-  requestHistoryFromFullHistory,
+  type RequestHistoryMode,
 } from "../util/requestHistory";
 import { generateSessionTitle } from "./sessionTitle";
-import { loadFullHistory } from "./sessionPaging";
+import { loadFullRequestHistory } from "./sessionPaging";
 import { isLocalConversationModel } from "core/llm/localConversation";
 import {
   approveToolCalls,
@@ -518,6 +519,98 @@ function attachPromptLog(
   );
 }
 
+/**
+ * 方案.md §7.2.6：请求历史的获取与可见窗口解耦。
+ *
+ * 之前这里用 `loadFullHistory` 取请求历史，代价是把 `session.history` 整体换成完整会话（实测
+ * 254+ 行），于是每个 chunk 都在这份大窗口上重渲染（`chat-render-commit` 120–234ms/次，并伴随
+ * 秒级主线程停顿），而保存后的裁剪又把它缩回小窗口，形成「放大 → 重渲染 → 裁回 → 再放大」的循环。
+ * 现在改成只读快照：拿完整历史，**不动窗口**。
+ *
+ * 快照只有满足「窗口自它被取到起没变过」才算数（thunk 内用 requestGeneration +
+ * conversationRevision + 尾部 id 校验）。窗口在 await 期间变过（chunk、裁剪、工具结果、编辑）
+ * 就整体重来一次；第二次仍不一致就抛错中止本次发送 —— 绝不退化成拿截断窗口当请求历史，那等于
+ * 让模型静默丢掉上下文（§7.2.6 的失败语义）。
+ */
+const MAX_REQUEST_HISTORY_ATTEMPTS = 2;
+
+async function resolveRequestHistoryForSend(
+  api: StreamApi,
+  sessionId: string,
+  localConversation: boolean,
+): Promise<{
+  history: ChatHistoryItemWithMessageId[];
+  mode: RequestHistoryMode;
+  latestConversationSummary?: SessionRuntimeState["latestConversationSummary"];
+} | null> {
+  const { dispatch, getState } = api;
+
+  for (let attempt = 0; ; attempt++) {
+    const session = selectSessionById(getState(), sessionId);
+    if (!session) {
+      // Closed while the turn was being prepared: nothing to send, and no error worth
+      // reporting for a tab that no longer exists (the historical `{kind:"gone"}` path).
+      return null;
+    }
+
+    const plan = buildRequestHistoryForSession(session, { localConversation });
+    if (plan.kind === "ready") {
+      // No await happened on this path, so the captured window *is* the window
+      // (方案.md §十三 Phase 5: Local Provider fast path or an untruncated window).
+      return {
+        history: plan.requestHistory,
+        mode: plan.mode,
+        latestConversationSummary: session.latestConversationSummary,
+      };
+    }
+
+    try {
+      const snapshot = await dispatch(
+        loadFullRequestHistory({
+          sessionId,
+          // The window identity the snapshot is merged against; captured here,
+          // immediately before the read, never from an older state slice.
+          expectedRequestGeneration: session.pagination.requestGeneration,
+          expectedConversationRevision: session.conversationRevision,
+          expectedTailMessageId: session.history.at(-1)?.message.id,
+        }),
+      ).unwrap();
+
+      if (snapshot.firstTurnItems.length > 0) {
+        // Same cache update as hydration used to do, minus the hydration: the
+        // disk head echoed here is the authoritative first turn (方案.md §十三).
+        dispatch(
+          setSessionFirstTurn({
+            sessionId,
+            firstTurnItems: snapshot.firstTurnItems,
+          }),
+        );
+      }
+      return {
+        history: snapshot.history,
+        mode: "full-history",
+        latestConversationSummary: snapshot.latestConversationSummary,
+      };
+    } catch (e) {
+      if (!selectSessionById(getState(), sessionId)) {
+        // Same as above: a failure caused by the session disappearing is not a send
+        // failure to report.
+        return null;
+      }
+      if (attempt + 1 >= MAX_REQUEST_HISTORY_ATTEMPTS) {
+        throw e;
+      }
+      // The window moved (or the read failed) — retry once from the fresh window, which
+      // may now even be resolvable without a disk read. A permanent failure only costs
+      // that extra round trip before the error becomes visible.
+      console.warn(
+        "[session-stream] request history snapshot rejected, retrying",
+        e,
+      );
+    }
+  }
+}
+
 async function streamModelTurn(
   api: StreamApi,
   ctx: TurnContext,
@@ -584,26 +677,16 @@ async function streamModelTurn(
   // 方案.md §十三 Phase 5: Local Provider fast path = first turn + current
   // turn; anything else falls back to the full history (loading it first when
   // the window is truncated).
-  let historyForRequest = session.history;
   const localConversation = isLocalConversationModel(selectedChatModel);
-  const plan = buildRequestHistoryForSession(session, { localConversation });
-  if (plan.kind === "ready") {
-    historyForRequest = plan.requestHistory;
-  } else {
-    await dispatch(loadFullHistory({ sessionId })).unwrap();
-    const full = selectSessionById(getState(), sessionId);
-    if (!full) {
-      return { kind: "gone" };
-    }
-    const rebuilt = requestHistoryFromFullHistory(full.history);
-    historyForRequest = rebuilt.requestHistory;
-    dispatch(
-      setSessionFirstTurn({
-        sessionId,
-        firstTurnItems: rebuilt.firstTurnItems,
-      }),
-    );
+  const resolved = await resolveRequestHistoryForSend(
+    api,
+    sessionId,
+    localConversation,
+  );
+  if (!resolved) {
+    return { kind: "gone" };
   }
+  const historyForRequest = resolved.history;
 
   // 方案.md §五.16: only the complete logical conversation may update the
   // context metrics. Use the builder's explicit mode, never
@@ -611,8 +694,7 @@ async function streamModelTurn(
   // request even when the window is not truncated yet (firstTurnItems + a
   // reliable baseline is enough). The reduced compile still drives the actual
   // send / prune / out-of-context decision.
-  const requestUsesReducedHistory =
-    plan.kind === "ready" && plan.mode === "first-turn-plus-current";
+  const requestUsesReducedHistory = resolved.mode === "first-turn-plus-current";
 
   const { messages, appliedRules, appliedRulesSourceMessageId } =
     constructMessages(
@@ -626,7 +708,7 @@ async function streamModelTurn(
       localConversation
         ? {
             conversationSummaryOverride:
-              session.latestConversationSummary?.content,
+              resolved.latestConversationSummary?.content,
           }
         : undefined,
     );

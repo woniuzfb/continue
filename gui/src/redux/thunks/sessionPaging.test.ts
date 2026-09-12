@@ -1,9 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
 import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
-import { initialSessionRuntime } from "../slices/sessionsSlice";
-import { loadFullHistory, loadMoreHistory } from "./sessionPaging";
+import {
+  initialSessionRuntime,
+  removeSessionRuntime,
+  setSessionPagination,
+  updateHistoryItemByMessageId,
+} from "../slices/sessionsSlice";
+import {
+  loadFullHistory,
+  loadFullRequestHistory,
+  loadMoreHistory,
+} from "./sessionPaging";
 
 function item(
   id: string,
@@ -345,5 +354,255 @@ describe("sessionPaging.loadFullHistory", () => {
     const session = selectSessionById(store.getState() as any, "s1")!;
     expect(session.history.map((i) => i.message.id)).toEqual(["u3", "a3"]);
     expect(session.pagination.truncated).toBe(true);
+  });
+});
+
+function diskResponse() {
+  return {
+    sessionId: "s1",
+    title: "Chat 1",
+    workspaceDirectory: "ws",
+    // The frozen head (4) followed by the two items the window already has.
+    history: [
+      item("h1", "user", "head user"),
+      item("h2", "assistant", "head answer"),
+      item("h3", "user", "head user 2"),
+      item("h4", "assistant", "head answer 2"),
+      item("u3", "user", "3"),
+      item("a3", "assistant", "4"),
+    ],
+  };
+}
+
+describe("sessionPaging.loadFullRequestHistory (方案.md §7.2.6)", () => {
+  /**
+   * The contract of this thunk is a **negative** one: it may read disk and merge, and nothing
+   * else. Every assertion below is about what did *not* happen to the visible window — that is
+   * the whole point of decoupling the request history from it (the amplification loop).
+   */
+  it("merges the frozen head without touching the window", async () => {
+    const store = storeWith();
+    store.mockIdeMessenger.responses["history/load"] = diskResponse() as any;
+    const request = vi.spyOn(store.mockIdeMessenger, "request");
+    const before = selectSessionById(store.getState() as any, "s1")!;
+    const revisionBefore = before.conversationRevision;
+
+    const snapshot = await run(
+      store,
+      loadFullRequestHistory({
+        sessionId: "s1",
+        expectedRequestGeneration: 0,
+        expectedConversationRevision: revisionBefore,
+        expectedTailMessageId: "a3",
+      }),
+    );
+
+    // The request history is complete: frozen head + the window, in order.
+    expect(snapshot.history.map((i: any) => i.message.id)).toEqual([
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "u3",
+      "a3",
+    ]);
+
+    // …and the window is exactly as it was: same rows, same pagination, same revision.
+    const after = selectSessionById(store.getState() as any, "s1")!;
+    expect(after.history.map((i) => i.message.id)).toEqual(["u3", "a3"]);
+    expect(after.pagination.truncated).toBe(true);
+    expect(after.pagination.loadedOffset).toBe(4);
+    expect(after.pagination.loadedDiskCount).toBe(2);
+    expect(after.pagination.requestGeneration).toBe(0);
+    expect(after.conversationRevision).toBe(revisionBefore);
+
+    // No hydration action, and no save: a read-only snapshot must not be persisted either
+    // (the save path still sees the lazy window plus its truncation metadata).
+    const actionTypes = store.getActions().map((a: any) => a.type);
+    expect(actionTypes).not.toContain("sessions/setSessionHistory");
+    expect(actionTypes).not.toContain("sessions/setSessionPagination");
+    expect(
+      request.mock.calls.filter(([type]) => type === "history/save"),
+    ).toHaveLength(0);
+  });
+
+  it("returns the first turn and the live conversation summary with the snapshot", async () => {
+    const summary = {
+      sourceMessageId: "h2",
+      sourceAbsoluteIndex: 1,
+      content: "summary text",
+    };
+    const session = baseSession({ latestConversationSummary: summary });
+    const store = storeWith(session);
+    store.mockIdeMessenger.responses["history/load"] = diskResponse() as any;
+
+    const snapshot = await run(
+      store,
+      loadFullRequestHistory({
+        sessionId: "s1",
+        expectedRequestGeneration: 0,
+        expectedConversationRevision: session.conversationRevision,
+        expectedTailMessageId: "a3",
+      }),
+    );
+
+    expect(snapshot.firstTurnItems.map((i: any) => i.message.id)).toEqual([
+      "h1",
+      "h2",
+    ]);
+    expect(snapshot.latestConversationSummary).toEqual(summary);
+  });
+
+  it("rejects a read whose revision moved, instead of merging a stale window", async () => {
+    const store = storeWith();
+    store.mockIdeMessenger.responseHandlers["history/load"] = async () => {
+      // A concurrent write lands while the disk is being read.
+      store.dispatch(
+        updateHistoryItemByMessageId({
+          sessionId: "s1",
+          messageId: "a3",
+          updates: {
+            message: item("a3", "assistant", "changed").message,
+          },
+        }),
+      );
+      return diskResponse() as any;
+    };
+
+    await expect(
+      run(
+        store,
+        loadFullRequestHistory({
+          sessionId: "s1",
+          expectedRequestGeneration: 0,
+          expectedConversationRevision: selectSessionById(
+            store.getState() as any,
+            "s1",
+          )!.conversationRevision,
+          expectedTailMessageId: "a3",
+        }),
+      ),
+    ).rejects.toThrow("the conversation changed while loading");
+
+    // The caller retries or aborts — the window is untouched by the failed read.
+    const after = selectSessionById(store.getState() as any, "s1")!;
+    expect(after.history.map((i) => i.message.id)).toEqual(["u3", "a3"]);
+    expect(after.pagination.loadedOffset).toBe(4);
+  });
+
+  it("rejects a read whose visible tail was replaced", async () => {
+    const store = storeWith();
+    store.mockIdeMessenger.responses["history/load"] = diskResponse() as any;
+    const session = selectSessionById(store.getState() as any, "s1")!;
+
+    await expect(
+      run(
+        store,
+        loadFullRequestHistory({
+          sessionId: "s1",
+          expectedRequestGeneration: 0,
+          expectedConversationRevision: session.conversationRevision,
+          expectedTailMessageId: "u3",
+        }),
+      ),
+    ).rejects.toThrow("the visible tail changed while loading");
+  });
+
+  it("rejects a read whose window moved, instead of merging two different windows", async () => {
+    const store = storeWith();
+    store.mockIdeMessenger.responseHandlers["history/load"] = async () => {
+      // A manual "load more" prepends a page: the merge boundary moved with it.
+      store.dispatch(
+        setSessionPagination({
+          sessionId: "s1",
+          pagination: {
+            truncated: true,
+            loadedOffset: 2,
+            loadedDiskCount: 4,
+            hasMore: false,
+            loading: false,
+          },
+        }),
+      );
+      return diskResponse() as any;
+    };
+
+    await expect(
+      run(
+        store,
+        loadFullRequestHistory({
+          sessionId: "s1",
+          expectedRequestGeneration: 0,
+          expectedConversationRevision: 0,
+          expectedTailMessageId: "a3",
+        }),
+      ),
+    ).rejects.toThrow("the window moved while loading");
+  });
+
+  it("refuses a partial read rather than sending a truncated history", async () => {
+    const store = storeWith();
+    store.mockIdeMessenger.responses["history/load"] = {
+      ...diskResponse(),
+      history: [item("u3", "user", "3"), item("a3", "assistant", "4")],
+    } as any;
+
+    await expect(
+      run(
+        store,
+        loadFullRequestHistory({
+          sessionId: "s1",
+          expectedRequestGeneration: 0,
+          expectedConversationRevision: 0,
+          expectedTailMessageId: "a3",
+        }),
+      ),
+    ).rejects.toThrow("refusing to build a request from a partial history");
+  });
+
+  it("propagates a disk read failure instead of falling back to the window", async () => {
+    const store = storeWith();
+    // The real IDE path answers with an error envelope rather than throwing.
+    const original = store.mockIdeMessenger.request.bind(
+      store.mockIdeMessenger,
+    );
+    (store.mockIdeMessenger as any).request = vi.fn(
+      async (type: string, data: any) =>
+        type === "history/load"
+          ? { status: "error", error: "disk on fire", done: true }
+          : original(type as any, data as any),
+    ) as any;
+
+    await expect(
+      run(
+        store,
+        loadFullRequestHistory({
+          sessionId: "s1",
+          expectedRequestGeneration: 0,
+          expectedConversationRevision: 0,
+          expectedTailMessageId: "a3",
+        }),
+      ),
+    ).rejects.toThrow("loadFullRequestHistory failed");
+  });
+
+  it("rejects when the session disappeared during the read", async () => {
+    const store = storeWith();
+    store.mockIdeMessenger.responseHandlers["history/load"] = async () => {
+      store.dispatch(removeSessionRuntime({ sessionId: "s1" }));
+      return diskResponse() as any;
+    };
+
+    await expect(
+      run(
+        store,
+        loadFullRequestHistory({
+          sessionId: "s1",
+          expectedRequestGeneration: 0,
+          expectedConversationRevision: 0,
+          expectedTailMessageId: "a3",
+        }),
+      ),
+    ).rejects.toThrow("session disappeared while loading");
   });
 });

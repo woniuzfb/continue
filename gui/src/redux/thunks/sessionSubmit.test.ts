@@ -55,6 +55,7 @@ import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
   initialSessionRuntime,
+  prependSessionHistory,
   removeSessionRuntime,
   setSessionHistory,
   setSessionMainEditorAttachmentsRestore,
@@ -268,11 +269,13 @@ describe("submitSessionInput", () => {
     });
   });
 
-  it("commits the turn before hydrating a lazy-loaded window", async () => {
-    // A lazy-loaded window is hydrated from disk before the request goes out — but that is
-    // a full `history/load` round trip plus the merge (measured: 1361.8ms on a real
-    // session). The **commit** must not wait for it: the user's turn is a content version
-    // the moment it is submitted, and the request plan hydrates afterwards.
+  it("commits into the lazy window while the request history is still being read", async () => {
+    // 方案.md §7.2.6: the request needs the complete logical history, but obtaining it must no
+    // longer replace the visible window. Submit used to hydrate right here (`history/load` +
+    // merge, measured at 1361.8ms on a real session); the reply's chunks then re-rendered a
+    // full-conversation window (254+ rows) and the next save trimmed it back — the
+    // amplification loop this change removes. The read is now the stream step's read-only
+    // snapshot, and the turn must land in the **window** before that read finishes.
     const store = makeStore({ truncated: true, loadedOffset: 4 });
     let releaseLoad: (() => void) | undefined;
     const original = store.mockIdeMessenger.request.bind(
@@ -314,32 +317,28 @@ describe("submitSessionInput", () => {
     );
     await vi.waitFor(() => expect(releaseLoad).toBeDefined());
 
-    // The turn is committed while the hydration is still in flight: bubble first, disk
-    // read second — and the pending draft is already gone, so what the user sees is the
-    // real bubble and not a "preparing" placeholder held back by the read.
+    // The turn is committed into the window, on top of the frozen head's tail — the head is
+    // not part of `session.history` and the read that is in flight must not put it there.
     expect(session(store).conversationRevision).toBe(before + 1);
+    expect(session(store).history).toHaveLength(4);
+    expect(session(store).history[0].message.content).toBe("earlier");
     expect(session(store).history.at(-2).message.role).toBe("user");
     expect(session(store).history.at(-1).message.role).toBe("assistant");
-    expect(session(store).history).toHaveLength(4);
-    // The draft row is gone (the real bubble is there), but the presentation state stays until
-    // the stream starts — that is what keeps the animated border on the committed bubble
-    // instead of showing a plain history bubble for the whole disk read (§7.2.5).
-    const committedPending = session(store).pendingSubmission;
-    expect(committedPending.status).toBe("committed-awaiting-stream");
-    expect(committedPending.committedUserMessageId).toBe(
-      session(store).history.at(-2).message.id,
-    );
+    expect(session(store).stream.status).toBe("streaming");
 
     releaseLoad!();
     await pending;
 
-    // …and the merge that follows is tail-preserving: the committed turn is still the end
-    // of the window, on top of the frozen head.
-    const history = session(store).history;
-    expect(history[0].message.content).toBe("head user");
-    expect(history.at(-2).message.role).toBe("user");
-    expect(history.at(-1).message.content).toBe("This is a test");
-    expect(history).toHaveLength(8);
+    // The window is still the lazy one: the read was read-only, so neither the offset nor the
+    // truncation flag moved, and the frozen head never entered the window.
+    expect(session(store).history[0].message.content).toBe("earlier");
+    expect(session(store).history).not.toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ id: "h1" }),
+      }),
+    );
+    expect(session(store).pagination.loadedOffset).toBe(4);
+    expect(session(store).pagination.truncated).toBe(true);
   });
 
   it("replaces the message at index and truncates the tail on resend", async () => {
@@ -398,7 +397,7 @@ describe("submitSessionInput", () => {
     ]);
   });
 
-  it("loads the full history before sending when the window is truncated", async () => {
+  it("sends the full history from a read-only snapshot, leaving the window lazy", async () => {
     const store = makeStore({ truncated: true, loadedOffset: 4 });
     store.mockIdeMessenger.responses["history/load"] = {
       history: [
@@ -406,6 +405,8 @@ describe("submitSessionInput", () => {
         item("h2", "assistant", "head answer"),
         item("h3", "user", "head user 2"),
         item("h4", "assistant", "head answer 2"),
+        item("u1", "user", "earlier"),
+        item("a1", "assistant", "sure"),
       ],
     } as any;
     const request = vi.spyOn(store.mockIdeMessenger, "request");
@@ -419,10 +420,47 @@ describe("submitSessionInput", () => {
       }),
     );
 
-    expect(request).toHaveBeenCalledWith("history/load", { id: "s1" });
-    // 4 frozen head items + 2 loaded tail items + the new user/assistant pair.
-    expect(session(store).history).toHaveLength(8);
-    expect(session(store).history[0].message.content).toBe("head user");
+    // The model request carries the **whole** conversation: the frozen head is in the
+    // compiled messages even though the window never loaded it (方案.md §7.2.6).
+    const requests = request.mock.calls.filter(
+      ([type]) => type === "llm/compileChat",
+    );
+    expect(requests).toHaveLength(1);
+    const requested = JSON.stringify(
+      (requests[0][1] as any).messages.map((m: any) => m.content),
+    );
+    expect(requested).toContain("head user");
+    expect(requested).toContain("head answer 2");
+    expect(requested).toContain("earlier");
+    expect(requested).toContain("hello world");
+
+    // …while the visible window is untouched by that read: 2 loaded tail items + the
+    // committed pair, still truncated, still offset 4.
+    expect(session(store).history).toHaveLength(4);
+    expect(session(store).history[0].message.content).toBe("earlier");
+    expect(session(store).pagination.loadedOffset).toBe(4);
+    expect(session(store).pagination.truncated).toBe(true);
+    // A single disk read: the snapshot. Never a hydration (`loadFullHistory` would have
+    // replaced the window and reset the pagination above).
+    expect(
+      request.mock.calls.filter(([type]) => type === "history/load"),
+    ).toHaveLength(1);
+
+    // Core's contract is unchanged: saves still carry the **lazy** window plus the truncation
+    // metadata it needs to splice that window onto the frozen head on disk. The read-only
+    // request history is never what gets written back.
+    const saves = request.mock.calls.filter(
+      ([type]) => type === "history/save",
+    );
+    expect(saves.length).toBeGreaterThan(0);
+    for (const [, payload] of saves as [string, any][]) {
+      expect(payload.historyTruncated).toBe(true);
+      expect(payload.historyLoadedOffset).toBe(4);
+      expect(payload.history.map((i: any) => i.message.id)).not.toContain("h1");
+      expect(payload.history.some((i: any) => i.message.id === "u1")).toBe(
+        true,
+      );
+    }
   });
 
   it("replaces the clicked entry, not the merged bubble, in a merged window", async () => {
@@ -554,16 +592,232 @@ describe("submitSessionInput", () => {
     ).toBe(true);
 
     const target = session(store);
-    // 4 frozen head items + the new user/assistant pair; the replaced tail is gone.
-    expect(target.history).toHaveLength(6);
-    expect(target.history[4].message.role).toBe("user");
-    expect(target.history[5].message.role).toBe("assistant");
+    // The window stays lazy: the replacement dropped the tail after `u1` and appended the new
+    // pair, without pulling in the frozen head (方案.md §7.2.6 — the request history is a
+    // read-only snapshot now, so an edit no longer hydrates the window either).
+    expect(target.history).toHaveLength(2);
+    expect(target.history[0].message.role).toBe("user");
+    expect(target.history[1].message.role).toBe("assistant");
+    expect(target.pagination.loadedOffset).toBe(4);
+    expect(target.pagination.truncated).toBe(true);
     expect(
       target.history.some(
         (h: ChatHistoryItemWithMessageId) =>
           h.message.id === "u1" || h.message.id === "a1",
       ),
     ).toBe(false);
+  });
+
+  it("writes stream chunks into the lazy tail only, never into a full-conversation window", async () => {
+    // The amplification this change removes: with the request history hydrated into the window,
+    // every chunk of a reply re-rendered 254+ rows (measured `chat-render-commit` 120–234ms,
+    // plus second-long main-thread stalls). The row count of the window must therefore stay at
+    // the lazy size for the whole turn — the reply accumulates inside the last row.
+    const store = makeStore({ truncated: true, loadedOffset: 4 });
+    store.mockIdeMessenger.responses["history/load"] = {
+      history: [
+        item("h1", "user", "head user"),
+        item("h2", "assistant", "head answer"),
+        item("h3", "user", "head user 2"),
+        item("h4", "assistant", "head answer 2"),
+        item("u1", "user", "earlier"),
+        item("a1", "assistant", "sure"),
+      ],
+    } as any;
+    store.mockIdeMessenger.chatResponse = [
+      { role: "assistant", content: "part 1" },
+      { role: "assistant", content: "part 2" },
+      { role: "assistant", content: "part 3" },
+    ] as any;
+
+    const observedLengths: number[] = [];
+    const unsubscribe = store.subscribe(() => {
+      observedLengths.push(session(store).history.length);
+    });
+
+    await run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: MODIFIERS,
+      }),
+    );
+    unsubscribe();
+
+    // 2 window rows → 4 with the committed turn, and nothing else: the frozen head (6 rows on
+    // disk, 4 of them unloaded) never becomes part of the window.
+    expect(Math.max(...observedLengths)).toBe(4);
+    const final = session(store);
+    expect(final.history).toHaveLength(4);
+    expect(final.history.at(-1).message.role).toBe("assistant");
+    expect(String(final.history.at(-1).message.content)).toContain("part 1");
+    expect(
+      final.history.map((h: ChatHistoryItemWithMessageId) => h.message.id),
+    ).not.toContain("h1");
+    // Still lazy at the end of the turn: the save is allowed to keep its truncation metadata.
+    expect(final.pagination.truncated).toBe(true);
+    expect(final.pagination.loadedOffset).toBe(4);
+  });
+
+  it("retries the request-history read once when the window moves under it", async () => {
+    // 方案.md §7.2.6 failure semantics. A read-only snapshot is only usable if the window is
+    // still the one the read started from; when it is not, the whole resolution is retried once
+    // — and the retry must use the **fresh** window, which is what makes it correct rather than
+    // merely newer.
+    const store = makeStore({ truncated: true, loadedOffset: 4 });
+    let loads = 0;
+    const original = store.mockIdeMessenger.request.bind(
+      store.mockIdeMessenger,
+    );
+    (store.mockIdeMessenger as any).request = vi.fn(
+      async (type: string, data: any) => {
+        if (type === "history/load") {
+          loads++;
+          if (loads === 1) {
+            // A manual "load more" finishes while the disk is being read: the merge boundary
+            // moves under the read, so its result describes a window that no longer exists.
+            store.dispatch(
+              prependSessionHistory({
+                sessionId: "s1",
+                items: [
+                  item("p1", "user", "page user"),
+                  item("p2", "assistant", "page answer"),
+                ],
+                hasMore: true,
+                newLoadedOffset: 2,
+                totalCount: 6,
+              }),
+            );
+          }
+          return {
+            status: "success",
+            content: {
+              history: [
+                item("h1", "user", "head user"),
+                item("h2", "assistant", "head answer"),
+                item("h3", "user", "head user 2"),
+                item("h4", "assistant", "head answer 2"),
+                item("u1", "user", "earlier"),
+                item("a1", "assistant", "sure"),
+              ],
+            },
+            done: true,
+          };
+        }
+        return original(type as any, data as any);
+      },
+    ) as any;
+
+    expect(
+      await run(
+        store,
+        submitSessionInput({
+          sessionId: "s1",
+          editorState: EDITOR_STATE,
+          modifiers: MODIFIERS,
+        }),
+      ),
+    ).toBe(true);
+
+    // Two reads (the rejected one and the retry), and the request carries the frozen head, the
+    // freshly loaded page **and** the committed turn.
+    expect(loads).toBe(2);
+    const compile = (store.mockIdeMessenger as any).request.mock.calls.find(
+      ([type]: [string]) => type === "llm/compileChat",
+    );
+    const requested = JSON.stringify(
+      compile[1].messages.map((m: any) => m.content),
+    );
+    expect(requested).toContain("head user");
+    expect(requested).toContain("page user");
+    expect(requested).toContain("earlier");
+    expect(requested).toContain("hello world");
+    // The retry merged against the moved boundary (offset 2), not the captured one (4): the
+    // frozen head is exactly the two rows that are still unloaded.
+    expect(requested).not.toContain("head user 2");
+    // The window is lazy throughout: the head never entered it.
+    expect(session(store).history).toHaveLength(6);
+    expect(
+      session(store).history.map(
+        (h: ChatHistoryItemWithMessageId) => h.message.id,
+      ),
+    ).not.toContain("h1");
+    expect(session(store).pagination.loadedOffset).toBe(2);
+  });
+
+  it("aborts the send when the window keeps moving, instead of sending a truncated history", async () => {
+    // The other half of the same contract: no fallback. A send whose complete history cannot be
+    // proven must fail visibly — silently sending the window would drop the frozen head from the
+    // model's context, which is exactly the silent history reduction §7.2.6 forbids.
+    const store = makeStore({ truncated: true, loadedOffset: 4 });
+    let loads = 0;
+    const original = store.mockIdeMessenger.request.bind(
+      store.mockIdeMessenger,
+    );
+    (store.mockIdeMessenger as any).request = vi.fn(
+      async (type: string, data: any) => {
+        if (type === "history/load") {
+          loads++;
+          // Every read races with another page load; neither attempt can be proven consistent.
+          store.dispatch(
+            prependSessionHistory({
+              sessionId: "s1",
+              items: [
+                item(`p${loads}`, "user", `page ${loads}`),
+                item(`q${loads}`, "assistant", `answer ${loads}`),
+              ],
+              hasMore: true,
+              newLoadedOffset: loads === 1 ? 2 : 0,
+              totalCount: 6,
+            }),
+          );
+          return {
+            status: "success",
+            content: {
+              history: [
+                item("h1", "user", "head user"),
+                item("h2", "assistant", "head answer"),
+                item("h3", "user", "head user 2"),
+                item("h4", "assistant", "head answer 2"),
+                item("u1", "user", "earlier"),
+                item("a1", "assistant", "sure"),
+              ],
+            },
+            done: true,
+          };
+        }
+        return original(type as any, data as any);
+      },
+    ) as any;
+
+    expect(
+      await run(
+        store,
+        submitSessionInput({
+          sessionId: "s1",
+          editorState: EDITOR_STATE,
+          modifiers: MODIFIERS,
+        }),
+      ),
+    ).toBe(false);
+
+    // Exactly the two attempts, and the model was never asked: no compile means no request was
+    // ever built from the window-only history.
+    expect(loads).toBe(2);
+    expect(
+      (store.mockIdeMessenger as any).request.mock.calls.filter(
+        ([type]: [string]) => type === "llm/compileChat",
+      ),
+    ).toHaveLength(0);
+    // The failure is visible (a dialog), not a silent no-op.
+    expect((store.getState() as any).ui.showDialog).toBe(true);
+    // The committed turn survives — it is a real content version, saved at submit time — and the
+    // reply placeholder simply never fills in.
+    const history = session(store).history;
+    expect(history.at(-2).message.role).toBe("user");
+    expect(history.at(-1).message.role).toBe("assistant");
+    expect(history.at(-1).message.content).toBe("");
   });
 
   it("keeps a complete Local Provider first turn across repeated edits", async () => {

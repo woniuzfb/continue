@@ -38,7 +38,7 @@ import type {
   SessionRuntimeState,
 } from "../slices/sessionsSlice";
 import { ThunkApiType } from "../store";
-import { loadFullHistory, resolveHistoryMutationTarget } from "./sessionPaging";
+import { resolveHistoryMutationTarget } from "./sessionPaging";
 import { enqueueSessionSave } from "./sessionPersistence";
 import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 import {
@@ -70,7 +70,8 @@ export type SessionSubmitInput = {
   modifiers: InputModifiers;
   /**
    * Index in the session's *loaded* history to replace (retry / edit-and-resend).
-   * Absolute index is computed after the full history is loaded.
+   * It is interpreted against the window that was visible when it was captured
+   * (`capturedOffset + index`), never against the full conversation.
    *
    * Prefer `targetMessageId` where the caller knows it: a window index is only
    * meaningful against the array it was read from, and a bubble's index moves
@@ -259,24 +260,20 @@ export const submitSessionInput = createAsyncThunk<
       }
     }
 
-    // Captured from the pre-await snapshot on purpose: `loadFullHistory`
-    // resets `loadedOffset` to 0, but the caller's index is relative to the
-    // window that was visible when it was passed (方案.md §十二).
+    // Captured from the pre-await snapshot on purpose: the caller's index is
+    // relative to the window that was visible when it was passed (方案.md §十二).
     const capturedOffset = pre.pagination.loadedOffset ?? 0;
-    // Captured before any await: the commit runs against the window we are looking at, and
-    // the hydration below is decided from the same snapshot.
-    const wasTruncated = pre.pagination.truncated;
 
     // 2. A window holding an unsaved merged bubble is not 1:1 with disk, so its index
-    // cannot be converted arithmetically: resolve the captured identity in both arrays —
-    // which hydrates the window in the same round trip — and address the **window**
-    // coordinate, because the replacement below writes to `session.history`. A miss aborts
+    // cannot be converted arithmetically: resolve the captured identity in both arrays — a
+    // disk read in the same round trip — and address the **window** coordinate, because the
+    // replacement below writes to `session.history`. A miss aborts
     // instead of editing another message.
     //
-    // This branch is about *locating the target*, not about completing the request history:
-    // a target that was trimmed away cannot be found without reading disk, and the commit
-    // needs its position. Completing the window for the request is a separate concern, and
-    // it happens after the commit (see the hydration below).
+    // This branch is about *locating the target*, not about completing the request history: a
+    // target that was trimmed away cannot be found without reading disk, and the commit needs
+    // its position. Completing the request history for the model is a separate concern and is
+    // the stream step's read-only snapshot (方案.md §7.2.6) — it never touches this window.
     let resolvedIndex: number | undefined;
     if (
       targetMessageId !== undefined &&
@@ -301,12 +298,13 @@ export const submitSessionInput = createAsyncThunk<
       }
       resolvedIndex = resolved.guiIndex;
     }
-    // NOTE: a lazy-loaded window is **not** hydrated here any more. That hydration is a
-    // full `history/load` round trip plus the GUI merge, measured at 1361.8ms on a real
-    // session, and doing it before the commit meant the bubble waited for it. It now runs
-    // right after the commit (below) and before the save is enqueued. The *request* still
-    // needs the complete history — see `buildRequestHistoryForSession`, which the stream
-    // step consults — so this is a reordering, not a removal.
+    // NOTE: a lazy-loaded window is **not** hydrated on this path at all any more
+    // (方案.md §7.2.6). The request does need the complete logical history, but it is
+    // obtained by the stream step as a **read-only snapshot**
+    // (`resolveRequestHistoryForSend`), so submitting no longer has to replace the
+    // visible window with the whole conversation and then watch a save trim it back.
+    // `resolveHistoryMutationTarget` above is the one remaining full read here, and it
+    // happens only when a target has to be located on disk.
 
     const state = getState();
     const session = selectSessionById(state, sessionId);
@@ -502,9 +500,9 @@ export const submitSessionInput = createAsyncThunk<
     }
     // The draft row is done (the real bubble is committed), but the *presentation* state is
     // not: until `beginSessionStream` runs, `isStreaming` is false and the bubble would fall
-    // back to the static history border for the whole hydration+save window (~230ms, or
-    // seconds when the disk read is slow). Marking it committed keeps the animated border on
-    // that exact message and stops the second row from rendering.
+    // back to the static history border for the whole save window (~230ms measured). Marking
+    // it committed keeps the animated border on that exact message and stops the second row
+    // from rendering.
     committedOk = true;
     dispatch(
       markPendingSubmissionCommitted({
@@ -520,19 +518,6 @@ export const submitSessionInput = createAsyncThunk<
       }),
     );
     dispatch(resetSessionCodeBlockApplyIndex({ sessionId }));
-
-    // Hydrate the lazy-loaded window **after** the turn is committed, so the bubble does
-    // not wait for `history/load` + merge, and **before** the save is enqueued, so no
-    // in-flight save response can trim the window underneath the hydration (the merge is
-    // tail-preserving: it re-reads the current window, which now holds the committed turn).
-    //
-    // The window was truncated when we got here; the commit appended to that tail, which is
-    // exactly what `loadFullHistory` merges onto the frozen head. If the hydration bails
-    // (its own post-await guards), the stream step's request plan hydrates again before
-    // building the request — a bail is recoverable, a truncated request is not.
-    if (wasTruncated) {
-      await dispatch(loadFullHistory({ sessionId })).unwrap();
-    }
 
     // 4. Immediate save boundary (方案.md §七.2/§七.3).
     const beforeSaveEnqueue = performance.now();

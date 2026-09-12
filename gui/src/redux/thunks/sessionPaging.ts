@@ -2,6 +2,10 @@ import { createAsyncThunk } from "@reduxjs/toolkit";
 import { ChatHistoryItem } from "core";
 import { selectSessionById } from "../selectors/sessions";
 import {
+  requestHistoryFromFullHistory,
+  type FullRequestHistorySnapshot,
+} from "../util/requestHistory";
+import {
   prependSessionHistory,
   setSessionHistory,
   setSessionHistoryLoading,
@@ -15,6 +19,7 @@ import {
   type HistoryTargetOnDisk,
 } from "../util/historyTarget";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
+import { mergeDiskHeadWithRuntimeTail } from "../util/mergeDiskHead";
 import { noteGuiActivity, recordSubmitLatency } from "../../util/submitLatency";
 import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
 import { emitLegacyFallbackMintedEvent } from "../util/legacyMessageIdObservability";
@@ -190,25 +195,32 @@ export const loadFullHistory = createAsyncThunk<
 
     const diskHistory = result.content.history;
 
-    // Same guard as the legacy thunk: a truncated session claims headCount
-    // frozen head items. If disk is shorter, merging would drop the head and a
-    // later save would persist the tail only.
-    if (diskHistory.length < headCount) {
+    const mergeStartedAt = performance.now();
+    // The merge rule lives in one place (`mergeDiskHeadWithRuntimeTail`) so the read-only
+    // request loader cannot drift from the hydration path (方案.md §7.2.6).
+    const merged = mergeDiskHeadWithRuntimeTail({
+      diskHistory,
+      // Re-read above, after the await: the window may have changed while the disk was read.
+      runtimeHistory: current.history,
+      loadedOffset: headCount,
+    });
+    if (merged.kind === "disk-shorter-than-head") {
       throw new Error(
-        `loadFullHistory: on-disk history (${diskHistory.length}) is shorter ` +
-          `than the expected frozen head (${headCount}). Refusing to merge ` +
+        `loadFullHistory: on-disk history (${merged.diskLength}) is shorter ` +
+          `than the expected frozen head (${merged.headCount}). Refusing to merge ` +
           `a partial context and overwrite the session file; aborting send.`,
       );
     }
+    if (merged.kind === "window-moved") {
+      // The guards above already returned for a moved window, so this is unreachable here; the
+      // helper models it because the read-only request loader re-reads the window at a different
+      // point. Fail closed rather than send or persist a partial history.
+      throw new Error(
+        `loadFullHistory: the window moved while the disk was read (${sessionId})`,
+      );
+    }
 
-    const mergeStartedAt = performance.now();
-    const safeHeadCount = Math.min(headCount, diskHistory.length);
-    const mergedHistory = [
-      ...diskHistory.slice(0, safeHeadCount),
-      ...current.history,
-    ];
-
-    const mergedReport = ensureMessageIdsWithReport(mergedHistory);
+    const mergedReport = ensureMessageIdsWithReport(merged.history);
     if (mergedReport.mintedCount > 0) {
       reportMessageIdFallback({
         sessionId,
@@ -251,6 +263,149 @@ export const loadFullHistory = createAsyncThunk<
     // Temporary return value only — callers use it to locate a target on disk
     // (设计 §4) and must not put it into state.
     return { diskHistory };
+  },
+);
+
+/**
+ * 方案.md §7.2.6：**只读**取「本次请求用的完整逻辑历史」。
+ *
+ * 存在的理由：模型请求需要完整历史，而可见窗口按 §十一 保持 lazy。之前这两件事绑在一起 ——
+ * 请求路径调用 `loadFullHistory`，把 `session.history` 换成完整会话，于是每个 chunk 都在一份
+ * 254 行的窗口上重渲染（实测 `chat-render-commit` 120–234ms/次，伴随秒级主线程停顿），保存后
+ * 又被裁回小窗口，形成「放大→重渲染→裁回→再放大」的循环。
+ *
+ * 这个 thunk 只做读取与合并，**绝不**：
+ *
+ * ```text
+ * setSessionHistory / setSessionPagination
+ * mark dirty / 推进 conversationRevision
+ * 改 loadedOffset / truncated / loadedDiskCount
+ * 触发 hydration 的 UI activity（它不是水合）
+ * ```
+ *
+ * 失败语义（§7.2.6）：**绝不**降级成「用当前截断窗口当请求历史」—— 那会让模型悄悄丢掉上下文。
+ * 拿不到可证明正确的快照就抛错，由调用方中止本次发送。
+ */
+export const loadFullRequestHistory = createAsyncThunk<
+  FullRequestHistorySnapshot,
+  {
+    sessionId: string;
+    /** 发起时的窗口代次；磁盘读完后仍必须是这个值。 */
+    expectedRequestGeneration: number;
+    /** 发起时的内容版本；变化说明窗口内容已不是发起时那份。 */
+    expectedConversationRevision: number;
+    /** 可见窗口当前的尾部身份（用于确认尾部没被换掉）。 */
+    expectedTailMessageId?: string;
+  },
+  ThunkApiType
+>(
+  "sessions/loadFullRequestHistory",
+  async (
+    {
+      sessionId,
+      expectedRequestGeneration,
+      expectedConversationRevision,
+      expectedTailMessageId,
+    },
+    { getState, extra },
+  ) => {
+    const initial = selectSessionById(getState(), sessionId);
+    if (!initial) {
+      throw new Error("loadFullRequestHistory: session no longer exists");
+    }
+    const headCount = initial.pagination.loadedOffset ?? 0;
+
+    const loadStartedAt = performance.now();
+    const result = await extra.ideMessenger.request("history/load", {
+      id: sessionId,
+    });
+    recordSubmitLatency({
+      phase: "history-load",
+      sessionId,
+      durationMs: performance.now() - loadStartedAt,
+    });
+    if (result.status === "error") {
+      throw new Error(`loadFullRequestHistory failed: ${result.error}`);
+    }
+
+    // Re-read after the await: the window may have received a stream chunk, a tool result, an
+    // edit, a prepend or a trim while the disk was being read. Merging the pre-await snapshot
+    // would silently drop those updates.
+    const current = selectSessionById(getState(), sessionId);
+    if (!current) {
+      throw new Error(
+        "loadFullRequestHistory: session disappeared while loading",
+      );
+    }
+    if (current.pagination.requestGeneration !== expectedRequestGeneration) {
+      throw new Error(
+        "loadFullRequestHistory: the window generation changed while loading",
+      );
+    }
+    if ((current.pagination.loadedOffset ?? 0) !== headCount) {
+      // The window is no longer the one this read started from (a hydration completed, a
+      // page was prepended): the merge boundary moved, so merging with the captured
+      // `headCount` would duplicate rows instead of restoring the frozen head.
+      throw new Error("loadFullRequestHistory: the window moved while loading");
+    }
+    if (current.conversationRevision !== expectedConversationRevision) {
+      throw new Error(
+        "loadFullRequestHistory: the conversation changed while loading",
+      );
+    }
+    if (
+      expectedTailMessageId !== undefined &&
+      (current.history.at(-1)?.message.id ?? undefined) !==
+        expectedTailMessageId
+    ) {
+      throw new Error(
+        "loadFullRequestHistory: the visible tail changed while loading",
+      );
+    }
+
+    const mergeStartedAt = performance.now();
+    const merged = mergeDiskHeadWithRuntimeTail({
+      diskHistory: result.content.history,
+      runtimeHistory: current.history,
+      loadedOffset: headCount,
+    });
+    if (merged.kind === "disk-shorter-than-head") {
+      throw new Error(
+        `loadFullRequestHistory: on-disk history (${merged.diskLength}) is ` +
+          `shorter than the expected frozen head (${merged.headCount}); ` +
+          `refusing to build a request from a partial history`,
+      );
+    }
+    if (merged.kind === "window-moved") {
+      // Unreachable (the offset guard above already rejected a moved window); modelled by
+      // the shared rule because `loadFullHistory` re-reads the window at a different point.
+      throw new Error("loadFullRequestHistory: the window moved while loading");
+    }
+
+    const report = ensureMessageIdsWithReport(merged.history);
+    if (report.mintedCount > 0) {
+      // Same reporting as hydration: the request is built from ids we just minted, and the
+      // legacy-migration pipeline must know they are not persisted.
+      reportMessageIdFallback({
+        sessionId,
+        mintedCount: report.mintedCount,
+        hostCapability: selectMessageIdMigrationCapability(getState()),
+      });
+      emitLegacyFallbackMintedEvent({
+        mintedCount: report.mintedCount,
+        host: selectTelemetryHost(getState()),
+        messenger: extra.ideMessenger,
+      });
+    }
+    recordSubmitLatency({
+      phase: "history-merge",
+      sessionId,
+      durationMs: performance.now() - mergeStartedAt,
+    });
+
+    return requestHistoryFromFullHistory(report.items, {
+      latestConversationSummary: current.latestConversationSummary,
+    });
   },
 );
 

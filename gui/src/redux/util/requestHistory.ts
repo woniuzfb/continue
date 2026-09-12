@@ -7,8 +7,8 @@ import type { SessionRuntimeState } from "../slices/sessionsSlice";
  * 方案.md §十三 Phase 5：Local Provider 的请求历史构造。
  *
  * 每轮请求 = 磁盘首轮原始对话 + 当前完整回合。快速路径必须同时满足
- * `firstTurnItems` 非空、已有可靠磁盘基线、且保存未失败；否则回退
- * `loadFullHistory`（调用方执行后重建）。
+ * `firstTurnItems` 非空、已有可靠磁盘基线、且保存未失败；否则回退完整历史
+ * （§7.2.6：由 `loadFullRequestHistory` 以**只读快照**形式提供，窗口不动）。
  */
 
 export type RequestHistoryMode = "full-history" | "first-turn-plus-current";
@@ -73,15 +73,34 @@ export function buildRequestHistoryForSession(
   return { kind: "needs-full-history" };
 }
 
+/**
+ * 方案.md §7.2.6：一次请求用的完整逻辑历史快照。
+ *
+ * 它是**只读**的：拿到它的调用方不得假设 `session.history` 也变成了完整会话 —— 可见窗口按 §十一
+ * 保持 lazy，快照只在本次请求内有效。
+ */
+export interface FullRequestHistorySnapshot {
+  /** 完整逻辑历史（冻结的磁盘头 + 运行时尾），可直接作为模型请求历史。 */
+  history: ChatHistoryItemWithMessageId[];
+  /** 磁盘首轮缓存（`setSessionFirstTurn` 用；可能为空）。 */
+  firstTurnItems: ChatHistoryItemWithMessageId[];
+  /**
+   * 校验通过时仍然生效的对话摘要。Local Provider 的缩减请求没有摘要载体，需要显式注入
+   * （§十三.0），所以快照把它一起带出来，避免调用方回头去读一个更早捕获的 state。
+   */
+  latestConversationSummary?: SessionRuntimeState["latestConversationSummary"];
+}
+
 /** 完整 history 加载后的请求历史（含首轮），并顺带补 firstTurnItems。 */
 export function requestHistoryFromFullHistory(
   history: ChatHistoryItemWithMessageId[],
-): {
-  requestHistory: ChatHistoryItemWithMessageId[];
-  firstTurnItems: ChatHistoryItemWithMessageId[];
-} {
+  options: {
+    latestConversationSummary?: SessionRuntimeState["latestConversationSummary"];
+  } = {},
+): FullRequestHistorySnapshot {
   return {
-    requestHistory: history,
+    history,
     firstTurnItems: extractFirstTurnItems(history),
+    latestConversationSummary: options.latestConversationSummary,
   };
 }

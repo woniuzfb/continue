@@ -455,9 +455,10 @@ export type PendingSubmission = {
    *
    * `committed-awaiting-stream`: the turn **is** committed and rendered, but `beginSessionStream`
    * has not run yet. The committed bubble must keep the animated border through this window
-   * instead of falling back to the static history style — with the hydration moved after the
-   * commit that window is ~230ms (seconds when the disk read is slow), and it showed up as
-   * "static bubble first, coloured bubble a moment later".
+   * instead of falling back to the static history style — that window is the save boundary,
+   * measured at ~230ms, and it showed up as "static bubble first, coloured bubble a moment
+   * later". (It used to be much longer: the window also covered a full `history/load` hydration
+   * until 方案.md §7.2.6 made the request history a read-only snapshot.)
    */
   status: "resolving-context" | "committed-awaiting-stream";
   /** Set once the turn is committed; the message the animated border belongs to. */
@@ -476,10 +477,11 @@ export type PendingSubmission = {
  * Where a submitted turn lands (方案.md §七.3, Stage 2F 收口).
  *
  * An index captured **before** the async half of the send (context providers, slash
- * commands) cannot be trusted afterwards: the window may have been hydrated, trimmed,
- * or appended to, so the same number can address a different turn. The intent is
- * therefore expressed as a discriminated identity, and `expectedConversationRevision`
- * is the atomic guard that a submit prepared against content that is still current.
+ * commands) cannot be trusted afterwards: the window may have been trimmed or appended
+ * to (or hydrated by an explicit disk read), so the same number can address a different
+ * turn. The intent is therefore expressed as a discriminated identity, and
+ * `expectedConversationRevision` is the atomic guard that a submit prepared against
+ * content that is still current.
  *
  * ```text
  * append           ⇒ 提交到**当时**的尾部（history.length 在 reducer 内读）

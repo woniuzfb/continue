@@ -31,7 +31,10 @@
  * The helpers take `loadedOffset` rather than a session on purpose. Two of the
  * call sites must use a **captured** offset rather than the current one:
  *
- * - `sessionSubmit` converts before `loadFullHistory` resets the offset to 0;
+ * - `sessionSubmit` converts with the offset captured **before** the editor
+ *   content is resolved: the commit must address the window the caller saw, and
+ *   since 方案.md §7.2.6 submitting no longer hydrates that window at all, the
+ *   offset can legitimately differ by the time the commit runs;
  * - `compactConversation` pairs the offset captured by the same hook callback
  *   that receives the window-relative index, and does not re-read `pagination`
  *   after full hydration.
