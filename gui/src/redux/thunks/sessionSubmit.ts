@@ -90,9 +90,6 @@ export type SessionSubmitInput = {
    */
   targetMessageId?: string;
   attachments?: AttachedFile[];
-  /** Who asked for this send (diagnostic only): a second user item with the same content can
-   *  only come from a second submit, so the caller must name its entry point. */
-  origin?: "editor" | "error-retry" | "mcp";
 };
 
 function userHistoryItem(
@@ -169,8 +166,7 @@ export const submitSessionInput = createAsyncThunk<
   SessionSubmitInput,
   ThunkApiType
 >("sessions/submitInput", async (input, { dispatch, getState, extra }) => {
-  const { sessionId, editorState, modifiers, index, attachments, origin } =
-    input;
+  const { sessionId, editorState, modifiers, index, attachments } = input;
   const startingSession = selectSessionById(getState(), sessionId);
   if (!startingSession) {
     return false;
@@ -473,10 +469,6 @@ export const submitSessionInput = createAsyncThunk<
       durationMs: performance.now() - resolvedAt,
       insertion: insertionKind,
       hadContext: selectedContextItems.length > 0,
-      // Origin + wall clock: two sends of the same content are then two lines with their entry
-      // point and their time difference (方案.md §7.4).
-      reason: `origin=${origin ?? "editor"}`,
-      at: Date.now(),
       ok: true,
     });
     recordSubmitLatency({

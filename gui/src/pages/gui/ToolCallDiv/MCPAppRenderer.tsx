@@ -199,7 +199,6 @@ export function McpAppRenderer({
 
       void dispatch(
         submitSessionInput({
-          origin: "mcp",
           sessionId,
           editorState,
           modifiers: { noContext: true, useCodebase: false },

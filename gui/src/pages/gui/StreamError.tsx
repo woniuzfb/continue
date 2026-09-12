@@ -126,7 +126,6 @@ const StreamErrorDialog = ({
 
         void dispatch(
           submitSessionInput({
-            origin: "error-retry",
             sessionId,
             editorState,
             modifiers: {
