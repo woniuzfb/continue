@@ -47,6 +47,12 @@ interface ContinueInputBoxProps {
    * stay tight against the message box. Only used for sent/history inputs. */
   bottomRightActions?: ReactNode;
   hidden?: boolean;
+  /**
+   * This sent message is committed but its model request has not started yet: show the
+   * animated border it will have while streaming, so the border does not flicker through the
+   * static history style in between (方案.md §7.2.5).
+   */
+  awaitingStream?: boolean;
   inputId: string; // used to keep track of things per input in redux
 }
 
@@ -160,7 +166,16 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
       <div className={`relative flex flex-col px-2`}>
         {props.isMainInput && <Lump />}
         <GradientBorder
-          loading={isStreaming && (props.isLastUserInput || isInEdit) ? 1 : 0}
+          loading={
+            // `isStreaming` covers the reply; `awaitingStream` covers the window between the
+            // turn being committed and its request starting, where neither `isStreaming` nor
+            // the pending row is true any more.
+            isStreaming && (props.isLastUserInput || isInEdit)
+              ? 1
+              : props.awaitingStream
+                ? 1
+                : 0
+          }
           borderColor={
             // ALL sent user messages get the solid brand-green border. The
             // most recent one switches to the animated gradient while the
@@ -172,7 +187,9 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
                 : vscBackground
               : isStreaming && (props.isLastUserInput || isInEdit)
                 ? undefined
-                : "#1BBE84"
+                : props.awaitingStream
+                  ? undefined
+                  : "#1BBE84"
           }
           borderRadius={defaultBorderRadius}
         >

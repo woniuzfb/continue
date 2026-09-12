@@ -321,7 +321,14 @@ describe("submitSessionInput", () => {
     expect(session(store).history.at(-2).message.role).toBe("user");
     expect(session(store).history.at(-1).message.role).toBe("assistant");
     expect(session(store).history).toHaveLength(4);
-    expect(session(store).pendingSubmission).toBeUndefined();
+    // The draft row is gone (the real bubble is there), but the presentation state stays until
+    // the stream starts — that is what keeps the animated border on the committed bubble
+    // instead of showing a plain history bubble for the whole disk read (§7.2.5).
+    const committedPending = session(store).pendingSubmission;
+    expect(committedPending.status).toBe("committed-awaiting-stream");
+    expect(committedPending.committedUserMessageId).toBe(
+      session(store).history.at(-2).message.id,
+    );
 
     releaseLoad!();
     await pending;

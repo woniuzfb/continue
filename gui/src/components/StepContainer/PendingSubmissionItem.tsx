@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { GradientBorder } from "../mainInput/GradientBorder";
+import { defaultBorderRadius } from "..";
 import type { PendingSubmission } from "../../redux/slices/sessionsSlice";
 import { pendingSubmissionText } from "../../redux/util/pendingSubmission";
 import { AnimatedEllipsis } from "../AnimatedEllipsis";
@@ -29,33 +31,37 @@ export function PendingSubmissionItem({
       className="thread-message px-2 py-1"
       data-pending-submission={pending.submissionId}
     >
-      <div className="border-description/40 bg-input rounded-md border border-dashed px-2 py-1">
-        <div className="text-description-muted flex items-center gap-1 text-xs">
-          <span>
-            Preparing
-            <AnimatedEllipsis />
-          </span>
-          {elapsedSeconds >= 1 && <span>{elapsedSeconds}s</span>}
-          <span className="italic">not sent yet</span>
+      {/* The same animated border the committed bubble will have, so this reads as "your
+          message, on its way" rather than as a separate status card (方案.md §7.2.5). Text
+          only on the inside: no ProseMirror instance is created for a draft. */}
+      <GradientBorder loading={1} borderRadius={defaultBorderRadius}>
+        <div className="bg-input w-full min-w-0 rounded-md px-2 py-1">
+          <div className="text-description-muted flex items-center gap-1 text-xs">
+            <span>
+              Preparing
+              <AnimatedEllipsis />
+            </span>
+            {elapsedSeconds >= 1 && <span>{elapsedSeconds}s</span>}
+          </div>
+          {text && (
+            <div className="text-foreground whitespace-pre-wrap text-sm">
+              {text}
+            </div>
+          )}
+          {pending.attachmentMeta && pending.attachmentMeta.length > 0 && (
+            <div className="mt-0.5 flex flex-wrap gap-1">
+              {pending.attachmentMeta.map((attachment, index) => (
+                <span
+                  key={`${attachment.path}-${index}`}
+                  className="bg-description/20 text-description rounded px-1 text-xs"
+                >
+                  {attachment.name}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
-        {text && (
-          <div className="text-foreground whitespace-pre-wrap text-sm">
-            {text}
-          </div>
-        )}
-        {pending.attachmentMeta && pending.attachmentMeta.length > 0 && (
-          <div className="mt-0.5 flex flex-wrap gap-1">
-            {pending.attachmentMeta.map((attachment, index) => (
-              <span
-                key={`${attachment.path}-${index}`}
-                className="bg-description/20 text-description rounded px-1 text-xs"
-              >
-                {attachment.name}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
+      </GradientBorder>
     </div>
   );
 }

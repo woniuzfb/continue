@@ -15,7 +15,7 @@ import {
   type HistoryTargetOnDisk,
 } from "../util/historyTarget";
 import { ensureMessageIdsWithReport } from "../util/messageIds";
-import { recordSubmitLatency } from "../../util/submitLatency";
+import { noteGuiActivity, recordSubmitLatency } from "../../util/submitLatency";
 import { reportMessageIdFallback } from "../util/messageIdFallbackReport";
 import { emitLegacyFallbackMintedEvent } from "../util/legacyMessageIdObservability";
 import {
@@ -221,6 +221,7 @@ export const loadFullHistory = createAsyncThunk<
         messenger: extra.ideMessenger,
       });
     }
+    noteGuiActivity("hydration", { items: mergedReport.items.length });
     dispatch(
       setSessionHistory({
         sessionId,

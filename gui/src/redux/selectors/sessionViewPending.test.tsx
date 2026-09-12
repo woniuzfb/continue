@@ -58,6 +58,7 @@ const wrapperFor = (store: ReturnType<typeof makeStore>) =>
 
 const draft = (startedAt: number, submissionId = "sub-1") => ({
   submissionId,
+  status: "resolving-context" as const,
   insertion: { kind: "append" as const },
   displayContent: "hello",
   startedAt,

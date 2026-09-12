@@ -53,8 +53,13 @@ export function captureSubmitLatencyLines() {
           const key = detail.slice(0, separator);
           const value = detail.slice(separator + 1);
           if (key === "provider") event.provider = value;
+          else if (key === "reason") event.reason = value;
+          else if (key === "after") event.after = value;
+          else if (key === "items") event.items = Number(value);
+          else if (key === "chars") event.chars = Number(value);
           else if (key === "requests") event.requests = Number(value);
           else if (key === "hadContext") event.hadContext = value === "true";
+          else if (key === "at") event.at = Number(value);
         }
         return event;
       }),

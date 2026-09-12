@@ -15,6 +15,7 @@ const draft = (
   overrides: Partial<PendingSubmission> = {},
 ): PendingSubmission => ({
   submissionId: "sub-1",
+  status: "resolving-context",
   insertion: { kind: "append" },
   displayContent: "hello world",
   startedAt: Date.now(),
@@ -22,12 +23,22 @@ const draft = (
 });
 
 describe("PendingSubmissionItem", () => {
-  it("shows the typed text and marks it as not sent yet", () => {
+  it("shows the typed text with the animated border of a real bubble", () => {
     const { container } = render(<PendingSubmissionItem pending={draft()} />);
 
     expect(screen.getByText("hello world")).toBeTruthy();
     expect(container.textContent).toContain("Preparing");
-    expect(container.textContent).toContain("not sent yet");
+    // The draft uses the same animated border as the bubble it becomes, so the swap does not
+    // change the look of the message (方案.md §7.2.5): a styled-components element is present…
+    const draftRoot = container.querySelector("[data-pending-submission]")!;
+    expect(draftRoot.innerHTML).toMatch(/class="[^"]*sc-/);
+    // …and the injected stylesheet carries the gradient animation, with the border-box fix
+    // that keeps the 1px border inside the element's width.
+    const styles = Array.from(document.querySelectorAll("style"))
+      .map((tag) => tag.textContent ?? "")
+      .join("\n");
+    expect(styles).toMatch(/animation:\s*\S+ 6s linear infinite/);
+    expect(styles).toMatch(/box-sizing:\s*border-box/);
     expect(
       container.querySelector("[data-pending-submission='sub-1']"),
     ).not.toBeNull();

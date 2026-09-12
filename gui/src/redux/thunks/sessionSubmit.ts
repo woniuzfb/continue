@@ -27,6 +27,7 @@ import {
 import {
   clearPendingSubmission,
   commitSubmittedTurn,
+  markPendingSubmissionCommitted,
   resetSessionCodeBlockApplyIndex,
   setPendingSubmission,
   setSessionMainEditorAttachmentsRestore,
@@ -190,6 +191,7 @@ export const submitSessionInput = createAsyncThunk<
         sessionId,
         submission: {
           submissionId,
+          status: "resolving-context",
           insertion: draftInsertion,
           // Same projection the committed bubble renders. Parsing the editor state
           // again here (resolveEditorContent parses it too) is deliberate: reusing its
@@ -214,6 +216,7 @@ export const submitSessionInput = createAsyncThunk<
   // submitted the same turn twice — measured: two user items, a permanently empty
   // assistant placeholder, `conversationRevision` +3 — and the revision guard cannot stop
   // it, because every attempt re-reads the revision it expects.
+  let committedOk = false;
   const prepared = await (async (): Promise<
     PreparedSubmittedTurn | undefined
   > => {
@@ -497,11 +500,19 @@ export const submitSessionInput = createAsyncThunk<
           : "Cannot resend: the target message is no longer in the loaded history",
       );
     }
-    // The committed turn is on screen now, so the draft has served its purpose: clear it
-    // here rather than in the preparation block's `finally`, which runs after the hydration
-    // below — waiting for that would keep the placeholder on screen for the whole disk read
-    // (measured: 1361.8ms).
-    dispatch(clearPendingSubmission({ sessionId, submissionId }));
+    // The draft row is done (the real bubble is committed), but the *presentation* state is
+    // not: until `beginSessionStream` runs, `isStreaming` is false and the bubble would fall
+    // back to the static history border for the whole hydration+save window (~230ms, or
+    // seconds when the disk read is slow). Marking it committed keeps the animated border on
+    // that exact message and stops the second row from rendering.
+    committedOk = true;
+    dispatch(
+      markPendingSubmissionCommitted({
+        sessionId,
+        submissionId,
+        committedUserMessageId: submittedUserItem.message.id,
+      }),
+    );
     dispatch(
       setSessionMainEditorAttachmentsRestore({
         sessionId,
@@ -563,10 +574,13 @@ export const submitSessionInput = createAsyncThunk<
       return undefined;
     })
     .finally(() => {
-      // Every exit path clears the draft — success (the committed turn takes its place) and
-      // failure (resolution error, stale target, session gone) alike. ID-checked, so a slow
-      // failing attempt cannot clear a newer draft.
-      dispatch(clearPendingSubmission({ sessionId, submissionId }));
+      // Failure paths clear the draft (resolution error, stale target, session gone). The
+      // success path already moved it to `committed-awaiting-stream`, which this must not
+      // undo — the awaiting-stream border has to survive until the stream begins. ID-checked,
+      // so a slow failing attempt cannot clear a newer draft.
+      if (!committedOk) {
+        dispatch(clearPendingSubmission({ sessionId, submissionId }));
+      }
     });
   if (!prepared) {
     return false;

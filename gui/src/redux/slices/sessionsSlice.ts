@@ -450,6 +450,18 @@ export type PendingSubmission = {
    * newer draft.
    */
   submissionId: string;
+  /**
+   * `resolving-context`: the turn does not exist yet, so the draft row is what the user sees.
+   *
+   * `committed-awaiting-stream`: the turn **is** committed and rendered, but `beginSessionStream`
+   * has not run yet. The committed bubble must keep the animated border through this window
+   * instead of falling back to the static history style — with the hydration moved after the
+   * commit that window is ~230ms (seconds when the disk read is slow), and it showed up as
+   * "static bubble first, coloured bubble a moment later".
+   */
+  status: "resolving-context" | "committed-awaiting-stream";
+  /** Set once the turn is committed; the message the animated border belongs to. */
+  committedUserMessageId?: string;
   /** Where the committed turn will land — the draft renders in that same place. */
   insertion: { kind: "append" } | { kind: "replace"; targetMessageId: string };
   /** The text to show, taken synchronously from the editor. */
@@ -1071,6 +1083,11 @@ export const sessionsSlice = createSlice({
           aborter: action.payload.aborter,
           hasConversationMutation,
         };
+        // The awaiting-stream window ends here: from now on `isStreaming` is what keeps the
+        // animated border on the submitted bubble, so the presentation-only pending state is
+        // dropped. No id check is needed — a second send is refused while one is pending, so
+        // the pending state can only belong to this request.
+        delete session.pendingSubmission;
       }
     },
     applySessionStreamUpdate: (
@@ -1572,6 +1589,33 @@ export const sessionsSlice = createSlice({
       }
     },
     /**
+     * The turn is committed but the model request has not started: stop rendering the draft
+     * row (the real bubble is there now) while keeping the presentation state, which
+     * `ContinueInputBox` reads to keep the animated border on that specific message.
+     */
+    markPendingSubmissionCommitted: (
+      state,
+      action: PayloadAction<{
+        sessionId: string;
+        submissionId: string;
+        committedUserMessageId: string;
+      }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      const pending = session?.pendingSubmission;
+      if (!session || !pending) {
+        return;
+      }
+      if (pending.submissionId !== action.payload.submissionId) {
+        return;
+      }
+      session.pendingSubmission = {
+        ...pending,
+        status: "committed-awaiting-stream",
+        committedUserMessageId: action.payload.committedUserMessageId,
+      };
+    },
+    /**
      * Clears the draft — **only** when the id matches, so a slow failing attempt cannot
      * remove the draft of a newer one.
      */
@@ -2026,6 +2070,7 @@ export const {
   setSessionInlineError,
   commitSubmittedTurn,
   setPendingSubmission,
+  markPendingSubmissionCommitted,
   clearPendingSubmission,
   setSessionFullConversationMetrics,
   refreshSessionFullConversationMetricsEnvironment,

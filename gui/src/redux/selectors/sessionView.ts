@@ -323,6 +323,23 @@ export function useSessionPendingSubmission() {
   return shown;
 }
 
+/**
+ * The user message that is committed but whose model request has not started yet, if any.
+ *
+ * Presentation only: `ContinueInputBox` uses it to keep the animated border on that exact
+ * bubble during the hydration/save window, instead of dropping back to the static history
+ * style and switching again when `beginSessionStream` lands (方案.md §7.2.5).
+ */
+export function useSessionAwaitingStreamMessageId(): string | undefined {
+  const sessionId = useSessionId();
+  return useAppSelector((state) => {
+    const pending = activeRuntimeOf(state, sessionId)?.pendingSubmission;
+    return pending?.status === "committed-awaiting-stream"
+      ? pending.committedUserMessageId
+      : undefined;
+  });
+}
+
 export function useSessionEditState() {
   const sessionId = useSessionId();
   return useAppSelector(

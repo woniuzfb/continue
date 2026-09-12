@@ -13,13 +13,16 @@ import { resetSessionStreamCheckpoints } from "./sessionStreams";
 import { resetSessionStreamRunner } from "./sessionTools";
 import { submitSessionInput } from "./sessionSubmit";
 import {
+  beginSessionStream,
   clearPendingSubmission,
+  markPendingSubmissionCommitted,
   markSessionDirty,
   setPendingSubmission,
 } from "../slices/sessionsSlice";
 import {
   pendingSubmissionTargetIndex,
   pendingSubmissionText,
+  shouldRenderPendingSubmission,
 } from "../util/pendingSubmission";
 
 /**
@@ -302,6 +305,7 @@ describe("pending submission draft — reducer contract", () => {
         sessionId: "s1",
         submission: {
           submissionId: "newer",
+          status: "resolving-context",
           insertion: { kind: "append" },
           displayContent: "typed",
           startedAt: Date.now(),
@@ -329,6 +333,7 @@ describe("pending submission draft — reducer contract", () => {
         sessionId: "s1",
         submission: {
           submissionId: "s",
+          status: "resolving-context",
           insertion: { kind: "append" },
           displayContent: "typed",
           startedAt: Date.now(),
@@ -360,6 +365,7 @@ describe("pending submission draft — placement", () => {
     expect(
       pendingSubmissionTargetIndex(history, {
         submissionId: "s",
+        status: "resolving-context",
         insertion: { kind: "replace", targetMessageId: "a3" },
         displayContent: "x",
         startedAt: 0,
@@ -368,6 +374,7 @@ describe("pending submission draft — placement", () => {
     expect(
       pendingSubmissionTargetIndex(history, {
         submissionId: "s",
+        status: "resolving-context",
         insertion: { kind: "append" },
         displayContent: "x",
         startedAt: 0,
@@ -376,6 +383,7 @@ describe("pending submission draft — placement", () => {
     expect(
       pendingSubmissionTargetIndex(history, {
         submissionId: "s",
+        status: "resolving-context",
         insertion: { kind: "replace", targetMessageId: "gone" },
         displayContent: "x",
         startedAt: 0,
@@ -387,6 +395,7 @@ describe("pending submission draft — placement", () => {
     expect(
       pendingSubmissionText({
         submissionId: "s",
+        status: "resolving-context",
         insertion: { kind: "append" },
         displayContent: [
           { type: "text", text: "typed" },
@@ -408,3 +417,116 @@ function pendingTargetIndexFor(store: ReturnType<typeof makeStore>) {
     state.sessions.sessionsById.s1.pendingSubmission,
   );
 }
+
+describe("pending submission draft — committed but awaiting its stream (§7.2.5)", () => {
+  beforeEach(() => {
+    resetSessionSaveQueues();
+    resetSessionStreamCheckpoints();
+    resetSessionStreamRunner();
+  });
+
+  it("keeps the presentation state after the commit, until the stream begins", async () => {
+    const store = makeStore();
+    const gate = holdContextRequest(store);
+
+    const pending = run(
+      store,
+      submitSessionInput({
+        sessionId: "s1",
+        editorState: EDITOR_STATE,
+        modifiers: { useCodebase: false, noContext: false },
+      }),
+    );
+    await gate.contextRequested();
+    expect(session(store).pendingSubmission.status).toBe("resolving-context");
+
+    gate.release();
+    await pending;
+
+    // The turn is committed and the stream has run to completion by now, so the presentation
+    // state is gone — the invariant is that it never *went back* to a plain history bubble in
+    // between, which `awaitingStream` on the committed bubble covers while it exists.
+    expect(session(store).pendingSubmission).toBeUndefined();
+    expect(session(store).history.at(-2).message.role).toBe("user");
+  });
+
+  it("marks the committed message so its bubble keeps the animated border", () => {
+    const store = makeStore();
+    store.dispatch(
+      setPendingSubmission({
+        sessionId: "s1",
+        submission: {
+          submissionId: "sub-1",
+          status: "resolving-context",
+          insertion: { kind: "append" },
+          displayContent: "typed",
+          startedAt: Date.now(),
+        },
+      }),
+    );
+
+    store.dispatch(
+      markPendingSubmissionCommitted({
+        sessionId: "s1",
+        submissionId: "sub-1",
+        committedUserMessageId: "u-new",
+      }),
+    );
+
+    const pending = session(store).pendingSubmission;
+    expect(pending.status).toBe("committed-awaiting-stream");
+    expect(pending.committedUserMessageId).toBe("u-new");
+    // The row must not render a second bubble next to the committed one.
+    expect(shouldRenderPendingSubmission(pending)).toBe(false);
+    // …and a replace draft must stop pointing at its (now replaced) target.
+    expect(pendingSubmissionTargetIndex(session(store).history, pending)).toBe(
+      -1,
+    );
+  });
+
+  it("ignores a commit mark for a different attempt", () => {
+    const store = makeStore();
+    store.dispatch(
+      setPendingSubmission({
+        sessionId: "s1",
+        submission: {
+          submissionId: "sub-1",
+          status: "resolving-context",
+          insertion: { kind: "append" },
+          displayContent: "typed",
+          startedAt: Date.now(),
+        },
+      }),
+    );
+
+    store.dispatch(
+      markPendingSubmissionCommitted({
+        sessionId: "s1",
+        submissionId: "other",
+        committedUserMessageId: "u-new",
+      }),
+    );
+    expect(session(store).pendingSubmission.status).toBe("resolving-context");
+  });
+
+  it("drops the awaiting-stream state when the stream actually starts", () => {
+    const store = makeStore();
+    store.dispatch(
+      setPendingSubmission({
+        sessionId: "s1",
+        submission: {
+          submissionId: "sub-1",
+          status: "committed-awaiting-stream",
+          committedUserMessageId: "u-new",
+          insertion: { kind: "append" },
+          displayContent: "typed",
+          startedAt: Date.now(),
+        },
+      }),
+    );
+
+    // From here `isStreaming` owns the border, so the presentation state is no longer needed.
+    store.dispatch(beginSessionStream({ sessionId: "s1", requestId: "r1" }));
+    expect(session(store).pendingSubmission).toBeUndefined();
+  });
+});

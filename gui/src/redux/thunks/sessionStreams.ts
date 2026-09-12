@@ -16,7 +16,7 @@ import {
   selectSessionPendingToolCalls,
   selectSessionToolCalls,
 } from "../selectors/sessionToolCalls";
-import { recordSubmitLatency } from "../../util/submitLatency";
+import { noteGuiActivity, recordSubmitLatency } from "../../util/submitLatency";
 import {
   buildSessionCompletionOptions,
   resolveNativeTooling,
@@ -211,11 +211,13 @@ export const finishSessionStreamWorkflow = createAsyncThunk<
     // P4a: legacy message ID migration, "stream terminal" trigger. The save
     // above also kicks it, but no trigger is load-bearing on its own — each one
     // just says "this session may now be safe" and the schedule thunk decides.
-    // The awaited save: GUI payload build + IPC + Core's in-lock measurement + disk write.
-    // It is named `terminal-save` (not "...enqueue") because that is what it measures — the
-    // first real trace showed 3.6s here, which is worth watching.
+    // NB: this span is the **workflow**, not a disk write: it awaits `enqueueSessionSave`,
+    // which resolves when the session's save loop has drained — so it can cover several
+    // queued saves plus however long the webview took to resume after a main-thread stall.
+    // The per-save numbers are `save-attempt` → `save-response-received`; this one is only
+    // useful as an upper bound on "how long the terminal boundary took".
     recordSubmitLatency({
-      phase: "terminal-save",
+      phase: "terminal-save-workflow",
       sessionId,
       durationMs: performance.now() - beforeTerminalSave,
     });
@@ -705,6 +707,11 @@ async function streamModelTurn(
       ) {
         break;
       }
+      // Attributable activity: a stall that starts right after this names it, and the render
+      // that follows is measured as `chat-render-commit` (方案.md §7.2.4).
+      noteGuiActivity("stream-chunk", {
+        items: selectSessionById(getState(), sessionId)?.history.length ?? 0,
+      });
       dispatch(
         applySessionStreamUpdate({
           sessionId,

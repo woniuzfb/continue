@@ -12,6 +12,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,7 +30,10 @@ import ContinueInputBox from "../../components/mainInput/ContinueInputBox";
 import { AttachmentMeta, AttachedFile } from "../../components/mainInput/types";
 import { useOnboardingCard } from "../../components/OnboardingCard";
 import StepContainer from "../../components/StepContainer";
-import { pendingSubmissionTargetIndex } from "../../redux/util/pendingSubmission";
+import {
+  pendingSubmissionTargetIndex,
+  shouldRenderPendingSubmission,
+} from "../../redux/util/pendingSubmission";
 import { PendingSubmissionItem } from "../../components/StepContainer/PendingSubmissionItem";
 import { SyntheticConversationSummary } from "../../components/StepContainer/SyntheticConversationSummary";
 import { IdeMessengerContext } from "../../context/IdeMessenger";
@@ -70,6 +74,7 @@ import { RootState } from "../../redux/store";
 import { stopActiveSessionStream } from "../../redux/thunks/sessionStreams";
 import { getLocalStorage, setLocalStorage } from "../../util/localStorage";
 import {
+  noteRenderCommit,
   setSubmitLatencyLoggingEnabled,
   startMainThreadStallDetector,
   stopMainThreadStallDetector,
@@ -85,6 +90,7 @@ import {
   useSessionHistory,
   useSessionIsInEdit,
   useSessionIsStreaming,
+  useSessionAwaitingStreamMessageId,
   useSessionMode,
   useSessionPagination,
   useSessionPendingSubmission,
@@ -174,6 +180,9 @@ export function Chat() {
   // The draft for a send that is still being prepared. It is never a history item, so it
   // is rendered separately — appended after the transcript, or in place of its target.
   const pendingSubmission = useSessionPendingSubmission();
+  // Committed-but-not-streaming: that bubble keeps the animated border while the full history
+  // is read and the submit save is enqueued (方案.md §7.2.5).
+  const awaitingStreamMessageId = useSessionAwaitingStreamMessageId();
   const pendingTargetIndex = pendingSubmissionTargetIndex(
     history,
     pendingSubmission,
@@ -210,6 +219,14 @@ export function Chat() {
   }, []);
 
   useAutoScroll(stepsDivRef, history, sessionId, jumpSuppressRef);
+
+  // Runs after React commits the transcript DOM (before paint). Paired with
+  // `noteGuiActivity`, it measures "activity → committed" — the part a production build
+  // cannot get from `Profiler`, whose `onRender` only fires in the profiling React build
+  // (方案.md §7.2.4).
+  useLayoutEffect(() => {
+    noteRenderCommit(history.length);
+  }, [history]);
 
   useEffect(() => {
     // 方案.md §九.2: every tab keeps its tree mounted, so a global listener
@@ -571,6 +588,7 @@ export function Chat() {
               })
             }
             attachments={attachments}
+            awaitingStream={message.id === awaitingStreamMessageId}
             isLastUserInput={isLastUserInput(index)}
             isMainInput={false}
             editorState={editorState ?? item.message.content}
@@ -779,14 +797,16 @@ export function Chat() {
               {index === history.length - 1 && <InlineErrorMessage />}
               {/* A replace draft renders where its target is — never at the tail, which
                   would make an edit/resend look like a new message. */}
-              {index === pendingTargetIndex && pendingSubmission && (
-                <PendingSubmissionItem pending={pendingSubmission} />
-              )}
+              {index === pendingTargetIndex &&
+                shouldRenderPendingSubmission(pendingSubmission) && (
+                  <PendingSubmissionItem pending={pendingSubmission!} />
+                )}
             </div>
           ))}
-        {pendingSubmission?.insertion.kind === "append" && (
-          <PendingSubmissionItem pending={pendingSubmission} />
-        )}
+        {pendingSubmission?.insertion.kind === "append" &&
+          shouldRenderPendingSubmission(pendingSubmission) && (
+            <PendingSubmissionItem pending={pendingSubmission} />
+          )}
       </StepsDiv>
       <div className={"relative shrink-0"}>
         <InterruptedSessionBanner />

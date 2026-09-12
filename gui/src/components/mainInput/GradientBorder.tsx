@@ -14,6 +14,13 @@ export const GradientBorder = styled.div<{
   borderColor?: string;
   loading: 0 | 1;
 }>`
+  /* The 1px padding is the visible border, drawn outside the content box by default:
+     without border-box the element is 2px wider than its parent, and the right edge gets
+     clipped by the transcript's overflow (reported as "the coloured border looks cut off on
+     the right"). min/max-width keep it honest inside flex parents too. */
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   border-radius: ${(props) => props.borderRadius || "0"};
   padding: 1px;
   background: ${(props) =>

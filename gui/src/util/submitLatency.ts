@@ -38,12 +38,14 @@ export type SubmitLatencyPhase =
   | "save-payload"
   | "save-attempt"
   | "main-thread-stall"
+  | "stream-chunk"
+  | "chat-render-commit"
   | "save-request-sent"
   | "save-response-received"
   | "stream-start"
   | "terminal-commit"
   | "terminal-identity"
-  | "terminal-save";
+  | "terminal-save-workflow";
 
 export type SubmitLatencyEvent = {
   phase: SubmitLatencyPhase;
@@ -71,6 +73,15 @@ export type SubmitLatencyEvent = {
   };
   /** Approximate size of a payload the phase built, in MB (cheap length sum, no copy). */
   payloadMB?: number;
+  /** How many history rows were in the window when the phase ran. */
+  items?: number;
+  /** Size of a stream chunk in characters (never its content). */
+  chars?: number;
+  /**
+   * The last GUI activity before a stall. A stall clock says the thread was blocked; this
+   * says what it was blocked on, which no duration alone can.
+   */
+  after?: string;
   /**
    * Epoch milliseconds (same clock as the extension host). Durations alone cannot tell
    * whether a slow save was waiting before Core's handler started, inside it, or after it
@@ -155,6 +166,15 @@ export function recordSubmitLatency(event: SubmitLatencyEvent): void {
     if (event.at !== undefined) {
       details.push(`at=${event.at}`);
     }
+    if (event.items !== undefined) {
+      details.push(`items=${event.items}`);
+    }
+    if (event.chars !== undefined) {
+      details.push(`chars=${event.chars}`);
+    }
+    if (event.after !== undefined) {
+      details.push(`after=${event.after}`);
+    }
     if (event.insertion !== undefined) {
       details.push(event.insertion);
     }
@@ -193,6 +213,20 @@ export function stallFromTick(
 let stallTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
+ * Reports a stall with the activity that was running when the thread stopped yielding.
+ * Extracted from the timer so the attribution can be tested without a real 3.6s block.
+ */
+export function reportMainThreadStall(overrunMs: number): void {
+  recordSubmitLatency({
+    phase: "main-thread-stall",
+    sessionId: "-",
+    durationMs: overrunMs,
+    after: lastActivity?.name,
+    items: lastActivity?.items,
+  });
+}
+
+/**
  * Watches for main-thread stalls (workflow "submit latency and retry boundary").
  *
  * Why: a save response that the host answered in 8ms was observed taking 3446ms to reach
@@ -214,11 +248,7 @@ export function startMainThreadStallDetector(): void {
       const stall = stallFromTick(MAIN_THREAD_STALL_TICK_MS, now - last);
       last = now;
       if (stall !== undefined) {
-        recordSubmitLatency({
-          phase: "main-thread-stall",
-          sessionId: "-",
-          durationMs: stall,
-        });
+        reportMainThreadStall(stall);
       }
     }, MAIN_THREAD_STALL_TICK_MS);
   } catch {
@@ -232,6 +262,49 @@ export function stopMainThreadStallDetector(): void {
     clearInterval(stallTimer);
     stallTimer = undefined;
   }
+}
+
+/**
+ * The last thing the GUI started doing, for attributing a stall.
+ *
+ * Only one is kept: a stall is caused by whatever was running when the thread stopped
+ * yielding, and that is the most recent activity. Consumed by `noteRenderCommit`, so a
+ * stall that happens after a commit reports the activity that led to it.
+ */
+let lastActivity: { name: string; at: number; items?: number } | undefined;
+
+/** Marks the start of a GUI activity worth attributing a stall or a render to. */
+export function noteGuiActivity(
+  name: string,
+  options: { items?: number } = {},
+): void {
+  if (!loggingEnabled) {
+    return;
+  }
+  lastActivity = { name, at: performance.now(), items: options.items };
+}
+
+/**
+ * Called from the transcript's layout effect, i.e. after React has committed the DOM for the
+ * activity recorded by `noteGuiActivity`. The delta is therefore "arrival → committed", which
+ * is the part a chunk cannot avoid.
+ *
+ * Not a `Profiler`: `onRender` is only invoked in the profiling build of React, and the shipped
+ * webview is a plain production build, so it would silently measure nothing.
+ */
+export function noteRenderCommit(items: number): void {
+  if (!loggingEnabled || !lastActivity) {
+    return;
+  }
+  const activity = lastActivity;
+  lastActivity = undefined;
+  recordSubmitLatency({
+    phase: "chat-render-commit",
+    sessionId: "-",
+    durationMs: performance.now() - activity.at,
+    items,
+    after: activity.name,
+  });
 }
 
 /**

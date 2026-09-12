@@ -10,7 +10,12 @@ import { resetSessionStreamCheckpoints } from "./sessionStreams";
 import { resetSessionStreamRunner } from "./sessionTools";
 import { submitSessionInput } from "./sessionSubmit";
 import { captureSubmitLatencyLines } from "../../util/test/submitLatencyCapture";
-import { setSubmitLatencyLoggingEnabled } from "../../util/submitLatency";
+import {
+  noteGuiActivity,
+  noteRenderCommit,
+  reportMainThreadStall,
+  setSubmitLatencyLoggingEnabled,
+} from "../../util/submitLatency";
 import { resolveEditorContent } from "../../components/mainInput/TipTapEditor/utils/resolveEditorContent";
 
 /**
@@ -218,6 +223,40 @@ describe("submit diagnostics — the debug switch", () => {
   });
 });
 
+describe("submit diagnostics — stall attribution", () => {
+  beforeEach(() => {
+    capture = installSubmitLatencyCapture();
+  });
+
+  it("attributes a stall to the activity that was running", () => {
+    noteGuiActivity("stream-chunk", { items: 842 });
+    // A stall reports what the thread was busy with, which no duration can say.
+    reportMainThreadStall(3625);
+    const line = capture.lines().at(-1) ?? "";
+    expect(line).toContain("main-thread-stall");
+    expect(line).toContain("after=stream-chunk");
+    expect(line).toContain("items=842");
+  });
+
+  it("measures activity → committed, and only once per activity", () => {
+    noteGuiActivity("stream-chunk", { items: 10 });
+    noteRenderCommit(10);
+    const commits = capture
+      .events()
+      .filter((event) => event.phase === "chat-render-commit");
+    expect(commits).toHaveLength(1);
+    expect(commits[0].after).toBe("stream-chunk");
+    expect(commits[0].items).toBe(10);
+
+    // A later render with no activity behind it (a tab switch, a dialog) is not attributed to
+    // a chunk: the breadcrumb was consumed.
+    noteRenderCommit(10);
+    expect(
+      capture.events().filter((event) => event.phase === "chat-render-commit"),
+    ).toHaveLength(1);
+  });
+});
+
 describe("submit diagnostics — default state", () => {
   it("starts with logging disabled", async () => {
     vi.resetModules();
@@ -263,7 +302,7 @@ describe("submit diagnostics — latency events", () => {
     expect(phases.has("stream-start")).toBe(true);
     // …and the terminal side, which runs in the terminal commit's own task.
     expect(phases.has("terminal-commit")).toBe(true);
-    expect(phases.has("terminal-save")).toBe(true);
+    expect(phases.has("terminal-save-workflow")).toBe(true);
     // One line per save the loop runs, so a span that covers several queued saves can be
     // decomposed (and the reason says which boundary it was).
     expect(phases.has("save-attempt")).toBe(true);
