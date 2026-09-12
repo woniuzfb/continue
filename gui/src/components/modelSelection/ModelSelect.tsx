@@ -239,22 +239,9 @@ function ModelSelect() {
         );
         let nextIndex = (currentIndex + 1 * direction) % options.length;
         if (nextIndex < 0) nextIndex = options.length - 1;
-        const newModelTitle = options[nextIndex].value;
-
-        void dispatch(
-          updateSelectedModelByRole({
-            selectedProfile,
-            role: "chat",
-            modelTitle: newModelTitle,
-          }),
-        );
-        // The session records its own model choice (方案.md §七.8).
-        void dispatch(
-          setSessionChatModelAndSave({
-            sessionId: activeSessionId,
-            chatModelTitle: newModelTitle,
-          }),
-        );
+        // The option value is the stable identity key, so the shared handler is what resolves it
+        // (方案.md §7.5.4).
+        selectModelOption(options[nextIndex].value);
       }
     };
 
@@ -263,6 +250,34 @@ function ModelSelect() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [visible, options, selectedModel]);
+
+  /**
+   * 方案.md §7.5.4: the one place that turns an option **key** into a model choice. Both the click
+   * and the keyboard path go through it, because the key is a stable identity and not a title —
+   * passing it as `chatModelTitle` (as the shortcut path used to) resolved to no entry at all, so
+   * the shortcut silently stopped updating the session's model.
+   */
+  function selectModelOption(optionKey: string): void {
+    const chatModelRef = modelRefFromOptionKey(optionKey);
+    if (!chatModelRef) {
+      return;
+    }
+    void dispatch(
+      updateSelectedModelByRole({
+        selectedProfile,
+        role: isInEdit ? "edit" : "chat",
+        modelTitle: chatModelRef.title,
+      }),
+    );
+    if (!isInEdit) {
+      void dispatch(
+        setSessionChatModelAndSave({
+          sessionId: activeSessionId,
+          chatModelRef,
+        }),
+      );
+    }
+  }
 
   function onClickAddModel(e: MouseEvent) {
     e.stopPropagation();
@@ -296,26 +311,8 @@ function ModelSelect() {
   return (
     <Listbox
       onChange={async (val: string) => {
-        // The option value is the stable identity key, so a duplicated title cannot be collapsed
-        // into "the first entry with that title" (方案.md §7.5.4).
-        const chatModelRef = modelRefFromOptionKey(val);
-        if (!chatModelRef) return;
         if (modelOptionKey(selectedModel ?? {}) === val) return;
-        void dispatch(
-          updateSelectedModelByRole({
-            selectedProfile,
-            role: isInEdit ? "edit" : "chat",
-            modelTitle: chatModelRef.title,
-          }),
-        );
-        if (!isInEdit) {
-          void dispatch(
-            setSessionChatModelAndSave({
-              sessionId: activeSessionId,
-              chatModelRef,
-            }),
-          );
-        }
+        selectModelOption(val);
       }}
     >
       <div className="relative flex">
