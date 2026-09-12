@@ -35,7 +35,9 @@ export function PendingSubmissionItem({
           message, on its way" rather than as a separate status card (方案.md §7.2.5). Text
           only on the inside: no ProseMirror instance is created for a draft. */}
       <GradientBorder loading={1} borderRadius={defaultBorderRadius}>
-        <div className="bg-input w-full min-w-0 rounded-md px-2 py-1">
+        {/* `box-border` is not optional here: Tailwind preflight is disabled in this project,
+            so `w-full` + `px-2` would be 16px wider than the border it sits inside. */}
+        <div className="bg-input box-border w-full min-w-0 rounded-md px-2 py-1">
           <div className="text-description-muted flex items-center gap-1 text-xs">
             <span>
               Preparing

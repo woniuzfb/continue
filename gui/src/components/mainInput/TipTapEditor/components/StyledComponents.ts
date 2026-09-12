@@ -11,6 +11,14 @@ import {
 import { getFontSize } from "../../../../util";
 
 export const InputBoxDiv = styled.div<{}>`
+  /* width:100% + a 1px border is 2px wider than its parent under content-box, which pushed
+     this element over the GradientBorder's 1px padding and covered the right edge of the
+     coloured border (reported as "the border looks cut off on the right"). Tailwind preflight
+     is disabled in this project (tailwind.config.cjs sets preflight:false), so there is no
+     global border-box reset to lean on: every width:100% box with a border or horizontal
+     padding has to state it. It also keeps the 1px -> 0.5px focus border from shifting layout. */
+  box-sizing: border-box;
+  max-width: 100%;
   resize: none;
   font-family: inherit;
   border-radius: 0.5rem;
