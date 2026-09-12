@@ -48,9 +48,27 @@ export default function StepContainer(props: StepContainerProps) {
       toolCall.status === "calling",
   );
 
-  const showResponseActions =
-    (props.isLast || historyItemAfterThis?.message.role === "user") &&
-    !(props.isLast && (isStreaming || hasActiveToolCalls));
+  /**
+   * 方案.md §7.2.7: the row's box has to be in the DOM **before** the stream ends.
+   *
+   * `mt-2 h-7` is 36px. Mounting it in the commit that flips `isStreaming` to false resized the
+   * transcript at the exact instant the last user bubble switched from the animated border to the
+   * static history style: in a bottom-pinned view every row above the new box shifts, and the reply
+   * appears to jump when it finishes. The original implementation kept the box mounted for this
+   * reason ("We want to occupy space in the DOM regardless of whether the actions are visible to
+   * avoid jank on stream complete") and that was lost in 1c4f983c9; the buttons are what may come
+   * and go, never the box.
+   */
+  const willShowResponseActions =
+    props.isLast || historyItemAfterThis?.message.role === "user";
+  /** True while the buttons themselves must stay unmounted (row still occupies its space). */
+  const reserveResponseActions =
+    props.isLast && (isStreaming || hasActiveToolCalls);
+  const responseActionsOpacity = reserveResponseActions
+    ? "opacity-0"
+    : isBeforeLatestSummary || isStreaming
+      ? "opacity-35"
+      : "";
 
   useEffect(() => {
     if (!isStreaming) {
@@ -128,18 +146,23 @@ export default function StepContainer(props: StepContainerProps) {
         </div>
       )}
 
-      {showResponseActions && (
+      {willShowResponseActions && (
         <div
-          className={`mt-2 h-7 transition-opacity duration-300 ease-in-out ${isBeforeLatestSummary || isStreaming ? "opacity-35" : ""} ${isStreaming && "pointer-events-none cursor-not-allowed"}`}
+          data-testid="response-actions-row"
+          className={`mt-2 h-7 transition-opacity duration-300 ease-in-out ${responseActionsOpacity} ${
+            isStreaming || reserveResponseActions ? "pointer-events-none" : ""
+          } ${isStreaming ? "cursor-not-allowed" : ""}`}
         >
-          <ResponseActions
-            isTruncated={isTruncated}
-            onDelete={onDelete}
-            onContinueGeneration={onContinueGeneration}
-            index={props.index}
-            item={props.item}
-            isLast={props.isLast}
-          />
+          {!reserveResponseActions && (
+            <ResponseActions
+              isTruncated={isTruncated}
+              onDelete={onDelete}
+              onContinueGeneration={onContinueGeneration}
+              index={props.index}
+              item={props.item}
+              isLast={props.isLast}
+            />
+          )}
         </div>
       )}
 

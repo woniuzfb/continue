@@ -192,6 +192,9 @@ function ContinueInputBox(props: ContinueInputBoxProps) {
                   : "#1BBE84"
           }
           borderRadius={defaultBorderRadius}
+          // Only the main input keeps the state-dependent 8px gap; a history bubble must not
+          // move when its reply starts or finishes (方案.md §7.2.7).
+          isMainInput={props.isMainInput}
         >
           {showStaticPreview ? (
             // 静态预览:结构与 TipTapEditor 一致(InputBoxDiv > 内边距层 >

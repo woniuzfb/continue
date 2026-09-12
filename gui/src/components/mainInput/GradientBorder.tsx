@@ -13,6 +13,19 @@ export const GradientBorder = styled.div<{
   borderRadius?: string;
   borderColor?: string;
   loading: 0 | 1;
+  /**
+   * The 8px gap above the animated border belongs to the **main input** only.
+   *
+   * It used to key off `loading`, i.e. exactly while the bubble's reply streamed: a history bubble
+   * — and every row below it — sat 8px lower for the whole reply and snapped back up in the same
+   * commit that switched the border from the animated gradient to the static brand green, which is
+   * the "slight jump when the reply finishes". A box that only changes state must not change
+   * geometry, so the gap is tied to the box's role instead (方案.md §7.2.7).
+   *
+   * The spacing the old margin was compensating for while streaming is now provided by the
+   * always-reserved response-actions row in `StepContainer`.
+   */
+  isMainInput?: boolean;
 }>`
   /* The 1px padding is the visible border, drawn outside the content box by default:
      without border-box the element is 2px wider than its parent, and the right edge gets
@@ -42,5 +55,5 @@ export const GradientBorder = styled.div<{
   display: flex;
   flex-direction: row;
   align-items: center;
-  margin-top: ${(props) => (props.loading ? "8px" : "")};
+  margin-top: ${(props) => (props.loading && props.isMainInput ? "8px" : "")};
 `;
