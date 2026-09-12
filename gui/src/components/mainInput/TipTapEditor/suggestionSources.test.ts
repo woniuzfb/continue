@@ -2,15 +2,22 @@ import { describe, expect, it } from "vitest";
 import { suggestionItemsEqual, tipTapEditorPropsEqual } from "./TipTapEditor";
 
 /**
- * 方案.md §7.5.6：同一长度的不同内容必须重渲染（隐藏窗口尤其如此）。
+ * 方案.md §7.5.6: the editor must re-read its suggestion sources whenever they are **replaced**.
  *
- * 恢复旧的"只比长度"实现时，本文件第 1、2 条必须变红。
+ * `availableSlashCommandsRef` / `availableContextProviders` are consumed by the suggestion
+ * dropdowns (`description`, `content`, `type`, `action`, …), so "same id and title" is not "same
+ * behaviour": a command can keep its id/title while its prompt text or action changes, and a
+ * provider can keep its title while its configuration changes. The safe boundary is the
+ * immutable-array reference the config layer already produces.
+ *
+ * Restoring either the length-only comparison or the id/title comparison makes the same-id cases
+ * below go red.
  */
 
-const COMMAND_FOO = { id: "/foo", title: "/foo", description: "foo" };
-const COMMAND_BAR = { id: "/bar", title: "/bar", description: "bar" };
+const COMMAND_FOO = { id: "/foo", title: "/foo", content: "old prompt" };
 const PROVIDER_A = { title: "file", displayTitle: "File" };
-const PROVIDER_B = { title: "docs", displayTitle: "Docs" };
+const COMMANDS = [COMMAND_FOO];
+const PROVIDERS = [PROVIDER_A];
 
 function props(overrides: Record<string, unknown> = {}) {
   return {
@@ -21,64 +28,78 @@ function props(overrides: Record<string, unknown> = {}) {
     placeholder: undefined,
     historyKey: "chat",
     toolbarOptions: {},
-    availableContextProviders: [PROVIDER_A],
-    availableSlashCommands: [COMMAND_FOO],
+    // Deliberately the **same** array references as the default render.
+    availableContextProviders: PROVIDERS,
+    availableSlashCommands: COMMANDS,
     ...overrides,
   } as any;
 }
 
 describe("suggestionItemsEqual", () => {
-  it("treats the same length with different contents as different", () => {
-    expect(suggestionItemsEqual([COMMAND_FOO], [COMMAND_BAR])).toBe(false);
-    expect(suggestionItemsEqual([PROVIDER_A], [PROVIDER_B])).toBe(false);
-  });
-
-  it("treats an equivalent rebuilt array as equal", () => {
-    expect(suggestionItemsEqual([{ ...COMMAND_FOO }], [COMMAND_FOO])).toBe(
-      true,
-    );
-    expect(suggestionItemsEqual([], [])).toBe(true);
+  it("is reference equality", () => {
+    expect(suggestionItemsEqual(COMMANDS, COMMANDS)).toBe(true);
     expect(suggestionItemsEqual(undefined, undefined)).toBe(true);
-  });
-
-  it("notices a changed length and a missing side", () => {
-    expect(suggestionItemsEqual([COMMAND_FOO], [])).toBe(false);
-    expect(suggestionItemsEqual([COMMAND_FOO], undefined)).toBe(false);
-    expect(suggestionItemsEqual(undefined, [COMMAND_FOO])).toBe(false);
+    expect(suggestionItemsEqual(COMMANDS, [COMMAND_FOO])).toBe(false);
   });
 });
 
 describe("tipTapEditorPropsEqual (memo equality)", () => {
-  it("re-renders when slash commands change without changing the count", () => {
-    // The reported failure: a hidden tab whose command set changed kept serving the old one.
-    expect(
-      tipTapEditorPropsEqual(
-        props({ availableSlashCommands: [COMMAND_FOO] }),
-        props({ availableSlashCommands: [COMMAND_BAR] }),
-      ),
-    ).toBe(false);
-  });
-
-  it("re-renders when @ providers change without changing the count", () => {
-    expect(
-      tipTapEditorPropsEqual(
-        props({ availableContextProviders: [PROVIDER_A] }),
-        props({ availableContextProviders: [PROVIDER_B] }),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not re-render for an equivalent rebuild or an unrelated change", () => {
-    expect(
-      tipTapEditorPropsEqual(
-        props({ availableSlashCommands: [{ ...COMMAND_FOO }] }),
-        props({ availableSlashCommands: [COMMAND_FOO] }),
-      ),
-    ).toBe(true);
-    // Unrelated props still decide equality on their own.
+  it("does not re-render when both source arrays are the same references", () => {
     expect(tipTapEditorPropsEqual(props(), props())).toBe(true);
+  });
+
+  it("re-renders when a command keeps its id but changes its prompt", () => {
     expect(
-      tipTapEditorPropsEqual(props(), props({ inputId: "other-row" })),
+      tipTapEditorPropsEqual(
+        props(),
+        props({
+          availableSlashCommands: [
+            { id: "/foo", title: "/foo", content: "new prompt" },
+          ],
+        }),
+      ),
     ).toBe(false);
+  });
+
+  it("re-renders when a command keeps its id but changes its action", () => {
+    expect(
+      tipTapEditorPropsEqual(
+        props(),
+        props({
+          availableSlashCommands: [
+            {
+              id: "/foo",
+              title: "/foo",
+              content: "old prompt",
+              action: () => {},
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("re-renders when the slash commands are replaced without changing the count", () => {
+    expect(
+      tipTapEditorPropsEqual(
+        props(),
+        props({ availableSlashCommands: [{ id: "/bar", title: "/bar" }] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("re-renders when the @ providers are replaced without changing the count", () => {
+    expect(
+      tipTapEditorPropsEqual(
+        props(),
+        props({ availableContextProviders: [{ title: "docs" }] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("still compares the unrelated props", () => {
+    expect(tipTapEditorPropsEqual(props(), props({ inputId: "row-2" }))).toBe(
+      false,
+    );
   });
 });

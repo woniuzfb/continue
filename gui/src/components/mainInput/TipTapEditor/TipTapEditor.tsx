@@ -772,31 +772,27 @@ function toolbarOptionsEqual(a?: ToolbarOptions, b?: ToolbarOptions) {
  * upstream rebuild of an equivalent array does not (which is why the reviewer asked for this
  * rather than simply dropping the fields from the comparator).
  */
-type SuggestionItemIdentity = {
-  id?: string;
-  title?: string;
-  /** `ContextProviderDescription` carries `title`; commands carry `id`. */
-  displayTitle?: string;
-};
-
-export function suggestionItemsEqual(
-  previous: SuggestionItemIdentity[] | undefined,
-  next: SuggestionItemIdentity[] | undefined,
+/**
+ * 方案.md §7.5.6: the only safe boundary for "the sources did not change" is **reference
+ * identity** of the arrays.
+ *
+ * Comparing identity *fields* (`id`/`title`) still let real changes through: a workspace command
+ * can keep its id and title while its `content` (the prompt that is actually inserted), its
+ * `description`, its `action` or its source changes, and a context provider can keep its title
+ * while its configuration changes. In every one of those cases the editor did not re-render,
+ * `useUpdatingRef` kept the old array, and the window kept serving the old prompt/behaviour.
+ *
+ * Enumerating the consumed fields instead would only move the bug to the next field added to
+ * `ComboBoxItem`, so the comparison is the immutable-array reference the Redux/config layer
+ * already produces (the arrays are built with `useMemo`, so a normal render reuses the same one,
+ * and a real change produces a new one). Re-running the component function on a new reference
+ * costs one light render; `useEditor` and the extensions keep their existing lifecycle.
+ */
+export function suggestionItemsEqual<T>(
+  previous: T[] | undefined,
+  next: T[] | undefined,
 ): boolean {
-  if (previous === next) {
-    return true;
-  }
-  if (!previous || !next || previous.length !== next.length) {
-    return false;
-  }
-  return previous.every((item, index) => {
-    const candidate = next[index];
-    return (
-      item.id === candidate.id &&
-      item.title === candidate.title &&
-      item.displayTitle === candidate.displayTitle
-    );
-  });
+  return previous === next;
 }
 
 /** Exported for tests: the memo equality of the editor. */

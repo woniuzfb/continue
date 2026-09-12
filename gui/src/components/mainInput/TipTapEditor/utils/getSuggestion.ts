@@ -52,7 +52,9 @@ function getSuggestion(
           const container = document.getElementById(popupContainerId);
 
           if (!container) {
-            console.log("no container", popupContainerId);
+            // Abnormal in practice: this editor's own container is missing (it is rendered with
+            // the editor), so the menu cannot be mounted.
+            console.warn("no popup container for", popupContainerId);
             return;
           }
 
