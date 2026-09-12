@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMockStore } from "../../util/test/mockStore";
+import { INITIAL_CONFIG_SLICE } from "../slices/configSlice";
 import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
@@ -12,6 +13,7 @@ import {
   loadFullHistory,
   loadFullRequestHistory,
   loadMoreHistory,
+  reconcilePaginationAfterPersist,
 } from "./sessionPaging";
 
 function item(
@@ -604,5 +606,152 @@ describe("sessionPaging.loadFullRequestHistory (方案.md §7.2.6)", () => {
         }),
       ),
     ).rejects.toThrow("session disappeared while loading");
+  });
+});
+
+describe("sessionPaging.reconcilePaginationAfterPersist (方案.md §7.2.8)", () => {
+  /** A window of `count` rows on top of `headCount` frozen disk items. */
+  function windowed(count: number, headCount = 10) {
+    const history: ChatHistoryItemWithMessageId[] = [];
+    for (let i = 0; i < count; i++) {
+      history.push(
+        item(`m${i}`, i % 2 === 0 ? "user" : "assistant", `row ${i}`),
+      );
+    }
+    return initialSessionRuntime("s1", "Chat 1", {
+      history,
+      pagination: {
+        truncated: true,
+        loadedOffset: headCount,
+        loadedDiskCount: count,
+        hasMore: true,
+        loading: false,
+        requestGeneration: 0,
+        persistPending: false,
+      },
+      persistence: {
+        state: "clean",
+        revision: 3,
+        persistedRevision: 3,
+        hasPersistedBaseline: true,
+      },
+    });
+  }
+
+  function storeWithWindow(
+    count: number,
+    visibleHistoryCount: number,
+    options: { lazyLoad?: boolean; activeSessionId?: string } = {},
+  ) {
+    const session = windowed(count);
+    session.visibleHistoryCount = visibleHistoryCount;
+    return createMockStore({
+      sessions: {
+        activeSessionId: options.activeSessionId ?? "s1",
+        tabOrder: ["s1", "s2"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Chat 1", loadState: "loaded" },
+          s2: { sessionId: "s2", title: "Chat 2", loadState: "loaded" },
+        },
+        sessionsById: {
+          s1: session,
+          s2: initialSessionRuntime("s2", "Chat 2", {}),
+        },
+      },
+      config: {
+        ...INITIAL_CONFIG_SLICE,
+        config: {
+          ...INITIAL_CONFIG_SLICE.config,
+          ui: {
+            lazyLoadHistory: options.lazyLoad ?? true,
+            lazyLoadHistoryInitialCount: 4,
+          },
+        },
+      },
+    });
+  }
+
+  it("keeps every row the viewport is showing", async () => {
+    // 12 rows, 4 of them off-screen: the trim may release those 4 and nothing else.
+    const store = storeWithWindow(12, 8);
+    await run(
+      store,
+      reconcilePaginationAfterPersist({
+        sessionId: "s1",
+        savedRevision: 3,
+        totalHistoryCount: 10 + 12,
+      }),
+    );
+
+    const session = selectSessionById(store.getState() as any, "s1")!;
+    expect(session.history.map((i) => i.message.id)).toEqual([
+      "m4",
+      "m5",
+      "m6",
+      "m7",
+      "m8",
+      "m9",
+      "m10",
+      "m11",
+    ]);
+    expect(session.pagination.loadedOffset).toBe(14);
+  });
+
+  it("trims down to the limit when nothing is on screen", async () => {
+    // A session that is not visible has no floor: the memory win stays exactly as designed.
+    const store = storeWithWindow(12, 0);
+    await run(
+      store,
+      reconcilePaginationAfterPersist({
+        sessionId: "s1",
+        savedRevision: 3,
+        totalHistoryCount: 10 + 12,
+      }),
+    );
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.history,
+    ).toHaveLength(4);
+  });
+
+  it("uses the session's own reported count, whatever tab is active", async () => {
+    // §五.20: this thunk must never resolve the visible session itself. The view that shows a
+    // session owns both writing this number and clearing it (see the useAutoScroll cleanup), so
+    // the active tab is irrelevant here — a background session's view has already zeroed it.
+    const store = storeWithWindow(12, 5, { activeSessionId: "s2" });
+    await run(
+      store,
+      reconcilePaginationAfterPersist({
+        sessionId: "s1",
+        savedRevision: 3,
+        totalHistoryCount: 10 + 12,
+      }),
+    );
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.history,
+    ).toHaveLength(5);
+  });
+
+  it("does not trim at all while the reply is still streaming", async () => {
+    const store = storeWithWindow(12, 8);
+    store.dispatch({
+      type: "sessions/beginSessionStream",
+      payload: {
+        sessionId: "s1",
+        requestId: "r1",
+        aborter: new AbortController(),
+      },
+    } as any);
+
+    await run(
+      store,
+      reconcilePaginationAfterPersist({
+        sessionId: "s1",
+        savedRevision: 3,
+        totalHistoryCount: 10 + 12,
+      }),
+    );
+    expect(
+      selectSessionById(store.getState() as any, "s1")!.history,
+    ).toHaveLength(12);
   });
 });

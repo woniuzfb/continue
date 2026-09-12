@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useAppDispatch, useAppSelector } from "../../redux/hooks";
 import { useStore } from "react-redux";
 import type { RootState } from "../../redux/store";
@@ -9,6 +16,7 @@ import {
   useSessionIsHistoryLoading,
   useSessionIsStreaming,
 } from "../../redux/selectors/sessionView";
+import { setSessionVisibleHistoryCount } from "../../redux/slices/sessionsSlice";
 
 /**
  * Only reset scroll state when a new user message is added to the chat.
@@ -252,6 +260,64 @@ export const useAutoScroll = (
     }
   }, [history.length, ref]);
 
+  /**
+   * 方案.md §7.2.8: report how many trailing window rows the viewport is showing, so the
+   * post-save trim can never delete a row the user is looking at.
+   *
+   * Counted from the first row whose bottom edge is still below the container's top edge — the
+   * rows above it are off-screen and free to release. Deliberately reports `0` when no row can
+   * be found: "nothing measurable on screen" must not keep rows alive by accident.
+   *
+   * Dispatched only when the number changes, and the reducer ignores equal values, so scroll
+   * traffic cannot turn into render traffic.
+   */
+  const reportVisibleRows = useCallback(() => {
+    const elem = ref.current;
+    if (
+      !elem ||
+      typeof elem.getBoundingClientRect !== "function" ||
+      typeof elem.querySelectorAll !== "function"
+    ) {
+      // Measurement is best-effort: a container without layout cannot report visibility, and a
+      // stale floor would pin memory for rows nobody can see. "Nothing measured" is 0.
+      dispatch(setSessionVisibleHistoryCount({ sessionId, count: 0 }));
+      return;
+    }
+    const containerTop = elem.getBoundingClientRect().top;
+    const firstVisible = Array.from(
+      elem.querySelectorAll<HTMLElement>("[data-message-id]"),
+    ).find((node) => node.getBoundingClientRect().bottom > containerTop);
+    const messageId = firstVisible?.dataset.messageId;
+    const index =
+      messageId === undefined
+        ? -1
+        : history.findIndex((item) => item.message.id === messageId);
+    dispatch(
+      setSessionVisibleHistoryCount({
+        sessionId,
+        count: index < 0 ? 0 : history.length - index,
+      }),
+    );
+  }, [ref, history, sessionId, dispatch]);
+
+  // Re-measure whenever the window changes (a new turn, a prepend, a trim) and once per paint
+  // after layout settles — rows change height as markdown and code blocks render.
+  useLayoutEffect(() => {
+    reportVisibleRows();
+    const frame = requestAnimationFrame(reportVisibleRows);
+    return () => cancelAnimationFrame(frame);
+  }, [reportVisibleRows]);
+
+  // 方案.md §7.2.8: the view owns this measurement, so it also owns clearing it. When this view
+  // stops showing this session, its number must not linger: a stale floor would hold rows alive
+  // that nobody can see, and the save path deliberately never resolves the visible session
+  // itself to find out (§五.20 — only the shell reads `activeSessionId`).
+  useLayoutEffect(() => {
+    return () => {
+      dispatch(setSessionVisibleHistoryCount({ sessionId, count: 0 }));
+    };
+  }, [sessionId, dispatch]);
+
   useEffect(() => {
     if (!ref.current || history.length === 0) return;
 
@@ -267,6 +333,7 @@ export const useAutoScroll = (
 
         saveSessionScrollPosition(sessionId, elem);
         setUserHasScrolled(!isAtBottom);
+        reportVisibleRows();
 
         // 顶部检测：触发懒加载
         // streaming 期间禁止 prepend：core 在 stream 期间保存了 historyIndex 快照
@@ -308,6 +375,9 @@ export const useAutoScroll = (
     };
 
     const resizeObserver = new ResizeObserver(() => {
+      // Measured before the early returns below: a resize (a taller row, a new chunk of
+      // markdown) changes what is visible even when auto-bottom is skipped.
+      reportVisibleRows();
       const elem = ref.current;
       if (!elem || userHasScrolled) return;
       if (isRestoringSessionScrollRef.current) return;
@@ -341,6 +411,7 @@ export const useAutoScroll = (
     isStreaming,
     sessionId,
     dispatch,
+    reportVisibleRows,
   ]);
 
   // 组件卸载时清理超时和 prepend 标记

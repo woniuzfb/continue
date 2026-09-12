@@ -489,14 +489,30 @@ export const reconcilePaginationAfterPersist = createAsyncThunk<
       );
     }
 
+    // 方案.md §7.2.8: the floor comes from the session's own runtime state, written by the view
+    // that is showing it and zeroed when that view stops showing it. This thunk must never
+    // resolve the visible session itself (§五.20: only the shell reads `activeSessionId`), and
+    // it must not need to: a background session's view already zeroed its count on the way out.
+    const visibleFloor = session.visibleHistoryCount;
     const plan = planHistoryTrim(
       session,
       getLazyLoadTrimLimit(ui.lazyLoadHistoryInitialCount),
       totalHistoryCount,
+      visibleFloor,
     );
     if (!plan) {
       return false;
     }
+    // Gated diagnostic: without it, "the transcript shrank after the reply finished" can only
+    // be inferred from the row count in the next render. `items` is the window before the trim,
+    // `keepItems` what survives and `floorItems` what the viewport was showing.
+    recordSubmitLatency({
+      phase: "history-trim",
+      sessionId,
+      items: session.history.length,
+      keepItems: plan.keepCount,
+      floorItems: visibleFloor,
+    });
 
     dispatch(
       trimSessionHistoryWindow({

@@ -35,6 +35,18 @@ class FakeScrollElement {
   scrollHeight = 1000;
   clientHeight = 100;
   children = [{}] as unknown as HTMLCollection;
+  /** The hook measures visibility from the rendered rows (方案.md §7.2.8). */
+  rows: Array<{ dataset: { messageId: string }; top: number; bottom: number }> =
+    [];
+  getBoundingClientRect() {
+    return { top: 0 } as DOMRect;
+  }
+  querySelectorAll() {
+    return this.rows.map((row) => ({
+      dataset: row.dataset,
+      getBoundingClientRect: () => ({ top: row.top, bottom: row.bottom }),
+    })) as unknown as NodeListOf<HTMLElement>;
+  }
   private _scrollTop = 0;
   private listeners: Array<() => void> = [];
 
@@ -242,6 +254,18 @@ class ShrinkwrapScrollElement {
   children = [{}] as unknown as HTMLCollection;
   itemHeight = 30;
   historyLength = 0;
+  /** Same visibility contract as the scrollable fake above. */
+  rows: Array<{ dataset: { messageId: string }; top: number; bottom: number }> =
+    [];
+  getBoundingClientRect() {
+    return { top: 0 } as DOMRect;
+  }
+  querySelectorAll() {
+    return this.rows.map((row) => ({
+      dataset: row.dataset,
+      getBoundingClientRect: () => ({ top: row.top, bottom: row.bottom }),
+    })) as unknown as NodeListOf<HTMLElement>;
+  }
   private listeners: Array<() => void> = [];
 
   get scrollHeight() {
@@ -456,5 +480,151 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
     await settle();
 
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 方案.md §7.2.8: the viewport reports how many trailing rows it is showing, so the post-save
+ * trim can never delete a row the user is looking at. The measurement is the only thing standing
+ * between "release the frozen head" and "the transcript collapses while you read it".
+ */
+describe("useAutoScroll visible-row reporting (方案.md §7.2.8)", () => {
+  let element: FakeScrollElement;
+  let store: ReturnType<typeof createMockStore>;
+
+  beforeEach(() => {
+    ControllableResizeObserver.reset();
+    frames = new Map();
+    frameId = 0;
+    vi.stubGlobal("ResizeObserver", ControllableResizeObserver);
+    vi.stubGlobal("requestAnimationFrame", (cb: () => void) => {
+      const id = ++frameId;
+      frames.set(id, cb);
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      frames.delete(id);
+    });
+    element = new FakeScrollElement();
+    store = makeStore();
+  });
+
+  function makeStore() {
+    const state = getEmptyRootState() as any;
+    const runtime = initialSessionRuntime("s1", "Chat 1", {
+      history: buildHistory("s1", 4),
+    });
+    return createMockStore({
+      sessions: {
+        activeSessionId: "s1",
+        tabOrder: ["s1"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Chat 1", loadState: "loaded" },
+        },
+        sessionsById: { s1: runtime },
+      },
+      config: state.config,
+    });
+  }
+
+  const history = buildHistory("s1", 4); // 8 rows: msg-s1-0 … msg-s1-7
+
+  function mount(elementHistory = history) {
+    const hooks = renderHook(
+      ({ items }: { items: ChatHistoryItemWithMessageId[] }) => {
+        const ref = useRef<HTMLDivElement | null>(null);
+        (ref as { current: HTMLDivElement | null }).current =
+          element as unknown as HTMLDivElement;
+        useAutoScroll(ref as React.RefObject<HTMLDivElement>, items, "s1");
+        return null;
+      },
+      {
+        initialProps: { items: elementHistory },
+        wrapper: ({ children }) => (
+          <Provider store={store}>
+            <SessionScope sessionId="s1">{children}</SessionScope>
+          </Provider>
+        ),
+      },
+    );
+    act(() => {
+      flushFrames();
+    });
+    return hooks;
+  }
+
+  const reported = () =>
+    (store.getState() as any).sessions.sessionsById.s1.visibleHistoryCount;
+
+  /** Rows are laid out 100px tall starting at the container top (0). */
+  function layoutFrom(firstVisibleRow: number, items = history) {
+    element.rows = items.map((row, index) => ({
+      dataset: { messageId: row.message.id },
+      top: (index - firstVisibleRow) * 100,
+      bottom: (index - firstVisibleRow) * 100 + 100,
+    }));
+  }
+
+  it("reports the rows from the first visible row to the end", () => {
+    // Rows 0-5 are above the container top (bottom <= 0), so rows 6 and 7 are what is visible.
+    layoutFrom(6);
+    mount();
+    expect(reported()).toBe(2);
+  });
+
+  it("reports the whole window when nothing has scrolled past the top", () => {
+    layoutFrom(0);
+    mount();
+    expect(reported()).toBe(history.length);
+  });
+
+  it("reports nothing when no row is on screen", () => {
+    element.rows = [];
+    mount();
+    expect(reported()).toBe(0);
+  });
+
+  it("re-measures on scroll", () => {
+    layoutFrom(0);
+    const hooks = mount();
+    expect(reported()).toBe(history.length);
+
+    // The user scrolled down: only the last row is still visible.
+    layoutFrom(history.length - 1);
+    act(() => {
+      element.dispatchScroll();
+      flushFrames();
+    });
+    expect(reported()).toBe(1);
+
+    // A row removed from the window (or a re-layout) shortens the count again.
+    hooks.unmount();
+  });
+
+  it("clears the reported count when it stops showing the session", () => {
+    // The view owns the measurement, so it owns clearing it: a background session must not keep
+    // a floor that holds rows nobody can see (方案.md §7.2.8), and the save path deliberately
+    // never resolves the visible session itself (§五.20).
+    layoutFrom(2);
+    const hooks = mount();
+    expect(reported()).toBe(6);
+
+    hooks.unmount();
+    expect(reported()).toBe(0);
+  });
+
+  it("re-measures when the window changes", () => {
+    layoutFrom(0);
+    const hooks = mount();
+    expect(reported()).toBe(8);
+
+    const shorter = history.slice(4);
+    // The DOM follows the window: the four rows still rendered are the four trailing ones.
+    layoutFrom(0, shorter);
+    act(() => {
+      hooks.rerender({ items: shorter });
+      flushFrames();
+    });
+    expect(reported()).toBe(4);
   });
 });

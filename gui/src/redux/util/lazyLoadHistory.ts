@@ -42,11 +42,19 @@ export function getLazyLoadTrimLimit(initialCount: number | undefined): number {
  * @param fullDiskItemCount `totalHistoryCount` from the authoritative
  *   `history/save` response. `undefined` means the host did not report it, so
  *   the mapping cannot be trusted and no trim is planned.
+ * @param visibleFloor 方案.md §7.2.8: how many trailing window rows the viewport
+ *   is currently showing (`0` for a session that is not on screen). The trim
+ *   exists to release memory, and it may only release rows the user cannot see:
+ *   trimming into the visible area collapses the transcript under the reader at
+ *   the exact moment the reply finishes (a 12-row window dropped to 4 rows
+ *   right after the terminal save) and, once the window is shorter than the
+ *   viewport, re-arms the fill-viewport pagination that follows.
  */
 export function planHistoryTrim(
   session: SessionRuntimeState,
   limit: number,
   fullDiskItemCount: number | undefined,
+  visibleFloor = 0,
 ): HistoryTrimPlan | null {
   const length = session.history.length;
   const safeLimit = getLazyLoadTrimLimit(limit);
@@ -76,7 +84,11 @@ export function planHistoryTrim(
     (item) => item.message.role === "user",
   );
   const currentTurnLength = latestUserIndex >= 0 ? length - latestUserIndex : 0;
-  const keepCount = Math.max(safeLimit, currentTurnLength);
+  const keepCount = Math.max(
+    safeLimit,
+    currentTurnLength,
+    Math.max(0, Math.floor(visibleFloor)),
+  );
   if (keepCount >= length) {
     return null;
   }

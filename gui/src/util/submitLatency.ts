@@ -45,7 +45,8 @@ export type SubmitLatencyPhase =
   | "stream-start"
   | "terminal-commit"
   | "terminal-identity"
-  | "terminal-save-workflow";
+  | "terminal-save-workflow"
+  | "history-trim";
 
 export type SubmitLatencyEvent = {
   phase: SubmitLatencyPhase;
@@ -75,6 +76,10 @@ export type SubmitLatencyEvent = {
   payloadMB?: number;
   /** How many history rows were in the window when the phase ran. */
   items?: number;
+  /** Rows a trim retained (`history-trim`). */
+  keepItems?: number;
+  /** Rows the viewport was showing, i.e. the floor a trim had to respect (`history-trim`). */
+  floorItems?: number;
   /** Size of a stream chunk in characters (never its content). */
   chars?: number;
   /**
@@ -171,6 +176,12 @@ export function recordSubmitLatency(event: SubmitLatencyEvent): void {
     }
     if (event.chars !== undefined) {
       details.push(`chars=${event.chars}`);
+    }
+    if (event.keepItems !== undefined) {
+      details.push(`keepItems=${event.keepItems}`);
+    }
+    if (event.floorItems !== undefined) {
+      details.push(`floorItems=${event.floorItems}`);
     }
     if (event.after !== undefined) {
       details.push(`after=${event.after}`);

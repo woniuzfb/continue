@@ -202,6 +202,60 @@ describe("planHistoryTrim", () => {
     expect(plan?.removedDiskItems).toBe(2);
   });
 
+  it("never trims a row the viewport is showing (方案.md §7.2.8)", () => {
+    // Regression: a 12-row window was trimmed to `max(4, currentTurnLength) = 4` rows right
+    // after the terminal save, which deleted two rows that were on screen (the viewport showed
+    // the last ~6) and collapsed the transcript at the exact moment the reply finished.
+    const history = turns(6); // 12 rows
+    const session = runtime(history, { loadedOffset: 10, loadedDiskCount: 12 });
+    const plan = planHistoryTrim(session, 4, 10 + 12, 8);
+    expect(plan?.keepCount).toBe(8);
+    expect(plan?.removedGuiItems).toBe(4);
+    expect(plan?.removedDiskItems).toBe(4);
+  });
+
+  it("trims nothing at all when the whole window is on screen", () => {
+    const history = turns(6);
+    const plan = planHistoryTrim(
+      runtime(history, { loadedOffset: 10, loadedDiskCount: 12 }),
+      4,
+      22,
+      12,
+    );
+    expect(plan).toBeNull();
+  });
+
+  it("keeps the floor below the limit and the current turn from winning", () => {
+    const history = turns(6);
+    // A viewport showing only the last row must not lower the limit.
+    expect(
+      planHistoryTrim(
+        runtime(history, { loadedOffset: 10, loadedDiskCount: 12 }),
+        4,
+        22,
+        1,
+      )?.keepCount,
+    ).toBe(4);
+    // The current turn wins over a small floor.
+    expect(
+      planHistoryTrim(
+        runtime(history, { loadedOffset: 10, loadedDiskCount: 12 }),
+        4,
+        22,
+        3,
+      )?.keepCount,
+    ).toBe(4);
+  });
+
+  it("ignores a nonsensical floor", () => {
+    const history = turns(6);
+    const session = runtime(history, { loadedOffset: 10, loadedDiskCount: 12 });
+    // A negative or fractional measurement can only come from a broken measurement; it must
+    // never make the trim keep fewer rows than the limit.
+    expect(planHistoryTrim(session, 4, 22, -5)?.keepCount).toBe(4);
+    expect(planHistoryTrim(session, 4, 22, 5.7)?.keepCount).toBe(5);
+  });
+
   it("does not mutate the input history", () => {
     const history = turns(5);
     const before = history.slice();

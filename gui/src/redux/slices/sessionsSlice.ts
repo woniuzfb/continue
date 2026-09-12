@@ -177,6 +177,16 @@ export type SessionRuntimeState = {
   /** Bumped by every request-relevant mutation; gates metrics recomputation. */
   conversationRevision: number;
   firstTurnItems: ChatHistoryItemWithMessageId[];
+  /**
+   * 方案.md §7.2.8: how many trailing window rows the viewport is showing right now (from the
+   * first visible row to the end of the window); `0` when nothing is on screen.
+   *
+   * Presentation-only and runtime-only: it never reaches the `Session` protocol, never marks
+   * the session dirty, never advances `conversationRevision` and never invalidates the
+   * metrics. Its single consumer is the post-save trim floor — a trim must not remove a row
+   * the user is looking at.
+   */
+  visibleHistoryCount: number;
   latestConversationSummary?: {
     sourceMessageId: string;
     /** Absolute index in the full history (方案.md §十一 synthetic separator). */
@@ -298,6 +308,7 @@ export function initialSessionRuntime(
     mode: "chat",
     symbols: {},
     isInEdit: false,
+    visibleHistoryCount: 0,
     codeBlockApplyStates: { states: [], curIndex: 0 },
     newestToolbarPreviewForInput: {},
     compactionLoading: {},
@@ -999,6 +1010,24 @@ export const sessionsSlice = createSlice({
      * advances the conversation revision by itself. Hydration / save echo must
      * therefore never advance it (方案.md §五.16.1 / 已知限制 #64).
      */
+    /**
+     * 方案.md §7.2.8: the viewport reports how many trailing window rows it is showing.
+     * Written only when the number actually changes (it is dispatched from scroll / resize /
+     * layout passes), and it touches exactly one field: no dirty mark, no revision, no metrics.
+     */
+    setSessionVisibleHistoryCount: (
+      state,
+      action: PayloadAction<{ sessionId: string; count: number }>,
+    ) => {
+      const session = findRuntime(state, action.payload.sessionId);
+      if (!session) {
+        return;
+      }
+      const count = Math.max(0, Math.floor(action.payload.count));
+      if (session.visibleHistoryCount !== count) {
+        session.visibleHistoryCount = count;
+      }
+    },
     setSessionFirstTurn: (
       state,
       action: PayloadAction<{
@@ -2028,6 +2057,7 @@ export const {
   deleteTurnByMessageId,
   truncateHistoryAfterMessageId,
   setSessionFirstTurn,
+  setSessionVisibleHistoryCount,
   setSessionConversationSummary,
   clearSessionConversationSummary,
   beginSessionStream,
