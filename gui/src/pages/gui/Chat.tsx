@@ -708,11 +708,25 @@ export function Chat() {
               inProgress={index === history.length - 1 && isStreaming}
               signature={message.signature}
             />
-            {index === history.length - 1 && !isStreaming && (
+            {/*
+              末尾是 thinking 的轮次，判据必须与 assistant 分支一致 —— 「本轮末尾」
+              （最后一条，或下一条是 user），而不是「整个会话的最后一条」。
+              用后者时：一轮回复只要以 thinking 结尾，且其后出现任何内容
+              （同一轮后续条目、用户下一条消息、重载后的窗口），这一排就永远不会
+              再挂载 —— 那些轮次在流式刚结束时（它确实是最后一条）短暂有过按钮，
+              之后就永久消失。
+
+              row 必须常驻：`the buttons are what may come and go, never the box`
+              （见 1be7a87c3）。所以这里不判 `isStreaming`，流式期间由
+              StepContainer 的 reserveResponseActions 把它压成 `opacity-0` 并保留
+              36px 高度，交回时按钮只是淡入。
+            */}
+            {(index === history.length - 1 ||
+              history[index + 1]?.message.role === "user") && (
               <StepContainer
                 actionsOnly
                 index={index}
-                isLast={true}
+                isLast={index === history.length - 1}
                 item={item}
                 latestSummaryIndex={latestSummaryIndex}
               />
