@@ -73,6 +73,7 @@ import { setDialogMessage, setShowDialog } from "../../redux/slices/uiSlice";
 import { RootState } from "../../redux/store";
 import { stopActiveSessionStream } from "../../redux/thunks/sessionStreams";
 import { getLocalStorage, setLocalStorage } from "../../util/localStorage";
+import { scrollTranscriptToMessage } from "../../util/scrollTranscript";
 import {
   noteRenderCommit,
   setSubmitLatencyLoggingEnabled,
@@ -436,9 +437,7 @@ export function Chat() {
       }
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          document
-            .querySelector(`[data-message-id="${target}"]`)
-            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+          scrollTranscriptToMessage(stepsDivRef.current, target);
         });
       });
     },
@@ -524,9 +523,7 @@ export function Chat() {
         // scrolling.
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            document
-              .querySelector(`[data-message-id="${target}"]`)
-              ?.scrollIntoView({ behavior: "smooth", block: "start" });
+            scrollTranscriptToMessage(stepsDivRef.current, target);
           });
         });
       } finally {
