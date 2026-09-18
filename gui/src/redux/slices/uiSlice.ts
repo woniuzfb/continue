@@ -125,19 +125,15 @@ export const uiSlice = createSlice({
       state.ruleSettings[action.payload.name!] = DEFAULT_RULE_SETTING;
     },
     toggleRuleSetting: (state, action: PayloadAction<string>) => {
-      const setting = state.ruleSettings[action.payload];
-
-      switch (setting) {
-        case "on":
-          state.ruleSettings[action.payload] = "off";
-          break;
-        case "off":
-          state.ruleSettings[action.payload] = "on";
-          break;
-        default:
-          state.ruleSettings[action.payload] = DEFAULT_RULE_SETTING;
-          break;
-      }
+      // The switch renders `ruleSettings[name] || DEFAULT_RULE_SETTING` (see
+      // RuleCard), so a rule that was never toggled already shows as "on".
+      // Switching on the raw stored value treated `undefined` as a third state
+      // and wrote the default back into it, so the first click changed nothing —
+      // every rule needed two clicks to turn off. Resolve the default before
+      // switching, the way `toggleToolGroupSetting` does.
+      const setting =
+        state.ruleSettings[action.payload] ?? DEFAULT_RULE_SETTING;
+      state.ruleSettings[action.payload] = setting === "on" ? "off" : "on";
     },
     setTTSActive: (state, { payload }: PayloadAction<boolean>) => {
       state.ttsActive = payload;
