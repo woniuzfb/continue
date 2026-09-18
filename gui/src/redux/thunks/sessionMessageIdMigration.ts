@@ -9,18 +9,18 @@ import {
   type MessageIdMigrationCapability,
 } from "../slices/runtimeCapabilitiesSlice";
 import { setMessageIdMigrationState } from "../slices/sessionsSlice";
-import {
-  emitLegacyMessageIdEventIfEnabled,
-  LEGACY_MESSAGE_ID_EVENT_NAME,
-  telemetryHostFromIdeType,
-  type TelemetryHost,
-} from "../util/legacyMessageIdObservability";
 import type {
   AppThunkDispatch,
   RootState,
   ThunkApiType,
   ThunkExtrasType,
 } from "../store";
+import {
+  emitLegacyMessageIdEventIfEnabled,
+  LEGACY_MESSAGE_ID_EVENT_NAME,
+  telemetryHostFromIdeType,
+  type TelemetryHost,
+} from "../util/legacyMessageIdObservability";
 import { hasPendingSessionSave } from "../util/sessionSaveQueue";
 
 /**
@@ -61,7 +61,24 @@ import { hasPendingSessionSave } from "../util/sessionSaveQueue";
  * a fault barrier (extension reloading, wedged Core, broken transport), NOT a
  * capability probe: it reports `failed/REQUEST_TIMEOUT`, never `unsupported`.
  */
-export const MESSAGE_ID_MIGRATION_TIMEOUT_MS = 5_000;
+/**
+ * Must stay **comfortably above Core's session-lock wait**, not just above the
+ * cost of the file rewrite.
+ *
+ * `historyManager.migrateMessageIds` reuses `history/save`'s per-session write
+ * lock and, when it is held, retries every 25ms for up to
+ * `SESSION_LOCK_TIMEOUT_MS = 10s` before giving up (core/util/history.ts). A
+ * request timeout shorter than that window turns *contention* into
+ * `failed/REQUEST_TIMEOUT` — and since a session is migrated at most once, the
+ * failure is permanent even though Core finishes the rewrite moments later.
+ * Contention is the normal case, not an edge case: the "paging finished"
+ * trigger (sessionPaging) fires right after scrolling, exactly when the page's
+ * own save is queued on this session.
+ *
+ * 30s covers 10s of lock waiting plus the synchronous read + JSON.parse +
+ * atomic rewrite of a large session file (the reported session is ~10MB).
+ */
+export const MESSAGE_ID_MIGRATION_TIMEOUT_MS = 30_000;
 
 /**
  * `getIdeInfo` also gets a timeout so a transport stall cannot hang boot, but a

@@ -37,6 +37,19 @@ import {
  *     `conversationRevision` move, no metrics invalidation, no `history/save`.
  */
 
+describe("migration timeout budget", () => {
+  it("outlasts Core's session-lock window, so contention is not a timeout", () => {
+    // Core's `migrateMessageIds` reuses `history/save`'s per-session write lock and
+    // retries for up to SESSION_LOCK_TIMEOUT_MS = 10s (core/util/history.ts) before
+    // proceeding without it. A shorter GUI timeout reports ordinary lock contention
+    // as `failed/REQUEST_TIMEOUT` — and a session is migrated at most once, so that
+    // failure is permanent even though Core finishes the rewrite moments later.
+    // The "paging finished" trigger fires right after scrolling, when this session's
+    // own save is typically queued: contention is the normal case.
+    expect(MESSAGE_ID_MIGRATION_TIMEOUT_MS).toBeGreaterThan(10_000);
+  });
+});
+
 function item(
   id: string,
   role: "user" | "assistant",
