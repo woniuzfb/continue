@@ -4,24 +4,29 @@ import { IdeMessengerContext } from "../context/IdeMessenger";
 import { FromCoreProtocol } from "core/protocol";
 import { useAppDispatch, useAppSelector } from "../redux/hooks";
 import { setConfigLoading, setConfigResult } from "../redux/slices/configSlice";
-import { setSessionLastNonEditSessionWasEmpty } from "../redux/slices/sessionsSlice";
 import { updateIndexingStatus } from "../redux/slices/indexingSlice";
 import {
   initializeProfilePreferences,
   setProfiles,
   setSelectedProfile,
 } from "../redux/slices/profilesSlice";
+import { setSessionCatalogLoading } from "../redux/slices/sessionCatalogSlice";
 import {
   addContextItemsByMessageId,
+  setSessionLastNonEditSessionWasEmpty,
   setSessionReasoningEnabled,
 } from "../redux/slices/sessionsSlice";
-import { setSessionCatalogLoading } from "../redux/slices/sessionCatalogSlice";
 import { setTTSActive } from "../redux/slices/uiSlice";
 
 import { modelSupportsReasoning } from "core/llm/autodetect";
-import { stopActiveSessionStream } from "../redux/thunks/sessionStreams";
 import { routeApplyStateUpdate } from "../redux/thunks/sessionApplyState";
+import { stopActiveSessionStream } from "../redux/thunks/sessionStreams";
 
+import {
+  selectActiveHistory,
+  selectActiveIsInEdit,
+  selectActiveSessionId,
+} from "../redux/selectors/sessionView";
 import {
   ensureActiveSessionLoaded,
   refreshSessionCatalog,
@@ -36,11 +41,6 @@ import { isJetBrains } from "../util";
 import { setLocalStorage } from "../util/localStorage";
 import { migrateLocalStorage } from "../util/migrateLocalStorage";
 import { useWebviewListener } from "./useWebviewListener";
-import {
-  selectActiveHistory,
-  selectActiveIsInEdit,
-  selectActiveSessionId,
-} from "../redux/selectors/sessionView";
 
 function ParallelListeners() {
   const dispatch = useAppDispatch();
@@ -97,7 +97,8 @@ function ParallelListeners() {
       // has explicitly toggled it on for this model.
       const isLLMPrefix =
         chatModel?.model?.startsWith("LLM:") ||
-        chatModel?.model?.startsWith("openrouter:");
+        chatModel?.model?.startsWith("openrouter:") ||
+        chatModel?.model?.startsWith("opencode:");
       const userReasoningPref = chatModel?.title
         ? reasoningSettings[chatModel.title]
         : undefined;

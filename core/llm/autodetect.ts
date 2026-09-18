@@ -229,7 +229,11 @@ function modelSupportsReasoning(
     return true;
   }
   // LLM: prefix models expose a reasoning toggle, but default to disabled
-  if (model.model.startsWith("LLM:") || model.model.startsWith("openrouter:")) {
+  if (
+    model.model.startsWith("LLM:") ||
+    model.model.startsWith("openrouter:") ||
+    model.model.startsWith("opencode:")
+  ) {
     return true;
   }
 
