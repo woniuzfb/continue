@@ -758,4 +758,44 @@ describe("resolveApplyRoute", () => {
       ),
     ).toMatchObject({ kind: "route", sessionId: "s1", toolCallId: "t1" });
   });
+
+  it("posts acceptDiff on done in agent-full mode without fabricating closed before IDE confirmation", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = makeStore("calling");
+      const postSpy = vi.spyOn(store.mockIdeMessenger, "post");
+      const runner = vi.fn(async () => {});
+      registerSessionStreamRunner(runner);
+
+      // Put s1 into agent-full mode
+      (store.getState() as any).sessions.sessionsById.s1.mode = "agent-full";
+
+      await run(
+        store,
+        handleSessionApplyStateUpdate({
+          sessionId: "s1",
+          applyState: {
+            streamId: "stream-1",
+            toolCallId: "t1",
+            status: "done",
+            filepath: "file:///x.ts",
+          },
+        }),
+      );
+
+      expect(postSpy).toHaveBeenCalledWith("acceptDiff", {
+        streamId: "stream-1",
+        filepath: "file:///x.ts",
+        sessionId: "s1",
+      });
+
+      // Even after 5 seconds without an IDE `closed` event, the tool call must
+      // remain `calling` and the stream runner must not be triggered early.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(toolState(store).status).toBe("calling");
+      expect(runner).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

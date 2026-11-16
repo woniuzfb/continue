@@ -1,8 +1,7 @@
 import { ModelDescription, Tool } from "core";
 import {
   DEFAULT_AGENT_SYSTEM_MESSAGE,
-  DEFAULT_CHAT_SYSTEM_MESSAGE,
-  DEFAULT_PLAN_SYSTEM_MESSAGE,
+  DEFAULT_READONLY_SYSTEM_MESSAGE,
 } from "core/llm/defaultSystemMessages";
 
 export const NO_TOOL_WARNING =
@@ -13,20 +12,29 @@ export function getBaseSystemMessage(
   model: ModelDescription,
   activeTools?: Tool[],
 ): string {
+  const effectiveMode = messageMode === "chat" ? "plan" : messageMode;
   let baseMessage: string;
 
-  if (messageMode === "agent") {
+  if (effectiveMode === "agent" || effectiveMode === "agent-full") {
     baseMessage = model.baseAgentSystemMessage ?? DEFAULT_AGENT_SYSTEM_MESSAGE;
-  } else if (messageMode === "plan") {
-    baseMessage = model.basePlanSystemMessage ?? DEFAULT_PLAN_SYSTEM_MESSAGE;
   } else {
-    baseMessage = model.baseChatSystemMessage ?? DEFAULT_CHAT_SYSTEM_MESSAGE;
+    baseMessage =
+      model.basePlanSystemMessage ??
+      model.baseChatSystemMessage ??
+      DEFAULT_READONLY_SYSTEM_MESSAGE;
   }
 
   // Add no-tools warning for agent/plan modes when no tools are available
-  if (messageMode !== "chat" && (!activeTools || activeTools.length === 0)) {
+  if (!activeTools || activeTools.length === 0) {
     baseMessage += NO_TOOL_WARNING;
   }
 
-  return baseMessage;
+  const dshPolicy =
+    effectiveMode === "agent-full"
+      ? "\n\nCurrent DSH file policy: danger-full-access.\nApproval prompts are disabled in this session: eligible tool calls execute without interactive confirmation, while tools or commands explicitly disabled by user or security policy remain blocked."
+      : effectiveMode === "agent"
+        ? "\n\nCurrent DSH file policy: workspace-write."
+        : "\n\nCurrent DSH file policy: read-only.";
+
+  return baseMessage + dshPolicy;
 }

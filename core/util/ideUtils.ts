@@ -1,14 +1,44 @@
 import { IDE } from "..";
 
 import {
+  fileUriOrPathToPath,
   joinEncodedUriPathSegmentToUri,
   joinPathsToUri,
+  localPathToFileUri,
   pathToUriPathSegment,
 } from "./uri";
 
+function toCandidateAbsoluteFileUri(rawPath: string): string | undefined {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith("file://")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("/") || /^[A-Za-z]:[\\/]/.test(trimmed)) {
+    return localPathToFileUri(trimmed);
+  }
+  return undefined;
+}
+
+function stripMatchingWorkspacePrefix(
+  rawPath: string,
+  dirUri: string,
+): string | undefined {
+  const absPath = fileUriOrPathToPath(rawPath).replaceAll("\\", "/");
+  const dirPath = fileUriOrPathToPath(dirUri)
+    .replaceAll("\\", "/")
+    .replace(/\/+$/, "");
+  if (dirPath && absPath.startsWith(`${dirPath}/`)) {
+    return absPath.slice(dirPath.length + 1);
+  }
+  return undefined;
+}
+
 /*
-  This function takes a relative (to workspace) filepath
-  And checks each workspace for if it exists or not
+  This function takes a relative (to workspace) or absolute filepath
+  And checks each workspace (plus direct absolute path) for if it exists or not
   Only returns fully resolved URI if it exists
 */
 export async function resolveRelativePathInDir(
@@ -18,10 +48,16 @@ export async function resolveRelativePathInDir(
 ): Promise<string | undefined> {
   const dirs = dirUriCandidates ?? (await ide.getWorkspaceDirs());
   for (const dirUri of dirs) {
-    const fullUri = joinPathsToUri(dirUri, path);
+    const stripped = stripMatchingWorkspacePrefix(path, dirUri);
+    const fullUri = joinPathsToUri(dirUri, stripped ?? path);
     if (await ide.fileExists(fullUri)) {
       return fullUri;
     }
+  }
+
+  const absUri = toCandidateAbsoluteFileUri(path);
+  if (absUri && (await ide.fileExists(absUri))) {
+    return absUri;
   }
 
   return undefined;
@@ -40,6 +76,18 @@ export async function inferResolvedUriFromRelativePath(
 ): Promise<string> {
   const relativePath = _relativePath.trim().replaceAll("\\", "/");
   const dirs = dirCandidates ?? (await ide.getWorkspaceDirs());
+
+  for (const dirUri of dirs) {
+    const stripped = stripMatchingWorkspacePrefix(relativePath, dirUri);
+    if (stripped !== undefined) {
+      return joinPathsToUri(dirUri, stripped);
+    }
+  }
+
+  const absUri = toCandidateAbsoluteFileUri(relativePath);
+  if (absUri) {
+    return absUri;
+  }
 
   if (dirs.length === 0) {
     throw new Error("inferResolvedUriFromRelativePath: no dirs provided");

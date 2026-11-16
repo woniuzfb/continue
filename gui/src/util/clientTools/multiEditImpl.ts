@@ -24,6 +24,24 @@ export const multiEditImpl: ClientToolImpl = async (
     edits,
   );
 
+  const sessionMode = extras.sessionId
+    ? extras.getState().sessions.sessionsById[extras.sessionId]?.mode
+    : undefined;
+  if (sessionMode === "agent-full") {
+    await extras.ideMessenger.ide.writeFile(fileUri, newFileContents);
+    return {
+      respondImmediately: true,
+      output: [
+        {
+          name: "Edit Success",
+          content: `Successfully edited ${args.filepath || fileUri}`,
+          description: "",
+          hidden: true,
+        },
+      ],
+    };
+  }
+
   const streamId = uuid();
   applyEditToolChanges(
     {

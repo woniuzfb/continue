@@ -92,7 +92,7 @@ describe("sessionsSlice — ownership", () => {
       sessionId: "s1",
       title: "Chat 1",
       loadState: "loaded",
-      mode: "chat",
+      mode: "plan",
     });
   });
 
@@ -1486,7 +1486,7 @@ describe("sessionsSlice — conversation revision ownership", () => {
       setSessionMode({ sessionId: "s1", mode: "chat" }),
     );
 
-    expect(state.sessionsById.s1.mode).toBe("chat");
+    expect(state.sessionsById.s1.mode).toBe("plan");
     expect(state.sessionsById.s1.conversationRevision).toBe(before);
   });
 

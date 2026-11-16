@@ -480,6 +480,28 @@ export type ToCoreFromIdeOrWebviewProtocol = {
     },
     string | undefined,
   ];
+  "conversation/uncompact": [
+    {
+      sessionId: string;
+      modelRef?: SessionChatModelRef;
+      title?: string;
+    },
+    void,
+  ];
+  "conversation/fork": [
+    {
+      index: number;
+      sessionId: string;
+      targetMessageId?: string;
+    },
+    (
+      | {
+          sessionId: string;
+          title: string;
+        }
+      | undefined
+    ),
+  ];
   "stats/getTokensPerDay": [
     undefined,
     { day: string; promptTokens: number; generatedTokens: number }[],

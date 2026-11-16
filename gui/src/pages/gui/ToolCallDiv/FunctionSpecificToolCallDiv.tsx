@@ -1,6 +1,7 @@
 import { ToolCallState } from "core";
 import { BuiltInToolNames } from "core/tools/builtIn";
 import { EditOperation } from "core/tools/definitions/multiEdit";
+import { AskUserQuestion } from "./AskUserQuestion";
 import { CreateFile } from "./CreateFile";
 import { EditFile } from "./EditFile";
 import { FindAndReplaceDisplay } from "./FindAndReplace";
@@ -72,6 +73,16 @@ function FunctionSpecificToolCallDiv({
           command={args?.command ?? ""}
           toolCallState={toolCallState}
           toolCallId={toolCall.id}
+        />
+      );
+    case BuiltInToolNames.AskUserQuestion:
+      return (
+        <AskUserQuestion
+          questions={args?.questions ?? []}
+          timeout={typeof args?.timeout === "number" ? args.timeout : undefined}
+          toolCallId={toolCall.id}
+          status={toolCallState.status}
+          output={toolCallState.output}
         />
       );
     default:

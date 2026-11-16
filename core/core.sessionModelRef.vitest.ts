@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Core } from "./core.js";
-import type { ILLM, SessionChatModelRef } from "./index.js";
+import type { ILLM, Session, SessionChatModelRef } from "./index.js";
+import { forkConversation } from "./util/conversationFork.js";
 
 /**
  * 方案.md §7.5.4, the **Core** half: a request states which model it is for, and Core must execute
@@ -297,5 +298,141 @@ describe("llm/compileChat uses the same identity as the stream (方案.md §7.5.
 
     expect(openai.compileChatMessages).toHaveBeenCalled();
     expect(other.compileChatMessages).not.toHaveBeenCalled();
+  });
+});
+
+describe("conversation/uncompact & forkConversation preserve session model identity", () => {
+  it("uncompact notifies the session's own chatModelRef instead of global selectedModelByRole.chat", async () => {
+    const openai = {
+      ...fakeModel("model-a", "a", "openai"),
+      chat: vi.fn(async () => ({ role: "assistant", content: "ok" })),
+    };
+    const anthropic = {
+      ...fakeModel("model-a", "a", "anthropic"),
+      chat: vi.fn(async () => ({ role: "assistant", content: "ok" })),
+    };
+    const fallback = {
+      ...fakeModel("fallback", "f", "fallback", "explode"),
+      chat: vi.fn(async () => {
+        throw new Error("global default model must not be called");
+      }),
+    };
+
+    const handlers = new Map<string, Handler>();
+    const messenger: any = {
+      on(type: string, handler: Handler) {
+        handlers.set(type, handler);
+      },
+      onError() {},
+      send() {
+        return "";
+      },
+      async request() {
+        return {};
+      },
+    };
+    const core: any = Object.assign(Object.create(Core.prototype), {
+      messenger,
+      messageAbortControllers: new Map(),
+      ide: {},
+      getContextItems: async () => [],
+      configHandler: {
+        async loadConfig() {
+          return {
+            config: {
+              modelsByRole: { chat: [openai, anthropic, fallback] },
+              selectedModelByRole: { chat: fallback },
+            },
+          };
+        },
+      },
+    });
+    (Core.prototype as any).registerMessageHandlers.call(
+      core,
+      Promise.resolve({}),
+    );
+
+    const loadSpy = vi
+      .spyOn((await import("./util/history.js")).default, "load")
+      .mockReturnValue({
+        sessionId: "sess-1",
+        title: "Session 1",
+        workspaceDirectory: "/tmp",
+        chatModelRef: REF_ANTHROPIC,
+        history: [
+          {
+            message: { id: "u1", role: "user", content: "hello world" },
+            contextItems: [],
+          },
+        ],
+      } as Session);
+
+    try {
+      const uncompactHandler = handlers.get("conversation/uncompact");
+      expect(uncompactHandler).toBeDefined();
+      await uncompactHandler!({
+        messageType: "conversation/uncompact",
+        data: { sessionId: "sess-1" },
+      });
+
+      expect(anthropic.chat).toHaveBeenCalledTimes(1);
+      expect(anthropic.chat).toHaveBeenCalledWith(
+        [
+          { id: "u1", role: "user", content: "hello world" },
+          { role: "user", content: "[VE_UNCOMPACT_SESSION]" },
+        ],
+        expect.anything(),
+        {},
+      );
+      expect(openai.chat).not.toHaveBeenCalled();
+      expect(fallback.chat).not.toHaveBeenCalled();
+    } finally {
+      loadSpy.mockRestore();
+    }
+  });
+
+  it("forkConversation preserves chatModelRef, hasReasoningEnabled, and reasoningPreferenceSource", () => {
+    let savedSession: Session | undefined;
+    const mockHistoryManager: any = {
+      load: () =>
+        ({
+          sessionId: "orig-1",
+          title: "Original",
+          workspaceDirectory: "/w/repo",
+          mode: "agent-full",
+          chatModelTitle: "model-a",
+          chatModelRef: REF_ANTHROPIC,
+          hasReasoningEnabled: true,
+          reasoningPreferenceSource: "explicit",
+          history: [
+            {
+              message: { id: "u1", role: "user", content: "first prompt" },
+              contextItems: [],
+            },
+            {
+              message: { id: "a1", role: "assistant", content: "first reply" },
+              contextItems: [],
+            },
+          ],
+        }) satisfies Session,
+      save: (s: Session) => {
+        savedSession = s;
+      },
+    };
+
+    const res = forkConversation({
+      sessionId: "orig-1",
+      index: 1,
+      targetMessageId: "a1",
+      historyManager: mockHistoryManager,
+    });
+
+    expect(res.title).toBe("Original (Fork)");
+    expect(savedSession).toBeDefined();
+    expect(savedSession?.mode).toBe("agent-full");
+    expect(savedSession?.chatModelTitle).toBe("model-a");
+    expect(savedSession?.chatModelRef).toEqual(REF_ANTHROPIC);
+    expect(savedSession?.hasReasoningEnabled).toBe(true);
+    expect(savedSession?.reasoningPreferenceSource).toBe("explicit");
   });
 });

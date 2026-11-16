@@ -232,7 +232,7 @@ export const enterEdit = createAsyncThunk<
       }),
     );
 
-    const currentMode = state.sessions.sessionsById[sessionId]?.mode ?? "chat";
+    const currentMode = state.sessions.sessionsById[sessionId]?.mode ?? "plan";
     dispatch(
       setSessionReturnToMode({ sessionId, mode: returnToMode ?? currentMode }),
     );

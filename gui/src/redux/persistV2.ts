@@ -1,4 +1,5 @@
 import { BaseSessionMetadata, MessageModes, SetCodeToEditPayload } from "core";
+import { normalizeSessionMode } from "./util/sessionMode";
 
 /**
  * Redux-persist v1 -> v2 (方案.md §五.23).
@@ -48,7 +49,9 @@ export function migratePersistedStateToV2(oldState: any): PersistedV2 {
   const oldEditState = oldState?.editModeState ?? {};
 
   const persistedEditState = {
-    returnToMode: oldEditState.returnToMode,
+    returnToMode: oldEditState.returnToMode
+      ? normalizeSessionMode(oldEditState.returnToMode)
+      : undefined,
     lastNonEditSessionWasEmpty: oldEditState.lastNonEditSessionWasEmpty,
     codeToEdit: oldEditState.codeToEdit,
   };
@@ -70,7 +73,7 @@ export function migratePersistedStateToV2(oldState: any): PersistedV2 {
       sessionId,
       title,
       loadState: LOAD_STATE_UNLOADED,
-      mode: oldSession.mode,
+      mode: normalizeSessionMode(oldSession.mode),
       persistedEditState,
     };
     if (isActive) {
@@ -149,6 +152,15 @@ export function normalizePersistedSessionsState(
     tabDescriptors[sessionId] = {
       ...descriptor,
       sessionId,
+      mode: normalizeSessionMode(descriptor.mode),
+      persistedEditState: descriptor.persistedEditState
+        ? {
+            ...descriptor.persistedEditState,
+            returnToMode: descriptor.persistedEditState.returnToMode
+              ? normalizeSessionMode(descriptor.persistedEditState.returnToMode)
+              : undefined,
+          }
+        : undefined,
       // Never rehydrate a loaded session: history is not persisted.
       loadState: LOAD_STATE_UNLOADED,
     };

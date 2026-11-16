@@ -243,6 +243,7 @@ export const useCompactConversation = () => {
 
 export const useDeleteCompaction = () => {
   const dispatch = useAppDispatch();
+  const ideMessenger = useContext(IdeMessengerContext);
   const store = useStore<RootState>();
   const sessionId = useSessionId();
   const historyTruncated = useSessionHistoryTruncated();
@@ -278,6 +279,20 @@ export const useDeleteCompaction = () => {
 
     // Update local state and save to persistence
     dispatch(deleteCompactionByMessageId({ sessionId, messageId }));
+    const postDeleteHistory = selectSessionHistory(store.getState(), sessionId);
+    const stillHasCompaction = postDeleteHistory.some((h) =>
+      Boolean(h.conversationSummary),
+    );
+    if (!stillHasCompaction) {
+      const currentSession = store.getState().sessions.sessionsById[sessionId];
+      void Promise.resolve(
+        ideMessenger.request("conversation/uncompact", {
+          sessionId,
+          modelRef: currentSession?.chatModelRef,
+          title: currentSession?.chatModelTitle,
+        }),
+      ).catch(() => {});
+    }
     void dispatch(
       enqueueSessionSave({
         sessionId,

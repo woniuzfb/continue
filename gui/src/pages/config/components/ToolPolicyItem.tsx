@@ -5,7 +5,7 @@ import {
   InformationCircleIcon,
 } from "@heroicons/react/24/outline";
 import { Tool } from "core";
-import { BUILT_IN_GROUP_NAME } from "core/tools/builtIn";
+import { BuiltInToolNames, BUILT_IN_GROUP_NAME } from "core/tools/builtIn";
 import { useEffect, useMemo, useState } from "react";
 import { useDispatch } from "react-redux";
 import { Tooltip } from "react-tooltip";
@@ -53,11 +53,13 @@ export function ToolPolicyItem(props: ToolPolicyItemProps) {
 
   const fontSize = useFontSize(-2);
 
+  const effectiveMode = mode === "chat" ? "plan" : mode;
   const disabled =
     !props.isGroupEnabled ||
-    (mode === "plan" &&
+    (effectiveMode === "plan" &&
       props.tool.group === BUILT_IN_GROUP_NAME &&
-      !props.tool.readonly);
+      !props.tool.readonly &&
+      props.tool.function.name !== BuiltInToolNames.RunTerminalCommand);
 
   if (!policy) {
     return null;

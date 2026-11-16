@@ -1,5 +1,6 @@
 import { Tool } from "../..";
 import { EDIT_CODE_INSTRUCTIONS } from "../../llm/defaultSystemMessages";
+import { inferResolvedUriFromRelativePath } from "../../util/ideUtils";
 import { BUILT_IN_GROUP_NAME, BuiltInToolNames } from "../builtIn";
 
 export interface EditToolArgs {
@@ -42,6 +43,15 @@ export const editFileTool: Tool = {
     },
   },
   defaultToolPolicy: "allowedWithPermission",
+  preprocessArgs: async (args, { ide }) => {
+    const resolvedPath = await inferResolvedUriFromRelativePath(
+      String(args.filepath ?? ""),
+      ide,
+    );
+    return {
+      resolvedPath,
+    };
+  },
   systemMessageDescription: {
     prefix: `To edit an EXISTING file, use the ${BuiltInToolNames.EditExistingFile} tool with
 - filepath: the relative filepath to the file.

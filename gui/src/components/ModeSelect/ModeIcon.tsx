@@ -1,4 +1,5 @@
 import {
+  BoltIcon,
   ChatBubbleLeftIcon,
   RocketLaunchIcon,
   SparklesIcon,
@@ -16,6 +17,8 @@ export function ModeIcon({
   className = "xs:h-3 xs:w-3 h-3 w-3",
 }: ModeIconProps) {
   switch (mode) {
+    case "agent-full":
+      return <BoltIcon className={className} />;
     case "agent":
       return <SparklesIcon className={className} />;
     case "plan":

@@ -37,7 +37,7 @@ describe("migratePersistedStateToV2", () => {
     expect(v2.sessionCatalog.lastSessionId).toBe("s-last");
     expect(v2.sessions.tabDescriptors["s-active"].loadState).toBe("unloaded");
     expect(v2.sessions.tabDescriptors["s1"].persistedEditState).toEqual({
-      returnToMode: "edit",
+      returnToMode: "plan",
       lastNonEditSessionWasEmpty: true,
       codeToEdit: [],
     });

@@ -8,6 +8,7 @@ import { evaluateSessionToolPolicies } from "./evaluateToolPolicies";
 function toolCall(
   toolCallId: string,
   name = "run_terminal_cmd",
+  parsedArgs: Record<string, unknown> = { command: "rm -rf /" },
 ): ToolCallState {
   return {
     toolCallId,
@@ -17,7 +18,7 @@ function toolCall(
       function: { name, arguments: "{}" },
     },
     status: "generated",
-    parsedArgs: { command: "rm -rf /" },
+    parsedArgs,
   };
 }
 
@@ -47,8 +48,9 @@ const ACTIVE_TOOLS: Tool[] = [
   },
 ];
 
-function makeStore() {
+function makeStore(mode: "plan" | "agent" | "agent-full" = "agent") {
   const s1 = initialSessionRuntime("s1", "Chat 1", {
+    mode,
     history: [assistant("a1", [toolCall("t1"), toolCall("t2")])],
     pendingApprovalCount: 2,
     stream: { status: "streaming", requestId: "req-1" },
@@ -136,7 +138,7 @@ describe("evaluateSessionToolPolicies", () => {
     expect(policies[0].policy).toBe("allowedWithPermission");
   });
 
-  it("auto-approves edit tools and ignores unknown tool call ids", async () => {
+  it("auto-approves edit tools in agent mode and ignores unknown tool call ids", async () => {
     const store = createMockStore({
       sessions: {
         activeSessionId: "s1",
@@ -146,7 +148,12 @@ describe("evaluateSessionToolPolicies", () => {
         },
         sessionsById: {
           s1: initialSessionRuntime("s1", "Chat 1", {
-            history: [assistant("a1", [toolCall("t1", "edit_existing_file")])],
+            mode: "agent",
+            history: [
+              assistant("a1", [
+                toolCall("t1", "edit_existing_file", { filepath: "src/a.ts" }),
+              ]),
+            ],
             pendingApprovalCount: 1,
           }),
         },
@@ -162,5 +169,144 @@ describe("evaluateSessionToolPolicies", () => {
 
     expect(policies).toHaveLength(1);
     expect(policies[0].policy).toBe("allowedWithoutPermission");
+  });
+
+  it("blocks edit tools and mutating shell commands in plan mode while requiring approval for safe read-only shell commands", async () => {
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: "s1",
+        tabOrder: ["s1"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Chat 1", loadState: "loaded" },
+        },
+        sessionsById: {
+          s1: initialSessionRuntime("s1", "Chat 1", {
+            mode: "plan",
+            history: [
+              assistant("a1", [
+                toolCall("t-edit", "edit_existing_file", {
+                  filepath: "src/a.ts",
+                }),
+                toolCall("t-find-replace", "single_find_and_replace", {
+                  filepath: "src/a.ts",
+                }),
+                toolCall("t-sort-write", "run_terminal_cmd", {
+                  command: "sort -o src/a.ts src/a.ts",
+                }),
+                toolCall("t-awk", "run_terminal_cmd", {
+                  command: "awk 'BEGIN{system(\"id\")}'",
+                }),
+                toolCall("t-newline", "run_terminal_cmd", {
+                  command: "ls -la\nrm -rf /tmp/x",
+                }),
+                toolCall("t-safe-ls", "run_terminal_cmd", {
+                  command: "ls -la",
+                }),
+              ]),
+            ],
+            pendingApprovalCount: 6,
+          }),
+        },
+      },
+    });
+    store.mockIdeMessenger.responseHandlers["tools/evaluatePolicy"] =
+      async () => ({
+        policy: "allowedWithoutPermission",
+        displayValue: undefined,
+      });
+
+    const policies = await evaluateSessionToolPolicies(api(store), {
+      sessionId: "s1",
+      toolCallIds: [
+        "t-edit",
+        "t-find-replace",
+        "t-sort-write",
+        "t-awk",
+        "t-newline",
+        "t-safe-ls",
+      ],
+      activeTools: ACTIVE_TOOLS,
+      toolPolicies: { run_terminal_cmd: "allowedWithoutPermission" },
+    });
+
+    expect(policies.map((p) => [p.toolCallState.toolCallId, p.policy])).toEqual(
+      [
+        ["t-edit", "disabled"],
+        ["t-find-replace", "disabled"],
+        ["t-sort-write", "disabled"],
+        ["t-awk", "disabled"],
+        ["t-newline", "disabled"],
+        ["t-safe-ls", "allowedWithPermission"],
+      ],
+    );
+    expect(toolState(store, "t-edit")?.status).toBe("errored");
+    expect(toolState(store, "t-sort-write")?.status).toBe("errored");
+    expect(toolState(store, "t-safe-ls")?.status).toBe("generated");
+  });
+
+  it("never lets agent-full override user disabled or dynamic disabled tool policies", async () => {
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: "s1",
+        tabOrder: ["s1"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Chat 1", loadState: "loaded" },
+        },
+        sessionsById: {
+          s1: initialSessionRuntime("s1", "Chat 1", {
+            mode: "agent-full",
+            history: [
+              assistant("a1", [
+                toolCall("t-user-disabled", "run_terminal_cmd", {
+                  command: "ls",
+                }),
+                toolCall("t-dyn-disabled", "run_terminal_cmd", {
+                  command: "rm -rf /",
+                }),
+                toolCall("t-upgrade", "run_terminal_cmd", {
+                  command: "npm test",
+                }),
+              ]),
+            ],
+            pendingApprovalCount: 3,
+          }),
+        },
+      },
+    });
+
+    store.mockIdeMessenger.responseHandlers["tools/evaluatePolicy"] = async (
+      data: any,
+    ) => {
+      if (data.parsedArgs?.command === "rm -rf /") {
+        return { policy: "disabled", displayValue: "rm -rf /" };
+      }
+      return { policy: "allowedWithPermission", displayValue: undefined };
+    };
+
+    const policiesUserDisabled = await evaluateSessionToolPolicies(api(store), {
+      sessionId: "s1",
+      toolCallIds: ["t-user-disabled"],
+      activeTools: ACTIVE_TOOLS,
+      toolPolicies: { run_terminal_cmd: "disabled" },
+    });
+    expect(policiesUserDisabled[0].policy).toBe("disabled");
+    expect(toolState(store, "t-user-disabled")?.status).toBe("errored");
+
+    const policiesDynAndUpgrade = await evaluateSessionToolPolicies(
+      api(store),
+      {
+        sessionId: "s1",
+        toolCallIds: ["t-dyn-disabled", "t-upgrade"],
+        activeTools: ACTIVE_TOOLS,
+        toolPolicies: { run_terminal_cmd: "allowedWithPermission" },
+      },
+    );
+    expect(
+      policiesDynAndUpgrade.map((p) => [p.toolCallState.toolCallId, p.policy]),
+    ).toEqual([
+      ["t-dyn-disabled", "disabled"],
+      ["t-upgrade", "allowedWithoutPermission"],
+    ]);
+    expect(toolState(store, "t-dyn-disabled")?.status).toBe("errored");
   });
 });

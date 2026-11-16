@@ -31,6 +31,24 @@ export const singleFindAndReplaceImpl: ClientToolImpl = async (
     0,
   );
 
+  const sessionMode = extras.sessionId
+    ? extras.getState().sessions.sessionsById[extras.sessionId]?.mode
+    : undefined;
+  if (sessionMode === "agent-full") {
+    await extras.ideMessenger.ide.writeFile(fileUri, newFileContents);
+    return {
+      respondImmediately: true,
+      output: [
+        {
+          name: "Edit Success",
+          content: `Successfully edited ${args.filepath || fileUri}`,
+          description: "",
+          hidden: true,
+        },
+      ],
+    };
+  }
+
   // Apply the changes to the file
   const streamId = uuid();
   applyEditToolChanges(

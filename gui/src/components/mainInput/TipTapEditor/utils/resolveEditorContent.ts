@@ -214,8 +214,9 @@ async function gatherContextItems({
     codebase: 0,
   };
 
-  const isInAgentMode =
-    (getState().sessions.sessionsById[sessionId]?.mode ?? "chat") === "agent";
+  const sessionMode =
+    getState().sessions.sessionsById[sessionId]?.mode ?? "plan";
+  const isInAgentMode = sessionMode === "agent" || sessionMode === "agent-full";
 
   // Build all context requests in parallel to minimize first-token latency
   // (previously each provider was fetched sequentially, 3+ IPC round-trips).

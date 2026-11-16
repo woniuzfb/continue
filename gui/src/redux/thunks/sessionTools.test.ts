@@ -7,7 +7,9 @@ import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
   type SessionRuntimeState,
   initialSessionRuntime,
+  setSessionMode,
 } from "../slices/sessionsSlice";
+import { setToolPolicy } from "../slices/uiSlice";
 import { resetSessionSaveQueues } from "./sessionPersistence";
 import {
   approveToolCall,
@@ -17,6 +19,7 @@ import {
   rejectToolCall,
   rejectToolCalls,
   resetSessionStreamRunner,
+  settleAskUserQuestion,
 } from "./sessionTools";
 
 function toolCallState(
@@ -83,6 +86,7 @@ function makeStore(options: StoreOptions = {}) {
   } = options;
 
   const s1 = initialSessionRuntime("s1", "Chat 1", {
+    mode: "agent",
     history: [userItem("u1"), assistantWithToolCalls("a1", toolCallStates)],
     pendingApprovalCount: toolCallStates.filter(
       (state) => state.status === "generated",
@@ -537,5 +541,279 @@ describe("tool saves never carry a measurement (Stage 2D 收口)", () => {
         expect((call[1] as any).fullConversationMeasurement).toBeUndefined();
       }
     }
+  });
+
+  it("preserves the active stream depth across AskUserQuestion pause and settleAskUserQuestion", async () => {
+    const askCall: ToolCallState = {
+      toolCallId: "t-ask",
+      toolCall: {
+        id: "t-ask",
+        type: "function",
+        function: {
+          name: "ask_user_question",
+          arguments: JSON.stringify({
+            questions: [
+              {
+                id: "q1",
+                question: "Pick one",
+                options: [{ label: "A" }, { label: "B" }],
+              },
+            ],
+          }),
+        },
+      },
+      status: "generated",
+      parsedArgs: {
+        questions: [
+          {
+            id: "q1",
+            question: "Pick one",
+            options: [{ label: "A" }, { label: "B" }],
+          },
+        ],
+      },
+    };
+    const store = makeStore({
+      toolCallStates: [askCall],
+      sessionOverrides: {
+        stream: { status: "streaming", requestId: "req-1", depth: 3 },
+      },
+    });
+    const runner = vi.fn(async () => {});
+    registerSessionStreamRunner(runner);
+
+    const approveOutcome = await run(
+      store,
+      approveToolCall({
+        sessionId: "s1",
+        requestId: "req-1",
+        toolCallId: "t-ask",
+        depth: 4,
+      }),
+    );
+    expect(approveOutcome.status).toBe("approved");
+    expect(approveOutcome.continuationRequested).toBe(false);
+    expect(session(store).stream.depth).toBe(4);
+    expect(toolMessages(store, "t-ask")).toHaveLength(0);
+
+    const settleOutcome = await run(
+      store,
+      settleAskUserQuestion({
+        sessionId: "s1",
+        toolCallId: "t-ask",
+        resultJson: JSON.stringify({
+          answers: [{ id: "q1", selected: ["A"] }],
+        }),
+      }),
+    );
+    expect(settleOutcome).toMatchObject({
+      status: "completed",
+      continuationRequested: true,
+    });
+    expect(toolMessages(store, "t-ask")).toHaveLength(1);
+    expect(toolMessages(store, "t-ask")[0].message.content).toContain('"A"');
+    expect(runner).toHaveBeenCalledWith({
+      sessionId: "s1",
+      requestId: "req-1",
+      depth: 5,
+    });
+  });
+
+  it("blocks edit client tools at execution time when session mode is plan", async () => {
+    const editCall: ToolCallState = {
+      toolCallId: "t-edit",
+      toolCall: {
+        id: "t-edit",
+        type: "function",
+        function: {
+          name: "edit_existing_file",
+          arguments: JSON.stringify({ filepath: "a.ts", changes: "x" }),
+        },
+      },
+      status: "generated",
+      parsedArgs: { filepath: "a.ts", changes: "x" },
+    };
+    const store = makeStore({
+      toolCallStates: [editCall],
+      sessionOverrides: { mode: "plan" },
+    });
+
+    const outcome = await run(
+      store,
+      approveToolCall({
+        sessionId: "s1",
+        requestId: "req-1",
+        toolCallId: "t-edit",
+      }),
+    );
+
+    expect(outcome.status).toBe("errored");
+    expect(outcome.errorMessage).toContain("disabled in Plan (read-only) mode");
+    expect(toolState(store, "t-edit").status).toBe("errored");
+  });
+
+  it("re-evaluates policy on approve and blocks terminal, create_new_file, and MCP tools after switching from Agent to Plan", async () => {
+    const termCall: ToolCallState = {
+      toolCallId: "t-term",
+      toolCall: {
+        id: "t-term",
+        type: "function",
+        function: {
+          name: "run_terminal_command",
+          arguments: JSON.stringify({ command: "rm -rf /tmp/test" }),
+        },
+      },
+      status: "generated",
+      parsedArgs: { command: "rm -rf /tmp/test" },
+    };
+    const createCall: ToolCallState = {
+      toolCallId: "t-create",
+      toolCall: {
+        id: "t-create",
+        type: "function",
+        function: {
+          name: "create_new_file",
+          arguments: JSON.stringify({ filepath: "b.ts", contents: "hello" }),
+        },
+      },
+      status: "generated",
+      parsedArgs: { filepath: "b.ts", contents: "hello" },
+    };
+    const mcpCall: ToolCallState = {
+      toolCallId: "t-mcp",
+      toolCall: {
+        id: "t-mcp",
+        type: "function",
+        function: {
+          name: "mcp_write_db",
+          arguments: JSON.stringify({ sql: "DROP TABLE x" }),
+        },
+      },
+      status: "generated",
+      parsedArgs: { sql: "DROP TABLE x" },
+    };
+
+    const store = makeStore({
+      toolCallStates: [termCall, createCall, mcpCall],
+      sessionOverrides: { mode: "agent" },
+    });
+    const requestSpy = vi.spyOn(store.mockIdeMessenger, "request");
+
+    // User switches the session from Agent -> Plan while calls are awaiting approval
+    store.dispatch(setSessionMode({ sessionId: "s1", mode: "plan" }));
+
+    const outTerm = await run(
+      store,
+      approveToolCall({
+        sessionId: "s1",
+        requestId: "req-1",
+        toolCallId: "t-term",
+      }),
+    );
+    const outCreate = await run(
+      store,
+      approveToolCall({
+        sessionId: "s1",
+        requestId: "req-1",
+        toolCallId: "t-create",
+      }),
+    );
+    const outMcp = await run(
+      store,
+      approveToolCall({
+        sessionId: "s1",
+        requestId: "req-1",
+        toolCallId: "t-mcp",
+      }),
+    );
+
+    expect(outTerm.status).toBe("errored");
+    expect(outCreate.status).toBe("errored");
+    expect(outMcp.status).toBe("errored");
+    expect(toolState(store, "t-term").status).toBe("errored");
+    expect(toolState(store, "t-create").status).toBe("errored");
+    expect(toolState(store, "t-mcp").status).toBe("errored");
+    expect(requestSpy).not.toHaveBeenCalledWith(
+      "tools/call",
+      expect.anything(),
+    );
+  });
+
+  it("blocks approval execution when a pending tool is changed to Excluded (disabled) while awaiting approval", async () => {
+    const store = makeStore({
+      toolCallStates: [
+        toolCallState("t1", "generated", "run_terminal_command"),
+      ],
+      sessionOverrides: { mode: "agent" },
+    });
+    const requestSpy = vi.spyOn(store.mockIdeMessenger, "request");
+
+    // User marks run_terminal_command as disabled (Excluded) before clicking Approve
+    store.dispatch(
+      setToolPolicy({
+        toolName: "run_terminal_command",
+        policy: "disabled",
+      }),
+    );
+
+    const outcome = await run(
+      store,
+      approveToolCall({
+        sessionId: "s1",
+        requestId: "req-1",
+        toolCallId: "t1",
+      }),
+    );
+
+    expect(outcome.status).toBe("errored");
+    expect(toolState(store, "t1").status).toBe("errored");
+    expect(toolState(store, "t1").output?.[0]).toMatchObject({
+      name: "Security Policy Violation",
+    });
+    expect(requestSpy).not.toHaveBeenCalledWith(
+      "tools/call",
+      expect.anything(),
+    );
+  });
+
+  it("refuses to auto-execute when a queued auto-approved call tightens to allowedWithPermission before execution", async () => {
+    const lsCall: ToolCallState = {
+      toolCallId: "t-ls",
+      toolCall: {
+        id: "t-ls",
+        type: "function",
+        function: {
+          name: "run_terminal_command",
+          arguments: JSON.stringify({ command: "ls -la" }),
+        },
+      },
+      status: "generated",
+      parsedArgs: { command: "ls -la" },
+    };
+    const store = makeStore({
+      toolCallStates: [lsCall],
+      sessionOverrides: { mode: "plan" },
+    });
+    const requestSpy = vi.spyOn(store.mockIdeMessenger, "request");
+
+    const outcome = await run(
+      store,
+      approveToolCall({
+        sessionId: "s1",
+        requestId: "req-1",
+        toolCallId: "t-ls",
+        isAutoApproved: true,
+      }),
+    );
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      reason: "not-awaiting-approval",
+    });
+    expect(toolState(store, "t-ls").status).toBe("generated");
+    expect(requestSpy).not.toHaveBeenCalledWith(
+      "tools/call",
+      expect.anything(),
+    );
   });
 });

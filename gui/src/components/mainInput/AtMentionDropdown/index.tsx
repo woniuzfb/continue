@@ -165,9 +165,10 @@ const AtMentionDropdown = forwardRef((props: AtMentionDropdownProps, ref) => {
   const sessionId = useSessionId();
 
   const ideMessenger = useContext(IdeMessengerContext);
-  const isInAgentMode = useAppSelector(
-    (state) => selectSessionById(state, sessionId)?.mode === "agent",
-  );
+  const isInAgentMode = useAppSelector((state) => {
+    const m = selectSessionById(state, sessionId)?.mode;
+    return m === "agent" || m === "agent-full";
+  });
 
   const [selectedIndex, setSelectedIndex] = useState(0);
 

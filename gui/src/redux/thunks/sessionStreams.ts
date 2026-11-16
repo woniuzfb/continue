@@ -49,6 +49,7 @@ import {
   ThunkExtrasType,
 } from "../store";
 import { constructMessages } from "core/util/constructMessages";
+import { fileUriOrPathToPath } from "core/util/uri";
 import { getBaseSystemMessage } from "../util/getBaseSystemMessage";
 import {
   applySessionToolCallUpdate,
@@ -441,6 +442,7 @@ async function runToolSequence(
             requestId,
             toolCallIds: readonlyAutoApproved,
             depth: depth + 1,
+            isAutoApproved: true,
           }),
         );
       }
@@ -465,6 +467,7 @@ async function runToolSequence(
           requestId,
           toolCallIds: autoApproved,
           depth: depth + 1,
+          isAutoApproved: true,
         }),
       );
       return { kind: "handoff" };
@@ -678,9 +681,16 @@ async function streamModelTurn(
     model: selectedChatModel,
   });
 
-  const baseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
+  const workspaceDirs = await ideMessenger.ide.getWorkspaceDirs();
+  const primaryWorkspacePath = workspaceDirs?.[0]
+    ? fileUriOrPathToPath(workspaceDirs[0])
+    : "";
+  const rawBaseSystemMessage = state.config.config.ui?.skipBaseSystemMessage
     ? ""
     : getBaseSystemMessage(session.mode, selectedChatModel, activeTools);
+  const baseSystemMessage = primaryWorkspacePath
+    ? `${rawBaseSystemMessage}\n\nYour working directory is ${primaryWorkspacePath}.`.trim()
+    : rawBaseSystemMessage;
   const systemMessage = systemToolsFramework
     ? addSystemMessageToolsToSystemMessage(
         systemToolsFramework,
@@ -953,6 +963,7 @@ async function runSessionStreamImpl(
       requestId,
       aborter,
       chatModelRef: turnChatModelRef,
+      depth,
     }),
   );
   checkpointBaselines.set(sessionId, {

@@ -63,6 +63,7 @@ const DEFAULT_MOCK_CORE_RESPONSES: MockResponses = {
     firstTurnItems: [],
     totalHistoryCount: 0,
   },
+  "conversation/uncompact": undefined,
   "config/getSerializedProfileInfo": {
     profileId: "local",
     profiles: [],

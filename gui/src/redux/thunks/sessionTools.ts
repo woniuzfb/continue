@@ -4,6 +4,7 @@ import { CLIENT_TOOLS_IMPLS } from "core/tools/builtIn";
 import { ContinueError, ContinueErrorReason } from "core/util/errors";
 import { renderContextItems } from "core/util/messageContent";
 import { callClientTool } from "../../util/clientTools/callClientTool";
+import { selectSessionActiveTools } from "../selectors/sessionToolCalls";
 import { selectSessionById } from "../selectors/sessions";
 import type { ChatHistoryItemWithMessageId } from "../slices/sessionHistory";
 import {
@@ -18,6 +19,10 @@ import {
   findSessionToolCallTarget,
   type SessionToolCallTarget,
 } from "../util/sessionToolCallWrites";
+import {
+  evaluateToolPolicy,
+  policyViolationContextItem,
+} from "./evaluateToolPolicies";
 import { enqueueSessionSave } from "./sessionPersistence";
 import { NO_MEASUREMENT } from "../util/sessionSaveIntent";
 
@@ -285,7 +290,9 @@ async function runApproveToolCall(
   input: ApproveInput,
   { dispatch, getState, ideMessenger }: ToolLoopApi,
 ): Promise<SessionToolOutcome> {
-  const { sessionId, requestId, toolCallId, depth = 0 } = input;
+  const { sessionId, requestId, toolCallId } = input;
+  const depth =
+    input.depth ?? selectSessionById(getState(), sessionId)?.stream.depth ?? 0;
 
   const guard = guardAwaitingToolCall(getState(), input);
   if (!guard.ok) {
@@ -294,6 +301,96 @@ async function runApproveToolCall(
   const { target } = guard;
   const messageId = target.assistantItem.message.id;
   const api = { dispatch, getState };
+
+  // Re-evaluate the tool policy against the current session mode, activeTools,
+  // and toolPolicies before transitioning to `calling` so mode switches (e.g.
+  // Agent -> Plan) or policy exclusions made while awaiting approval are enforced.
+  const currentState = getState();
+  const currentSession = selectSessionById(currentState, sessionId);
+  const configuredTools = currentState.config.config.tools ?? [];
+  const activeTools = selectSessionActiveTools(currentState, sessionId);
+  const toolName = target.toolCallState.toolCall.function.name;
+  const toolGroup =
+    target.toolCallState.tool?.group ??
+    configuredTools.find((t) => t.function.name === toolName)?.group;
+  const isGroupExcluded =
+    !!toolGroup && currentState.ui.toolGroupSettings?.[toolGroup] === "exclude";
+  const isFilteredOutFromConfigured =
+    configuredTools.some((t) => t.function.name === toolName) &&
+    !activeTools.some((t) => t.function.name === toolName);
+
+  const evaluated =
+    isGroupExcluded || isFilteredOutFromConfigured
+      ? {
+          policy: "disabled" as const,
+          displayValue: `${toolName} is disabled by current mode or tool policy.`,
+          toolCallState: target.toolCallState,
+        }
+      : await evaluateToolPolicy(
+          ideMessenger,
+          activeTools,
+          target.toolCallState,
+          currentState.ui.toolSettings,
+          currentSession?.mode,
+        );
+
+  // Re-verify that the session/request/tool call is still awaiting approval after async policy check.
+  const postPolicyGuard = guardAwaitingToolCall(getState(), input);
+  if (!postPolicyGuard.ok) {
+    return skipped(toolCallId, postPolicyGuard.reason);
+  }
+
+  if (evaluated.policy === "disabled") {
+    const violationOutput = [
+      policyViolationContextItem(target.toolCallState, evaluated.displayValue),
+    ];
+    applySessionToolCallUpdate(api, {
+      sessionId,
+      messageId,
+      toolCallId,
+      patch: {
+        status: "errored",
+        output: violationOutput,
+      },
+    });
+    logToolUsage(
+      target.toolCallState,
+      false,
+      false,
+      ideMessenger,
+      violationOutput,
+    );
+    void dispatch(
+      enqueueSessionSave({
+        sessionId,
+        reason: "TOOL_CALL_APPROVED",
+        measurementIntent: NO_MEASUREMENT,
+      }),
+    );
+
+    let continuationRequested = false;
+    if (!input.deferContinuation) {
+      const loop = await runContinueToolLoop(
+        { sessionId, requestId, toolCallId, depth },
+        { dispatch, getState, ideMessenger },
+      );
+      continuationRequested = !!loop.continuationRequested;
+    }
+
+    return {
+      status: "errored",
+      toolCallId,
+      errorMessage:
+        evaluated.displayValue ||
+        `Tool ${toolName} is disabled by security policy.`,
+      continuationRequested,
+    };
+  }
+
+  if (input.isAutoApproved && evaluated.policy === "allowedWithPermission") {
+    dispatch(pauseSessionStream({ sessionId, requestId, depth }));
+    return skipped(toolCallId, "not-awaiting-approval");
+  }
 
   applySessionToolCallUpdate(api, {
     sessionId,
@@ -355,7 +452,7 @@ async function runApproveToolCall(
   // A client tool that waits for its apply flow leaves the request live but
   // stops the stream, so the UI can show the pending apply state.
   if (!execution.continueTurn && !execution.error) {
-    dispatch(pauseSessionStream({ sessionId, requestId }));
+    dispatch(pauseSessionStream({ sessionId, requestId, depth }));
   }
 
   let continuationRequested = false;
@@ -392,6 +489,7 @@ type BatchInput = {
   requestId: string;
   toolCallIds: string[];
   depth?: number;
+  isAutoApproved?: boolean;
 };
 
 async function runBatch(
@@ -402,18 +500,28 @@ async function runBatch(
     api: ToolLoopApi,
   ) => Promise<SessionToolOutcome>,
 ): Promise<SessionToolOutcome[]> {
-  const { sessionId, requestId, toolCallIds, depth = 0 } = input;
+  const { sessionId, requestId, toolCallIds, isAutoApproved } = input;
+  const depth =
+    input.depth ??
+    selectSessionById(api.getState(), sessionId)?.stream.depth ??
+    0;
   const outcomes: SessionToolOutcome[] = [];
   for (const toolCallId of toolCallIds) {
     outcomes.push(
       await settle(
-        { sessionId, requestId, toolCallId, depth, deferContinuation: true },
+        {
+          sessionId,
+          requestId,
+          toolCallId,
+          depth,
+          isAutoApproved,
+          deferContinuation: true,
+        },
         api,
       ),
     );
   }
-  // Record every result first, then continue the loop exactly once, anchored
-  // on the last call in the batch.
+  // Record every terminal result first, then continue the loop once if all calls are terminal.
   for (const toolCallId of toolCallIds) {
     appendToolResultMessage(
       api.getState(),
@@ -449,7 +557,9 @@ async function runRejectToolCall(
   input: ApproveInput,
   { dispatch, getState, ideMessenger }: ToolLoopApi,
 ): Promise<SessionToolOutcome> {
-  const { sessionId, requestId, toolCallId, depth = 0 } = input;
+  const { sessionId, requestId, toolCallId } = input;
+  const depth =
+    input.depth ?? selectSessionById(getState(), sessionId)?.stream.depth ?? 0;
 
   const guard = guardAwaitingToolCall(getState(), input);
   if (!guard.ok) {
@@ -540,8 +650,10 @@ function areAllToolCallsTerminal(
 }
 
 /**
- * Appends the tool result message exactly once. A retried continuation or a
- * batch that already recorded the result must not duplicate the message.
+ * Appends the tool result message exactly once once the call has reached a
+ * terminal status (`done`, `errored`, or `canceled`). Calls that are still
+ * `calling` (e.g. `ask_user_question` or diff apply) do not emit an empty
+ * placeholder message early.
  */
 function appendToolResultMessage(
   state: ThunkApiType["state"],
@@ -556,9 +668,17 @@ function appendToolResultMessage(
     return;
   }
   const target = locateToolCall(session, toolCallId);
+  if (
+    !target ||
+    (target.toolCallState.status !== "done" &&
+      target.toolCallState.status !== "errored" &&
+      target.toolCallState.status !== "canceled")
+  ) {
+    return;
+  }
   const toolMessage: ChatMessage = {
     role: "tool",
-    content: renderContextItems(target?.toolCallState.output ?? []),
+    content: renderContextItems(target.toolCallState.output ?? []),
     toolCallId,
   };
   dispatch(
@@ -571,9 +691,10 @@ function appendToolResultMessage(
 }
 
 async function runContinueToolLoop(
-  { sessionId, requestId, toolCallId, depth = 0 }: ContinueInput,
+  input: ContinueInput,
   { dispatch, getState }: ToolLoopApi,
 ): Promise<SessionToolOutcome> {
+  const { sessionId, requestId, toolCallId } = input;
   const state = getState();
   const session = selectSessionById(state, sessionId);
   if (!session) {
@@ -582,6 +703,7 @@ async function runContinueToolLoop(
   if (session.stream.requestId !== requestId) {
     return skipped(toolCallId, "stale-request");
   }
+  const depth = input.depth ?? session.stream.depth ?? 0;
   const target = locateToolCall(session, toolCallId);
   if (!target) {
     return skipped(toolCallId, "tool-call-missing");
@@ -684,3 +806,53 @@ export const rejectActiveToolCall = createAsyncThunk<
     rejectToolCall({ ...target, ...input }),
   ).unwrap()) as SessionToolOutcome;
 });
+
+export const settleAskUserQuestion = createAsyncThunk<
+  SessionToolOutcome,
+  {
+    sessionId: string;
+    toolCallId: string;
+    resultJson: string;
+    depth?: number;
+  },
+  ThunkApiType
+>(
+  "sessions/settleAskUserQuestion",
+  async (
+    { sessionId, toolCallId, resultJson, depth },
+    { dispatch, extra, getState },
+  ) => {
+    const session = getState().sessions.sessionsById[sessionId];
+    const requestId = session?.stream.requestId;
+    if (!session || !requestId) {
+      return skipped(toolCallId, "stale-request");
+    }
+    const target = findSessionToolCallTarget(session.history, toolCallId);
+    if (!target) {
+      return skipped(toolCallId, "tool-call-missing");
+    }
+    const resolvedDepth = depth ?? session.stream.depth ?? 0;
+    applySessionToolCallUpdate(
+      { dispatch, getState },
+      {
+        sessionId,
+        messageId: target.assistantItem.message.id,
+        toolCallId,
+        patch: {
+          status: "done",
+          output: [
+            {
+              name: "User Answer",
+              description: "Answer to ask_user_question",
+              content: resultJson,
+            },
+          ],
+        },
+      },
+    );
+    return await runContinueToolLoop(
+      { sessionId, requestId, toolCallId, depth: resolvedDepth },
+      { dispatch, getState, ideMessenger: extra.ideMessenger },
+    );
+  },
+);

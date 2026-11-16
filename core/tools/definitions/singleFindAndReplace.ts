@@ -96,6 +96,7 @@ WARNINGS:
     return {
       ...args,
       fileUri,
+      resolvedPath: fileUri,
       editingFileContents,
       newFileContents,
     };

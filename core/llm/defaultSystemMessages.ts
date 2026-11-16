@@ -73,6 +73,17 @@ However, only output codeblocks for suggestion and demonstration purposes, for e
 
 </important_rules>`;
 
+export const DEFAULT_READONLY_SYSTEM_MESSAGE = `\
+<important_rules>
+  You are in read-only mode.
+  Only use read-only tools. Do not use any tools that would write to or modify files.
+  If the user wants to make changes to files, offer that they can use the Apply Button on the code block, or switch to Agent mode using the Mode Selector dropdown to give you access to write tools.
+
+${CODEBLOCK_FORMATTING_INSTRUCTIONS}
+
+${BRIEF_LAZY_INSTRUCTIONS}
+</important_rules>`;
+
 // The note about read-only tools is for MCP servers
 // For now, all MCP tools are included so model can decide if they are read-only
 export const DEFAULT_PLAN_SYSTEM_MESSAGE = `\

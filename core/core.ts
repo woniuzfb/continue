@@ -23,6 +23,7 @@ import { createNewPromptFileV2 } from "./promptFiles/createNewPromptFile";
 import { callTool } from "./tools/callTool";
 import { ChatDescriber } from "./util/chatDescriber";
 import { compactConversation } from "./util/conversationCompaction";
+import { forkConversation } from "./util/conversationFork";
 import { searchSessionContent } from "./util/historySearch";
 import { GlobalContext } from "./util/GlobalContext";
 import historyManager from "./util/history";
@@ -841,6 +842,55 @@ export class Core {
         return result;
       } catch (error) {
         Logger.error(`Error compacting conversation: ${error}`);
+        throw error;
+      }
+    });
+
+    on("conversation/uncompact", async (msg) => {
+      try {
+        const session = historyManager.load(msg.data.sessionId);
+        const firstUserItem = session.history.find(
+          (item) => item.message.role === "user",
+        );
+        if (!firstUserItem) {
+          return;
+        }
+        const modelRef = msg.data.modelRef ?? session.chatModelRef ?? undefined;
+        const title = msg.data.title ?? session.chatModelTitle ?? undefined;
+        const currentModel =
+          modelRef || title
+            ? await resolveRequestChatModel({ modelRef, title })
+            : (await this.configHandler.loadConfig()).config
+                ?.selectedModelByRole.chat;
+        if (!currentModel) {
+          return;
+        }
+        await currentModel.chat(
+          [
+            firstUserItem.message,
+            {
+              role: "user",
+              content: "[VE_UNCOMPACT_SESSION]",
+            },
+          ],
+          new AbortController().signal,
+          {},
+        );
+      } catch (error) {
+        Logger.error(`Error notifying uncompact conversation: ${error}`);
+      }
+    });
+
+    on("conversation/fork", async (msg) => {
+      try {
+        return forkConversation({
+          sessionId: msg.data.sessionId,
+          index: msg.data.index,
+          targetMessageId: msg.data.targetMessageId,
+          historyManager,
+        });
+      } catch (error) {
+        Logger.error(`Error forking conversation: ${error}`);
         throw error;
       }
     });

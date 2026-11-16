@@ -49,23 +49,25 @@ export function ModeSelect() {
     return getMetaKeyLabel();
   }, []);
 
+  const effectiveMode: MessageModes = mode === "chat" ? "plan" : mode;
+
   const cycleMode = useCallback(() => {
-    if (mode === "chat") {
-      void dispatch(setActiveSessionModeAndSave({ mode: "plan" }));
-    } else if (mode === "plan") {
+    if (effectiveMode === "plan") {
       void dispatch(setActiveSessionModeAndSave({ mode: "agent" }));
+    } else if (effectiveMode === "agent") {
+      void dispatch(setActiveSessionModeAndSave({ mode: "agent-full" }));
     } else {
-      void dispatch(setActiveSessionModeAndSave({ mode: "chat" }));
+      void dispatch(setActiveSessionModeAndSave({ mode: "plan" }));
     }
     // Only focus main editor if another one doesn't already have focus
     if (!document.activeElement?.classList?.contains("ProseMirror")) {
       mainEditor?.commands.focus();
     }
-  }, [mode, mainEditor]);
+  }, [effectiveMode, mainEditor, dispatch]);
 
   const selectMode = useCallback(
     (newMode: MessageModes) => {
-      if (newMode === mode) {
+      if (newMode === effectiveMode) {
         return;
       }
 
@@ -73,7 +75,7 @@ export function ModeSelect() {
 
       mainEditor?.commands.focus();
     },
-    [mode, mainEditor],
+    [effectiveMode, mainEditor, dispatch],
   );
 
   useEffect(() => {
@@ -106,15 +108,19 @@ export function ModeSelect() {
   );
 
   return (
-    <Listbox value={mode} onChange={selectMode}>
+    <Listbox value={effectiveMode} onChange={selectMode}>
       <div className="relative">
         <ListboxButton
           data-testid="mode-select-button"
           className="xs:px-2 text-description bg-lightgray/20 gap-1 rounded-full border-none px-1.5 py-0.5 transition-colors duration-200 hover:brightness-110"
         >
-          <ModeIcon mode={mode} />
+          <ModeIcon mode={effectiveMode} />
           <span className="hidden sm:block">
-            {mode === "chat" ? "Chat" : mode === "agent" ? "Agent" : "Plan"}
+            {effectiveMode === "agent-full"
+              ? "Full Agent"
+              : effectiveMode === "agent"
+                ? "Agent"
+                : "Plan"}
           </span>
           <ChevronDownIcon
             className="h-2 w-2 flex-shrink-0"
@@ -122,29 +128,6 @@ export function ModeSelect() {
           />
         </ListboxButton>
         <ListboxOptions className="min-w-32 max-w-48">
-          <ListboxOption value="chat">
-            <div className="flex flex-row items-center gap-1.5">
-              <ModeIcon mode="chat" />
-              <span className="">Chat</span>
-              <ToolTip
-                style={{
-                  zIndex: 200001,
-                }}
-                content="All tools disabled"
-              >
-                <InformationCircleIcon
-                  data-tooltip-id="chat-tip"
-                  className="h-2.5 w-2.5 flex-shrink-0"
-                />
-              </ToolTip>
-              <span
-                className={`text-description-muted text-[${getFontSize() - 3}px] mr-auto`}
-              >
-                {getMetaKeyLabel()}L
-              </span>
-            </div>
-            {mode === "chat" && <CheckIcon className="ml-auto h-3 w-3" />}
-          </ListboxOption>
           <ListboxOption value="plan" className={"gap-1"}>
             <div className="flex flex-row items-center gap-1.5">
               <ModeIcon mode="plan" />
@@ -153,14 +136,14 @@ export function ModeSelect() {
                 style={{
                   zIndex: 200001,
                 }}
-                content="Read-only/MCP tools available"
+                content="Read-only mode (仅可查看)"
               >
                 <InformationCircleIcon className="h-2.5 w-2.5 flex-shrink-0" />
               </ToolTip>
             </div>
             {!isGoodAtAgentMode && notGreatAtAgent("Plan")}
             <CheckIcon
-              className={`ml-auto h-3 w-3 ${mode === "plan" ? "" : "opacity-0"}`}
+              className={`ml-auto h-3 w-3 ${effectiveMode === "plan" ? "" : "opacity-0"}`}
             />
           </ListboxOption>
 
@@ -172,14 +155,33 @@ export function ModeSelect() {
                 style={{
                   zIndex: 200001,
                 }}
-                content="All tools available"
+                content="Workspace write mode (工作区内修改)"
               >
                 <InformationCircleIcon className="h-2.5 w-2.5 flex-shrink-0" />
               </ToolTip>
             </div>
             {!isGoodAtAgentMode && notGreatAtAgent("Agent")}
             <CheckIcon
-              className={`ml-auto h-3 w-3 ${mode === "agent" ? "" : "opacity-0"}`}
+              className={`ml-auto h-3 w-3 ${effectiveMode === "agent" ? "" : "opacity-0"}`}
+            />
+          </ListboxOption>
+
+          <ListboxOption value="agent-full" className={"gap-1"}>
+            <div className="flex flex-row items-center gap-1.5">
+              <ModeIcon mode="agent-full" />
+              <span className="">Full Agent</span>
+              <ToolTip
+                style={{
+                  zIndex: 200001,
+                }}
+                content="Full access mode, auto-approve all tools (完全权限)"
+              >
+                <InformationCircleIcon className="h-2.5 w-2.5 flex-shrink-0" />
+              </ToolTip>
+            </div>
+            {!isGoodAtAgentMode && notGreatAtAgent("Full Agent")}
+            <CheckIcon
+              className={`ml-auto h-3 w-3 ${effectiveMode === "agent-full" ? "" : "opacity-0"}`}
             />
           </ListboxOption>
 

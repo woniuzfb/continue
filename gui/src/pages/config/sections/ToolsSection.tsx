@@ -457,15 +457,14 @@ export function ToolsSection() {
     });
   };
 
-  const allToolsOff = useMemo(() => {
-    return mode === "chat";
-  }, [mode]);
+  const effectiveMode = mode === "chat" ? "plan" : mode;
+  const allToolsOff = false;
 
   const availableToolsMessage =
-    mode === "chat"
-      ? "All tools disabled in Chat, switch to Plan or Agent mode to use tools"
-      : mode === "plan"
-        ? "Read-only tools available in Plan mode"
+    effectiveMode === "plan"
+      ? "Read-only tools (plus read-only shell commands and MCP tools) available in Plan mode"
+      : effectiveMode === "agent-full"
+        ? "All tools automatically approved in Full Agent mode"
         : "";
 
   return (
@@ -504,14 +503,6 @@ export function ToolsSection() {
           </Card>
         ) : (
           <>
-            {mode === "chat" && (
-              <Alert type="info" size="sm">
-                <span className="text-2xs italic">
-                  All MCPs are disabled in Chat, switch to Plan or Agent mode to
-                  use MCPs
-                </span>
-              </Alert>
-            )}
             {mergedBlocks.length > 0 ? (
               mergedBlocks.map(({ block, blockFromYaml }) => (
                 <MCPServerPreview

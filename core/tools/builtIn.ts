@@ -17,6 +17,7 @@ export enum BuiltInToolNames {
   FetchUrlContent = "fetch_url_content",
   CodebaseTool = "codebase",
   ReadSkill = "read_skill",
+  AskUserQuestion = "ask_user_question",
 
   // excluded from allTools for now
   ViewRepoMap = "view_repo_map",
@@ -29,4 +30,5 @@ export const CLIENT_TOOLS_IMPLS = [
   BuiltInToolNames.EditExistingFile,
   BuiltInToolNames.SingleFindAndReplace,
   BuiltInToolNames.MultiEdit,
+  BuiltInToolNames.AskUserQuestion,
 ];

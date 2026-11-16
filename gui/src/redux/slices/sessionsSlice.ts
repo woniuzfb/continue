@@ -26,9 +26,11 @@ import {
   ChatHistoryItemWithMessageId,
   SavedMergedProvenance,
   applyStreamUpdatesToHistory,
+  latestSummaryOf,
   mergeSplitReplies,
 } from "./sessionHistory";
 import { findGuiIndexContainingMessageId } from "../util/historyTarget";
+import { normalizeSessionMode } from "../util/sessionMode";
 
 /**
  * Phase 1 session ownership.
@@ -109,6 +111,8 @@ export type SessionStreamState = {
   chatModelRef?: SessionChatModelRef;
   aborter?: AbortController;
   error?: string;
+  /** Current tool-loop depth for the active logical turn, preserved across pauses. */
+  depth?: number;
   /**
    * Whether the **live request** has already written conversation content
    * (方案.md §五.16.4 step 2). `undefined` means false.
@@ -322,13 +326,19 @@ export function initialSessionRuntime(
   title: string,
   overrides: Partial<SessionRuntimeState> = {},
 ): SessionRuntimeState {
+  const normalizedOverrides: Partial<SessionRuntimeState> = {
+    ...overrides,
+    ...(overrides.mode !== undefined
+      ? { mode: normalizeSessionMode(overrides.mode) }
+      : {}),
+  };
   return {
     id: sessionId,
     title,
     history: [],
     conversationRevision: 0,
     firstTurnItems: [],
-    mode: "chat",
+    mode: "plan",
     symbols: {},
     isInEdit: false,
     historyKeepFloor: 0,
@@ -350,7 +360,7 @@ export function initialSessionRuntime(
         streamId: "chat",
         status: "not-started",
       } as ApplyState,
-      returnToMode: "chat",
+      returnToMode: "plan",
       lastNonEditSessionWasEmpty: false,
     },
     scrollState: {
@@ -363,7 +373,7 @@ export function initialSessionRuntime(
     dirty: false,
     lifecycle: { closing: false },
     messageIdMigration: { state: "not-requested" },
-    ...overrides,
+    ...normalizedOverrides,
   };
 }
 
@@ -828,13 +838,33 @@ export const sessionsSlice = createSlice({
         }
       }
       const replaces = insertionPoint < session.history.length;
-      session.history = replaces
-        ? [
-            ...session.history.slice(0, insertionPoint),
-            userItem,
-            assistantPlaceholder,
-          ]
-        : [...session.history, userItem, assistantPlaceholder];
+      const prefixHistory = replaces
+        ? session.history.slice(0, insertionPoint)
+        : session.history;
+      for (const item of prefixHistory) {
+        for (const tc of item.toolCallStates ?? []) {
+          if (
+            tc.status === "generating" ||
+            tc.status === "generated" ||
+            tc.status === "calling"
+          ) {
+            tc.status = "canceled";
+            if (!tc.output || tc.output.length === 0) {
+              tc.output = [
+                {
+                  name: `Tool cancelled: ${tc.toolCall.function?.name ?? tc.toolCallId}`,
+                  description: "Cancelled by user message submission",
+                  content: "User cancelled or skipped this tool call.",
+                },
+              ];
+            }
+          }
+        }
+      }
+      session.history = [...prefixHistory, userItem, assistantPlaceholder];
+      session.pendingApprovalCount = countAwaitingApprovalToolCalls(
+        session.history,
+      );
       reindexSummaryAfterSubmittedTurn(session);
       // One boundary for the whole submit: persistence dirty + exactly one content
       // version, with the metrics snapshot's freshness dropped (its value stays).
@@ -1122,6 +1152,7 @@ export const sessionsSlice = createSlice({
         aborter?: AbortController;
         /** Captured by the caller for a fresh turn; inherited by a continuation. */
         chatModelRef?: SessionChatModelRef;
+        depth?: number;
       }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
@@ -1137,12 +1168,16 @@ export const sessionsSlice = createSlice({
         const hasConversationMutation = isContinuation
           ? (session.stream.hasConversationMutation ?? false)
           : false;
+        const depth =
+          action.payload.depth ??
+          (isContinuation ? session.stream.depth : undefined);
         session.stream = {
           status: "streaming",
           requestId: action.payload.requestId,
           aborter: action.payload.aborter,
           hasConversationMutation,
           chatModelRef,
+          ...(depth !== undefined ? { depth } : {}),
         };
         // The awaiting-stream window ends here: from now on `isStreaming` is what keeps the
         // animated border on the submitted bubble, so the presentation-only pending state is
@@ -1181,12 +1216,17 @@ export const sessionsSlice = createSlice({
      */
     pauseSessionStream: (
       state,
-      action: PayloadAction<{ sessionId: string; requestId: string }>,
+      action: PayloadAction<{
+        sessionId: string;
+        requestId: string;
+        depth?: number;
+      }>,
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (!session || session.stream.requestId !== action.payload.requestId) {
         return;
       }
+      const depth = action.payload.depth ?? session.stream.depth;
       session.stream = {
         status: "idle",
         requestId: action.payload.requestId,
@@ -1203,6 +1243,7 @@ export const sessionsSlice = createSlice({
         // by this request's terminal (方案.md §五.16.4 step 2).
         hasConversationMutation:
           session.stream.hasConversationMutation ?? false,
+        ...(depth !== undefined ? { depth } : {}),
       };
     },
     finishSessionStream: (
@@ -1775,7 +1816,9 @@ export const sessionsSlice = createSlice({
     ) => {
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
-        session.editState.returnToMode = action.payload.mode;
+        session.editState.returnToMode = normalizeSessionMode(
+          action.payload.mode,
+        );
       }
     },
     setSessionPreviousModeEditorContent: (
@@ -1867,10 +1910,15 @@ export const sessionsSlice = createSlice({
         markHistoryChanged(session);
         item.conversationSummary = undefined;
         // Deleting the carrier must stop the summary from being sent before
-        // the authoritative save response arrives (方案.md §十一).
-        if (
+        // the authoritative save response arrives (方案.md §十一), while
+        // falling back to any earlier compaction summary in the loaded history.
+        const remainingSummary = latestSummaryOf(session.history);
+        if (remainingSummary) {
+          session.latestConversationSummary = remainingSummary;
+        } else if (
+          !session.pagination.truncated ||
           session.latestConversationSummary?.sourceMessageId ===
-          action.payload.messageId
+            action.payload.messageId
         ) {
           session.latestConversationSummary = undefined;
         }
@@ -1882,14 +1930,15 @@ export const sessionsSlice = createSlice({
       state,
       action: PayloadAction<{ sessionId: string; mode: MessageModes }>,
     ) => {
+      const normalizedMode = normalizeSessionMode(action.payload.mode);
       const session = findRuntime(state, action.payload.sessionId);
       if (session) {
-        session.mode = action.payload.mode;
+        session.mode = normalizedMode;
         // 方案.md §五.16.1/§五.16.2: mode 只改变 constructionIdentity（由门禁
         // 比较后触发重算），不是新的内容版本。
         const descriptor = state.tabDescriptors[action.payload.sessionId];
         if (descriptor) {
-          descriptor.mode = action.payload.mode;
+          descriptor.mode = normalizedMode;
         }
       }
     },

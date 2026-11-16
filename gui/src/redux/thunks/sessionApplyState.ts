@@ -207,9 +207,11 @@ export const handleSessionApplyStateUpdate = createAsyncThunk<
     const { toolCallState } = target;
     const toolName = toolCallState.toolCall.function.name;
 
+    const sessionMode = selectSessionById(getState(), sessionId)?.mode;
     if (
       applyState.status === "done" &&
-      getState().ui.toolSettings[toolName] === "allowedWithoutPermission"
+      (getState().ui.toolSettings[toolName] === "allowedWithoutPermission" ||
+        sessionMode === "agent-full")
     ) {
       extra.ideMessenger.post("acceptDiff", {
         streamId: applyState.streamId,

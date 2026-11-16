@@ -19,6 +19,7 @@ import {
 import { setTTSActive } from "../redux/slices/uiSlice";
 
 import { modelSupportsReasoning } from "core/llm/autodetect";
+import { isReasoningDefaultDisabledModel } from "core/llm/localConversation";
 import { routeApplyStateUpdate } from "../redux/thunks/sessionApplyState";
 import { stopActiveSessionStream } from "../redux/thunks/sessionStreams";
 
@@ -93,12 +94,9 @@ function ParallelListeners() {
       const supportsReasoning = modelSupportsReasoning(chatModel);
       const isReasoningDisabled =
         chatModel?.completionOptions?.reasoning === false;
-      // LLM: prefix models default to reasoning disabled unless the user
+      // LLM: / openrouter: / opencode: / gemini: prefix models default to reasoning disabled unless the user
       // has explicitly toggled it on for this model.
-      const isLLMPrefix =
-        chatModel?.model?.startsWith("LLM:") ||
-        chatModel?.model?.startsWith("openrouter:") ||
-        chatModel?.model?.startsWith("opencode:");
+      const isLLMPrefix = isReasoningDefaultDisabledModel(chatModel);
       const userReasoningPref = chatModel?.title
         ? reasoningSettings[chatModel.title]
         : undefined;

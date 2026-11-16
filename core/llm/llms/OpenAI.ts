@@ -478,7 +478,7 @@ class OpenAI extends BaseLLM {
       // In practice, setting this to true and asking for multiple tool calls
       // leads to "arguments" being something like '{"file": "test.ts"}{"file": "test.js"}'
       // o3 does not support this
-      if (!body.model.startsWith("o3")) {
+      if (!body.model.startsWith("o3") && !body.model.startsWith("gemini:")) {
         body.parallel_tool_calls = false;
       }
     }

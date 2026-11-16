@@ -2,7 +2,10 @@ import { ContextItem, ToolCallState } from "core";
 import { BuiltInToolNames } from "core/tools/builtIn";
 import { ContinueError, ContinueErrorReason } from "core/util/errors";
 import { IIdeMessenger } from "../../context/IdeMessenger";
+import { selectSessionById } from "../../redux/selectors/sessions";
 import { AppThunkDispatch, RootState } from "../../redux/store";
+import { normalizeSessionMode } from "../../redux/util/sessionMode";
+import { askUserQuestionImpl } from "./askUserQuestionImpl";
 import { editToolImpl } from "./editImpl";
 import { multiEditImpl } from "./multiEditImpl";
 import { singleFindAndReplaceImpl } from "./singleFindAndReplaceImpl";
@@ -38,7 +41,26 @@ export async function callClientTool(
   extras: ClientToolExtras,
 ): Promise<ClientToolResult> {
   const { toolCall, parsedArgs } = toolCallState;
+  const state = extras.getState();
+  const targetSessionId = extras.sessionId ?? state.sessions.activeSessionId;
+  const rawMode = targetSessionId
+    ? selectSessionById(state, targetSessionId)?.mode
+    : undefined;
+  const effectiveMode = rawMode ? normalizeSessionMode(rawMode) : "plan";
+
   try {
+    if (
+      effectiveMode === "plan" &&
+      (toolCall.function.name === BuiltInToolNames.EditExistingFile ||
+        toolCall.function.name === BuiltInToolNames.SingleFindAndReplace ||
+        toolCall.function.name === BuiltInToolNames.MultiEdit)
+    ) {
+      throw new ContinueError(
+        ContinueErrorReason.Unspecified,
+        `Tool ${toolCall.function.name} is disabled in Plan (read-only) mode.`,
+      );
+    }
+
     let output: ClientToolOutput;
     switch (toolCall.function.name) {
       case BuiltInToolNames.EditExistingFile:
@@ -53,6 +75,9 @@ export async function callClientTool(
         break;
       case BuiltInToolNames.MultiEdit:
         output = await multiEditImpl(parsedArgs, toolCall.id, extras);
+        break;
+      case BuiltInToolNames.AskUserQuestion:
+        output = await askUserQuestionImpl(parsedArgs, toolCall.id, extras);
         break;
       default:
         throw new Error(`Invalid client tool name ${toolCall.function.name}`);

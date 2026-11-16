@@ -199,3 +199,27 @@ export function getUriDescription(uri: string, dirUriCandidates: string[]) {
     extension,
   };
 }
+
+export function fileUriOrPathToPath(uriOrPath: string): string {
+  if (!uriOrPath.startsWith("file://")) {
+    return uriOrPath;
+  }
+  try {
+    const parsed = URI.parse(uriOrPath);
+    const decoded = decodeURIComponent(parsed.path ?? "");
+    if (/^\/[A-Za-z]:\//.test(decoded)) {
+      return decoded.slice(1);
+    }
+    return decoded || uriOrPath;
+  } catch {
+    return uriOrPath;
+  }
+}
+
+export function localPathToFileUri(path: string): string {
+  if (path.startsWith("file://")) {
+    return path;
+  }
+  const segment = pathToUriPathSegment(path);
+  return URI.normalize(`file:///${segment}`);
+}
