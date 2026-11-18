@@ -291,17 +291,31 @@ export async function evaluateToolPolicy(
         toolCallState.processedArgs?.filepath ??
         "",
     ).trim();
-    const resolvedUri = String(
-      toolCallState.processedArgs?.resolvedPath ??
-        toolCallState.processedArgs?.fileUri ??
-        "",
+    const rawResolved = toolCallState.processedArgs?.resolvedPath;
+    const resolvedObj =
+      typeof rawResolved === "object" && rawResolved !== null
+        ? (rawResolved as { uri?: unknown; isWithinWorkspace?: unknown })
+        : undefined;
+    const resolvedUri = (
+      typeof rawResolved === "string"
+        ? rawResolved
+        : typeof resolvedObj?.uri === "string"
+          ? resolvedObj.uri
+          : String(toolCallState.processedArgs?.fileUri ?? "")
     ).trim();
+    const hasParentTraversal = rawFp
+      .replaceAll("\\", "/")
+      .split("/")
+      .includes("..");
     let isOutsideWorkspace =
+      hasParentTraversal ||
       rawFp.startsWith("..") ||
       rawFp.startsWith("~") ||
       rawFp.startsWith("/") ||
       /^[A-Za-z]:[\\/]/.test(rawFp);
-    if (resolvedUri.startsWith("file://")) {
+    if (typeof resolvedObj?.isWithinWorkspace === "boolean") {
+      isOutsideWorkspace = !resolvedObj.isWithinWorkspace;
+    } else if (resolvedUri.startsWith("file://")) {
       const workspaceDirs = await ideMessenger.ide.getWorkspaceDirs();
       isOutsideWorkspace = !workspaceDirs.some((dir) => {
         const normalizedDir = dir.endsWith("/") ? dir : `${dir}/`;

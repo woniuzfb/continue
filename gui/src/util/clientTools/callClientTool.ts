@@ -61,23 +61,30 @@ export async function callClientTool(
       );
     }
 
+    const resolvedExtras: ClientToolExtras = targetSessionId
+      ? { ...extras, sessionId: targetSessionId }
+      : extras;
     let output: ClientToolOutput;
     switch (toolCall.function.name) {
       case BuiltInToolNames.EditExistingFile:
-        output = await editToolImpl(parsedArgs, toolCall.id, extras);
+        output = await editToolImpl(parsedArgs, toolCall.id, resolvedExtras);
         break;
       case BuiltInToolNames.SingleFindAndReplace:
         output = await singleFindAndReplaceImpl(
           parsedArgs,
           toolCall.id,
-          extras,
+          resolvedExtras,
         );
         break;
       case BuiltInToolNames.MultiEdit:
-        output = await multiEditImpl(parsedArgs, toolCall.id, extras);
+        output = await multiEditImpl(parsedArgs, toolCall.id, resolvedExtras);
         break;
       case BuiltInToolNames.AskUserQuestion:
-        output = await askUserQuestionImpl(parsedArgs, toolCall.id, extras);
+        output = await askUserQuestionImpl(
+          parsedArgs,
+          toolCall.id,
+          resolvedExtras,
+        );
         break;
       default:
         throw new Error(`Invalid client tool name ${toolCall.function.name}`);

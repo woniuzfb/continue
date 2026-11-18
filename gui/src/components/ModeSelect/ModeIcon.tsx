@@ -14,7 +14,7 @@ interface ModeIconProps {
 
 export function ModeIcon({
   mode,
-  className = "xs:h-3 xs:w-3 h-3 w-3",
+  className = "xs:h-3 xs:w-3 h-3 w-3 flex-shrink-0",
 }: ModeIconProps) {
   switch (mode) {
     case "agent-full":

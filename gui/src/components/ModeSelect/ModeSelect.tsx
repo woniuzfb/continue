@@ -115,7 +115,7 @@ export function ModeSelect() {
           className="xs:px-2 text-description bg-lightgray/20 gap-1 rounded-full border-none px-1.5 py-0.5 transition-colors duration-200 hover:brightness-110"
         >
           <ModeIcon mode={effectiveMode} />
-          <span className="hidden sm:block">
+          <span className="hidden sm:line-clamp-1 sm:break-all">
             {effectiveMode === "agent-full"
               ? "Full Agent"
               : effectiveMode === "agent"

@@ -309,4 +309,75 @@ describe("evaluateSessionToolPolicies", () => {
     ]);
     expect(toolState(store, "t-dyn-disabled")?.status).toBe("errored");
   });
+
+  it("handles ResolvedPath objects from create_new_file and mid-path '..' traversal in agent mode", async () => {
+    const createInside: ToolCallState = {
+      ...toolCall("t-create-in", "create_new_file", {
+        filepath: "/workspace/src/new.ts",
+      }),
+      processedArgs: {
+        resolvedPath: {
+          uri: "file:///workspace/src/new.ts",
+          displayPath: "src/new.ts",
+          isWithinWorkspace: true,
+        },
+      },
+    };
+    const createOutside: ToolCallState = {
+      ...toolCall("t-create-out", "create_new_file", {
+        filepath: "sub/../../outside.ts",
+      }),
+      processedArgs: {
+        resolvedPath: {
+          uri: "file:///outside.ts",
+          displayPath: "/outside.ts",
+          isWithinWorkspace: false,
+        },
+      },
+    };
+    const editMidTraversal: ToolCallState = toolCall(
+      "t-edit-mid",
+      "edit_existing_file",
+      {
+        filepath: "sub/../../outside.ts",
+      },
+    );
+    const store = createMockStore({
+      sessions: {
+        activeSessionId: "s1",
+        tabOrder: ["s1"],
+        tabDescriptors: {
+          s1: { sessionId: "s1", title: "Chat 1", loadState: "loaded" },
+        },
+        sessionsById: {
+          s1: initialSessionRuntime("s1", "Chat 1", {
+            mode: "agent",
+            history: [
+              assistant("a1", [createInside, createOutside, editMidTraversal]),
+            ],
+            pendingApprovalCount: 3,
+          }),
+        },
+      },
+    });
+    store.mockIdeMessenger.responseHandlers["tools/evaluatePolicy"] =
+      async () => ({
+        policy: "allowedWithPermission",
+        displayValue: undefined,
+      });
+
+    const policies = await evaluateSessionToolPolicies(api(store), {
+      sessionId: "s1",
+      toolCallIds: ["t-create-in", "t-create-out", "t-edit-mid"],
+      activeTools: ACTIVE_TOOLS,
+      toolPolicies: {},
+    });
+    expect(policies.map((p) => [p.toolCallState.toolCallId, p.policy])).toEqual(
+      [
+        ["t-create-in", "allowedWithPermission"],
+        ["t-create-out", "disabled"],
+        ["t-edit-mid", "disabled"],
+      ],
+    );
+  });
 });
