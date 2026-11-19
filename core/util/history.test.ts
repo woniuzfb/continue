@@ -260,3 +260,64 @@ describe("Message ID survives the persistence path (Legacy ID P1)", () => {
     await historyManager.delete(idSessionId);
   });
 });
+
+describe("processedArgs slimming on save/load", () => {
+  test("strips editingFileContents and newFileContents while keeping metadata", async () => {
+    const slimSessionId = uuidv4();
+    const session: Session = {
+      sessionId: slimSessionId,
+      title: "slim processedArgs session",
+      workspaceDirectory: "workspaceDir",
+      history: [
+        {
+          message: { role: "user", content: "edit big file" },
+          contextItems: [],
+        },
+        {
+          message: { role: "assistant", content: "" },
+          contextItems: [],
+          toolCallStates: [
+            {
+              toolCallId: "tc-1",
+              toolCall: {
+                id: "tc-1",
+                type: "function",
+                function: {
+                  name: "single_find_and_replace",
+                  arguments:
+                    '{"filepath":"big.py","old_string":"a","new_string":"b"}',
+                },
+              },
+              status: "done",
+              parsedArgs: {
+                filepath: "big.py",
+                old_string: "a",
+                new_string: "b",
+              },
+              processedArgs: {
+                filepath: "big.py",
+                fileUri: "file:///w/big.py",
+                resolvedPath: "file:///w/big.py",
+                old_string: "a",
+                new_string: "b",
+                editingFileContents: "x".repeat(50_000),
+                newFileContents: "y".repeat(50_000),
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    await historyManager.save(session);
+    const loaded = historyManager.load(slimSessionId);
+    const processedArgs = loaded.history[1].toolCallStates?.[0]?.processedArgs;
+    expect(processedArgs).toBeDefined();
+    expect(processedArgs?.filepath).toBe("big.py");
+    expect(processedArgs?.fileUri).toBe("file:///w/big.py");
+    expect("editingFileContents" in (processedArgs ?? {})).toBe(false);
+    expect("newFileContents" in (processedArgs ?? {})).toBe(false);
+
+    await historyManager.delete(slimSessionId);
+  });
+});

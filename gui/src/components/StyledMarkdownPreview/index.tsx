@@ -1,5 +1,5 @@
 import { ctxItemToRifWithContents } from "core/commands/util";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, ReactNode, useContext, useEffect, useMemo, useRef } from "react";
 import { useRemark } from "react-remark";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
@@ -12,6 +12,7 @@ import {
   vscEditorBackground,
   vscForeground,
 } from "..";
+import { IdeMessengerContext } from "../../context/IdeMessenger";
 import useUpdatingRef from "../../hooks/useUpdatingRef";
 import { useAppSelector } from "../../redux/hooks";
 import { selectUIConfig } from "../../redux/slices/configSlice";
@@ -33,6 +34,7 @@ import SymbolLink from "./SymbolLink";
 import { SyntaxHighlightedPre } from "./SyntaxHighlightedPre";
 import { isSymbolNotRif, matchCodeToSymbolOrFile } from "./utils";
 import { fixDoubleDollarNewLineLatex } from "./utils/fixDoubleDollarLatex";
+import { parseLocalFileLink } from "./utils/parseLocalFileLink";
 import { patchNestedMarkdown } from "./utils/patchNestedMarkdown";
 import { replaceSingleDollarOutsideCode } from "./utils/replaceSingleDollarOutsideCode";
 import { remarkTables } from "./utils/remarkTables";
@@ -195,6 +197,52 @@ function getCodeChildrenContent(children: any) {
     return children[0];
   }
   return undefined;
+}
+
+function MarkdownLink({
+  href,
+  children,
+}: {
+  href: string;
+  children?: ReactNode;
+}) {
+  const ideMessenger = useContext(IdeMessengerContext);
+  // 超长链接（如带签名/大文件的下载链接）在 tooltip 里全部展示会
+  // 撑爆聊天区：中间截断，只展示首尾，点击仍打开完整 URL。
+  const tooltipHref =
+    href.length > 120 ? `${href.slice(0, 80)}...${href.slice(-40)}` : href;
+
+  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    const parsed = parseLocalFileLink(href, window.workspacePaths);
+    if (!parsed) {
+      return;
+    }
+    e.preventDefault();
+    if (parsed.startLine !== undefined) {
+      ideMessenger.post("showLines", {
+        filepath: parsed.fileUri,
+        startLine: parsed.startLine,
+        endLine: parsed.endLine ?? parsed.startLine,
+      });
+    } else {
+      ideMessenger.post("showFile", {
+        filepath: parsed.fileUri,
+      });
+    }
+  };
+
+  return (
+    <ToolTip place="top" className="m-0 p-0" content={tooltipHref}>
+      <a
+        href={href}
+        target="_blank"
+        className="hover:underline"
+        onClick={handleClick}
+      >
+        {children}
+      </a>
+    </ToolTip>
+  );
 }
 
 const StyledMarkdownPreview = memo(function StyledMarkdownPreview(
@@ -397,19 +445,7 @@ const MarkdownPipeline = memo(function MarkdownPipeline(
       components: {
         a: ({ ...aProps }) => {
           const href = aProps.href ?? "";
-          // 超长链接（如带签名/大文件的下载链接）在 tooltip 里全部展示会
-          // 撑爆聊天区：中间截断，只展示首尾，点击仍打开完整 URL。
-          const tooltipHref =
-            href.length > 120
-              ? `${href.slice(0, 80)}...${href.slice(-40)}`
-              : href;
-          return (
-            <ToolTip place="top" className="m-0 p-0" content={tooltipHref}>
-              <a href={href} target="_blank" className="hover:underline">
-                {aProps.children}
-              </a>
-            </ToolTip>
-          );
+          return <MarkdownLink href={href}>{aProps.children}</MarkdownLink>;
         },
         pre: ({ ...preProps }) => {
           const codeBlockIndex = preProps["data-codeblockindex"];

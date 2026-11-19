@@ -42,13 +42,41 @@ export function findSessionToolCallTarget(
   return undefined;
 }
 
+const TERMINAL_TOOL_CALL_STATUSES = new Set<ToolCallState["status"]>([
+  "done",
+  "errored",
+  "canceled",
+]);
+
+function pruneTerminalProcessedArgs(state: ToolCallState): ToolCallState {
+  if (
+    !TERMINAL_TOOL_CALL_STATUSES.has(state.status) ||
+    !state.processedArgs ||
+    (!("editingFileContents" in state.processedArgs) &&
+      !("newFileContents" in state.processedArgs))
+  ) {
+    return state;
+  }
+  const {
+    editingFileContents: _old,
+    newFileContents: _new,
+    ...rest
+  } = state.processedArgs;
+  return {
+    ...state,
+    processedArgs: rest,
+  };
+}
+
 export function patchToolCallStates(
   item: ChatHistoryItemWithMessageId,
   toolCallId: string,
   patch: Partial<ToolCallState>,
 ): ToolCallState[] {
   return (item.toolCallStates ?? []).map((state) =>
-    state.toolCallId === toolCallId ? { ...state, ...patch } : state,
+    state.toolCallId === toolCallId
+      ? pruneTerminalProcessedArgs({ ...state, ...patch })
+      : state,
   );
 }
 

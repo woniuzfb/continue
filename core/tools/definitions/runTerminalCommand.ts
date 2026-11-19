@@ -55,7 +55,12 @@ export const runTerminalCommandTool: Tool = {
         waitForCompletion: {
           type: "boolean",
           description:
-            "Whether to wait for the command to complete before returning. Default is true. Set to false to run the command in the background. Set to true to run the command in the foreground and wait to collect the output.",
+            "Whether to wait for the command to complete before returning. Default is true. Set to false to start the command in the background immediately and return a jobId. When true, if the command exceeds timeoutMs it is automatically promoted to a background job (without killing it) and returns a jobId for polling with job_output or stopping with job_kill.",
+        },
+        timeoutMs: {
+          type: "number",
+          description:
+            "Optional foreground wait timeout in milliseconds (default 120000, range 1000-300000) when waitForCompletion is true. If the command is still running after timeoutMs, it is promoted to a background job and returns its jobId instead of killing the process.",
         },
       },
     },

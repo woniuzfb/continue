@@ -144,6 +144,28 @@ function stripAttachedFileContent(history: Session["history"] | undefined) {
       }
     }
   }
+
+  // toolCallStates.processedArgs 瘦身：single_find_and_replace / multi_edit 在
+  // 预处理阶段会把编辑前后的全量文件文本写入 processedArgs，对大文件每次编辑会
+  // 膨胀数 MB。UI 在缺失这两个字段时会自动回退到 edits 渲染 diff，落盘与加载
+  // 时剥离即可消除会话 JSON 膨胀。幂等。
+  for (const item of history) {
+    if (!item.toolCallStates?.length) continue;
+    for (const tcs of item.toolCallStates) {
+      if (!tcs.processedArgs) continue;
+      if (
+        "editingFileContents" in tcs.processedArgs ||
+        "newFileContents" in tcs.processedArgs
+      ) {
+        const {
+          editingFileContents: _old,
+          newFileContents: _new,
+          ...rest
+        } = tcs.processedArgs;
+        tcs.processedArgs = rest;
+      }
+    }
+  }
 }
 
 // 会话持久化瘦身（结构化图片 part）：user 消息 content 里的 imageUrl base64

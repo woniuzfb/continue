@@ -206,8 +206,9 @@ describe("runTerminalCommandImpl", () => {
     expect(result[0].content || result[0].status).toContain(
       "running in the background",
     );
-    // Verify status field indicates background running
-    expect(result[0].status).toBe("Command is running in the background...");
+    // Verify status field indicates background running (with jobId)
+    expect(result[0].status).toContain("Command is running in the background");
+    expect(result[0].status).toMatch(/job_\d+/);
 
     // Initial notification should indicate background running
     expect(mockOutputFn).toHaveBeenCalled();
@@ -218,7 +219,7 @@ describe("runTerminalCommandImpl", () => {
       if (contextItems && Array.isArray(contextItems) && contextItems[0]) {
         expect(contextItems[0].content).toContain("");
         expect(contextItems[0].status).toMatch(
-          /Command is running in the background.../,
+          /Command is running in the background/,
         );
       }
     }
@@ -351,9 +352,11 @@ describe("runTerminalCommandImpl", () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe("Terminal");
-    // Verify both content and status fields for background commands
-    expect(result[0].content).toBe("Command is running in the background...");
-    expect(result[0].status).toBe("Command is running in the background...");
+    // Verify both content and status fields for background commands (now includes jobId)
+    expect(result[0].content).toContain("Command is running in the background");
+    expect(result[0].content).toMatch(/job_\d+/);
+    expect(result[0].status).toContain("Command is running in the background");
+    expect(result[0].status).toMatch(/job_\d+/);
   });
 
   it("should handle missing workspace directory gracefully", async () => {

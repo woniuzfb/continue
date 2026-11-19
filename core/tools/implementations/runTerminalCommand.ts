@@ -1,17 +1,30 @@
 import iconv from "iconv-lite";
 import childProcess from "node:child_process";
 import os from "node:os";
-import { ContinueError, ContinueErrorReason } from "../../util/errors";
+import { fileURLToPath } from "node:url";
+import { ToolImpl } from ".";
+import {
+  isProcessBackgrounded,
+  markProcessAsBackgrounded,
+  markProcessAsRunning,
+  removeBackgroundedProcess,
+  removeRunningProcess,
+  updateProcessOutput,
+} from "../../util/processTerminalStates";
+import { terminalJobRegistry } from "../../util/terminalJobRegistry";
+import { getBooleanArg, getNumberArg, getStringArg } from "../parseArgs";
 
-// Default timeout for terminal commands (2 minutes)
-const DEFAULT_TOOL_TIMEOUT_MS = 120_000;
+// Default foreground wait timeout before auto-promoting to a background job (120s, aligned with voiceedge-harness)
+export const DEFAULT_TOOL_TIMEOUT_MS = 120_000;
+const MIN_TOOL_TIMEOUT_MS = 1_000;
+const MAX_TOOL_TIMEOUT_MS = 300_000;
 
 // Automatically decode the buffer according to the platform to avoid garbled Chinese
 function getDecodedOutput(data: Buffer): string {
   if (process.platform === "win32") {
     try {
       let out = iconv.decode(data, "utf-8");
-      if (/�/.test(out)) {
+      if (/\uFFFD/.test(out)) {
         out = iconv.decode(data, "gbk");
       }
       return out;
@@ -21,7 +34,9 @@ function getDecodedOutput(data: Buffer): string {
   } else {
     return data.toString();
   }
-} // Simple helper function to use login shell on Unix/macOS and PowerShell on Windows
+}
+
+// Simple helper function to use login shell on Unix/macOS and PowerShell on Windows
 function getShellCommand(command: string): { shell: string; args: string[] } {
   if (process.platform === "win32") {
     // Windows: Use PowerShell
@@ -36,16 +51,21 @@ function getShellCommand(command: string): { shell: string; args: string[] } {
   }
 }
 
-import { fileURLToPath } from "node:url";
-import { ToolImpl } from ".";
-import {
-  isProcessBackgrounded,
-  markProcessAsRunning,
-  removeBackgroundedProcess,
-  removeRunningProcess,
-  updateProcessOutput,
-} from "../../util/processTerminalStates";
-import { getBooleanArg, getStringArg } from "../parseArgs";
+function resolveForegroundTimeoutMs(args: Record<string, unknown>): number {
+  const raw =
+    args.timeoutMs !== undefined
+      ? getNumberArg(args, "timeoutMs")
+      : args.timeout_ms !== undefined
+        ? getNumberArg(args, "timeout_ms")
+        : undefined;
+  if (raw === undefined || !Number.isFinite(raw)) {
+    return DEFAULT_TOOL_TIMEOUT_MS;
+  }
+  return Math.max(
+    MIN_TOOL_TIMEOUT_MS,
+    Math.min(Math.trunc(raw), MAX_TOOL_TIMEOUT_MS),
+  );
+}
 
 /**
  * Resolves the working directory from workspace dirs.
@@ -106,451 +126,307 @@ const getColorEnv = () => ({
 // integrated terminal and executes in the correct remote environment.
 const LOCAL_ONLY = ["", "local"];
 
+function formatPromotedNotice(jobId: string, timeoutMs: number): string {
+  return (
+    `\n[still running after ${timeoutMs}ms; moved to background job ${jobId}]\n` +
+    `Use job_output(jobId="${jobId}", wait=true) to poll incremental output, ` +
+    `job_list() to check status, or job_kill(jobId="${jobId}") to terminate.`
+  );
+}
+
+function formatStartedBackgroundNotice(jobId: string): string {
+  return (
+    `Command is running in the background (${jobId}). ` +
+    `Use job_output(jobId="${jobId}", wait=true) to poll incremental output, ` +
+    `job_list() to check status, or job_kill(jobId="${jobId}") to terminate.`
+  );
+}
+
 export const runTerminalCommandImpl: ToolImpl = async (args, extras) => {
   const command = getStringArg(args, "command");
   // Default to waiting for completion if not specified
   const waitForCompletion =
     getBooleanArg(args, "waitForCompletion", false) ?? true;
+  const foregroundTimeoutMs = resolveForegroundTimeoutMs(args);
 
   const ideInfo = await extras.ide.getIdeInfo();
   const toolCallId = extras.toolCallId || "";
 
   if (LOCAL_ONLY.includes(ideInfo.remoteName)) {
-    // For streaming output
-    if (extras.onPartialOutput) {
-      try {
-        const workspaceDirs = await extras.ide.getWorkspaceDirs();
-        const cwd = resolveWorkingDirectory(workspaceDirs);
+    const workspaceDirs = await extras.ide.getWorkspaceDirs();
+    const cwd = resolveWorkingDirectory(workspaceDirs);
+    const hasStreaming = Boolean(extras.onPartialOutput);
 
-        return new Promise((resolve, reject) => {
-          let terminalOutput = "";
-          let timeoutId: ReturnType<typeof setTimeout> | undefined;
-          let sigkillTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    return new Promise((resolve, reject) => {
+      let terminalOutput = "";
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let promotedToBackground = false;
+      let settled = false;
 
-          if (!waitForCompletion) {
-            const status = "Command is running in the background...";
-            if (extras.onPartialOutput) {
-              extras.onPartialOutput({
-                toolCallId,
-                contextItems: [
-                  {
-                    name: "Terminal",
-                    description: "Terminal command output",
-                    content: "",
-                    status: status,
-                  },
-                ],
-              });
-            }
-          }
+      const finishResolve = (items: Awaited<ReturnType<ToolImpl>>) => {
+        if (settled) return;
+        settled = true;
+        resolve(items);
+      };
 
-          // Use spawn with color environment
-          const { shell, args } = getShellCommand(command);
-          const childProc = childProcess.spawn(shell, args, {
-            cwd,
-            env: getColorEnv(), // Add enhanced environment for colors
-          });
+      const finishReject = (err: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
 
-          // Track this process for foreground cancellation
-          if (toolCallId && waitForCompletion) {
-            markProcessAsRunning(
-              toolCallId,
-              childProc,
-              extras.onPartialOutput,
-              terminalOutput,
-            );
-          }
+      // Use spawn with color environment; create a dedicated process group on POSIX so job_kill stops child trees
+      const { shell, args: shellArgs } = getShellCommand(command);
+      const childProc = childProcess.spawn(shell, shellArgs, {
+        cwd,
+        env: getColorEnv(),
+        ...(process.platform !== "win32" ? { detached: true } : {}),
+      });
 
-          // Check if the child process is still running.
-          // `childProc.killed` only indicates that kill() was called,
-          // not that the process has actually exited.
-          const isRunning = () =>
-            childProc.exitCode === null && childProc.signalCode === null;
+      const jobId = terminalJobRegistry.register({
+        toolCallId,
+        command,
+        cwd,
+        process: childProc,
+      });
 
-          // Set up timeout for waitForCompletion mode
-          if (waitForCompletion) {
-            timeoutId = setTimeout(() => {
-              if (isRunning()) {
-                terminalOutput +=
-                  "\n[Timeout: process killed after 2 minutes]\n";
+      // Track this process for foreground cancellation
+      if (toolCallId && waitForCompletion) {
+        markProcessAsRunning(
+          toolCallId,
+          childProc,
+          extras.onPartialOutput,
+          terminalOutput,
+        );
+      }
 
-                // Update UI with timeout message
-                if (extras.onPartialOutput) {
-                  extras.onPartialOutput({
-                    toolCallId,
-                    contextItems: [
-                      {
-                        name: "Terminal",
-                        description: "Terminal command output",
-                        content: terminalOutput,
-                        status: "Command timed out",
-                      },
-                    ],
-                  });
-                }
-
-                // Try graceful termination first
-                childProc.kill("SIGTERM");
-
-                // Force kill after 5 seconds if still running
-                sigkillTimeoutId = setTimeout(() => {
-                  if (isRunning()) {
-                    childProc.kill("SIGKILL");
-                  }
-                }, 5_000);
-              }
-            }, DEFAULT_TOOL_TIMEOUT_MS);
-          }
-
-          childProc.stdout?.on("data", (data) => {
-            // Skip if this process has been backgrounded
-            if (isProcessBackgrounded(toolCallId)) return;
-
-            const newOutput = getDecodedOutput(data);
-            terminalOutput += newOutput;
-
-            // Update the tracked output for potential cancellation notifications
-            if (toolCallId && waitForCompletion) {
-              updateProcessOutput(toolCallId, terminalOutput);
-            }
-
-            // Send partial output to UI
-            if (extras.onPartialOutput) {
-              const status = waitForCompletion
-                ? ""
-                : "Command is running in the background...";
-              extras.onPartialOutput({
-                toolCallId,
-                contextItems: [
-                  {
-                    name: "Terminal",
-                    description: "Terminal command output",
-                    content: terminalOutput,
-                    status: status,
-                  },
-                ],
-              });
-            }
-          });
-
-          childProc.stderr?.on("data", (data) => {
-            // Skip if this process has been backgrounded
-            if (isProcessBackgrounded(toolCallId)) return;
-
-            const newOutput = getDecodedOutput(data);
-            terminalOutput += newOutput;
-
-            // Update the tracked output for potential cancellation notifications
-            if (toolCallId && waitForCompletion) {
-              updateProcessOutput(toolCallId, terminalOutput);
-            }
-
-            // Send partial output to UI, status is not required
-            if (extras.onPartialOutput) {
-              extras.onPartialOutput({
-                toolCallId,
-                contextItems: [
-                  {
-                    name: "Terminal",
-                    description: "Terminal command output",
-                    content: terminalOutput,
-                  },
-                ],
-              });
-            }
-          });
-
-          // If we don't need to wait for completion, resolve immediately
-          if (!waitForCompletion) {
-            const status = "Command is running in the background...";
-            resolve([
-              {
-                name: "Terminal",
-                description: "Terminal command output",
-                content: terminalOutput,
-                status: status,
-              },
-            ]);
-          }
-
-          childProc.on("close", (code) => {
-            // Clear timeout on normal completion
-            if (timeoutId) {
-              clearTimeout(timeoutId);
-            }
-
-            // Clear inner SIGKILL timeout if process exits before grace period
-            if (sigkillTimeoutId) {
-              clearTimeout(sigkillTimeoutId);
-            }
-
-            // Clean up process tracking
-            if (toolCallId) {
-              if (isProcessBackgrounded(toolCallId)) {
-                removeBackgroundedProcess(toolCallId);
-                return;
-              }
-              // Remove from foreground tracking if it was tracked
-              removeRunningProcess(toolCallId);
-            }
-
-            if (waitForCompletion) {
-              // Normal completion, resolve now
-              if (!code || code === 0) {
-                const status = "Command completed";
-                resolve([
-                  {
-                    name: "Terminal",
-                    description: "Terminal command output",
-                    content: terminalOutput,
-                    status: status,
-                  },
-                ]);
-              } else {
-                const status = `Command failed with exit code ${code}`;
-                resolve([
-                  {
-                    name: "Terminal",
-                    description: "Terminal command output",
-                    content: terminalOutput,
-                    status: status,
-                  },
-                ]);
-              }
-            } else {
-              // Already resolved, just update the UI with final output
-              if (extras.onPartialOutput) {
-                const status =
-                  code === 0 || !code
-                    ? "\nBackground command completed"
-                    : `\nBackground command failed with exit code ${code}`;
-                extras.onPartialOutput({
-                  toolCallId,
-                  contextItems: [
-                    {
-                      name: "Terminal",
-                      description: "Terminal command output",
-                      content: terminalOutput,
-                      status: status,
-                    },
-                  ],
-                });
-              }
-            }
-          });
-
-          childProc.on("error", (error) => {
-            // Clear timeout on error
-            if (timeoutId) {
-              clearTimeout(timeoutId);
-            }
-
-            // Clear SIGKILL timeout to prevent delayed kill after rejection
-            if (sigkillTimeoutId) {
-              clearTimeout(sigkillTimeoutId);
-            }
-
-            // Clean up process tracking
-            if (toolCallId) {
-              if (isProcessBackgrounded(toolCallId)) {
-                removeBackgroundedProcess(toolCallId);
-                return;
-              }
-              // Remove from foreground tracking if it was tracked
-              removeRunningProcess(toolCallId);
-            }
-
-            reject(error);
-          });
+      if (!waitForCompletion && hasStreaming && extras.onPartialOutput) {
+        extras.onPartialOutput({
+          toolCallId,
+          contextItems: [
+            {
+              name: "Terminal",
+              description: "Terminal command output",
+              content: "",
+              status: `Command is running in the background (${jobId})...`,
+            },
+          ],
         });
-      } catch (error: any) {
-        throw error;
       }
-    } else {
-      // Fallback to non-streaming for older clients
-      const workspaceDirs = await extras.ide.getWorkspaceDirs();
-      const cwd = resolveWorkingDirectory(workspaceDirs);
 
+      const isRunning = () =>
+        childProc.exitCode === null && childProc.signalCode === null;
+
+      // Foreground wait timeout: align with voiceedge-harness promoteOnTimeout.
+      // Instead of killing the process, promote it to a tracked background job
+      // and immediately hand back the jobId + output captured so far.
       if (waitForCompletion) {
-        // Standard execution, waiting for completion
-        try {
-          // Use spawn approach for consistency with streaming version
-          const { shell: nonStreamingShell, args: nonStreamingArgs } =
-            getShellCommand(command);
-          const output = await new Promise<{ stdout: string; stderr: string }>(
-            (resolve, reject) => {
-              let timeoutId: ReturnType<typeof setTimeout> | undefined;
-              let sigkillTimeoutId: ReturnType<typeof setTimeout> | undefined;
+        timeoutId = setTimeout(() => {
+          timeoutId = undefined;
+          if (!isRunning() || settled) {
+            return;
+          }
+          promotedToBackground = true;
+          if (toolCallId) {
+            removeRunningProcess(toolCallId);
+            markProcessAsBackgrounded(toolCallId);
+          }
+          // Advance the job's read cursor so subsequent job_output calls only return new output.
+          const snap = terminalJobRegistry.readDelta(jobId);
+          const captured = snap?.delta ?? terminalOutput;
+          const handoffContent = `${captured}${formatPromotedNotice(jobId, foregroundTimeoutMs)}`;
 
-              const childProc = childProcess.spawn(
-                nonStreamingShell,
-                nonStreamingArgs,
+          if (extras.onPartialOutput) {
+            extras.onPartialOutput({
+              toolCallId,
+              contextItems: [
                 {
-                  cwd,
-                  env: getColorEnv(),
+                  name: "Terminal",
+                  description: "Terminal command output",
+                  content: handoffContent,
+                  status: `Running in background (${jobId})...`,
                 },
-              );
+              ],
+            });
+          }
 
-              // Track this process for foreground cancellation
-              if (toolCallId) {
-                markProcessAsRunning(toolCallId, childProc, undefined, "");
-              }
-
-              let stdout = "";
-              let stderr = "";
-
-              // Check if the child process is still running.
-              // `childProc.killed` only indicates that kill() was called,
-              // not that the process has actually exited.
-              const isRunning = () =>
-                childProc.exitCode === null && childProc.signalCode === null;
-
-              // Set up timeout
-              timeoutId = setTimeout(() => {
-                if (isRunning()) {
-                  stderr += "\n[Timeout: process killed after 2 minutes]\n";
-
-                  // Try graceful termination first
-                  childProc.kill("SIGTERM");
-
-                  // Force kill after 5 seconds if still running
-                  sigkillTimeoutId = setTimeout(() => {
-                    if (isRunning()) {
-                      childProc.kill("SIGKILL");
-                    }
-                  }, 5_000);
-                }
-              }, DEFAULT_TOOL_TIMEOUT_MS);
-
-              childProc.stdout?.on("data", (data) => {
-                stdout += getDecodedOutput(data);
-              });
-
-              childProc.stderr?.on("data", (data) => {
-                stderr += getDecodedOutput(data);
-              });
-
-              childProc.on("close", (code) => {
-                // Clear outer timeout
-                if (timeoutId) {
-                  clearTimeout(timeoutId);
-                }
-
-                // Clear inner SIGKILL timeout if process exits before grace period
-                if (sigkillTimeoutId) {
-                  clearTimeout(sigkillTimeoutId);
-                }
-
-                // Clean up process tracking
-                if (toolCallId) {
-                  removeRunningProcess(toolCallId);
-                }
-
-                if (code === 0) {
-                  resolve({ stdout, stderr });
-                } else {
-                  const error = new ContinueError(
-                    ContinueErrorReason.CommandExecutionFailed,
-                    `Command failed with exit code ${code}`,
-                  );
-                  (error as any).stderr = stderr;
-                  reject(error);
-                }
-              });
-
-              childProc.on("error", (error) => {
-                // Clear timeout on error
-                if (timeoutId) {
-                  clearTimeout(timeoutId);
-                }
-
-                // Clear SIGKILL timeout to prevent delayed kill after rejection
-                if (sigkillTimeoutId) {
-                  clearTimeout(sigkillTimeoutId);
-                }
-
-                // Clean up process tracking
-                if (toolCallId) {
-                  removeRunningProcess(toolCallId);
-                }
-                reject(error);
-              });
-            },
-          );
-
-          const status = "Command completed";
-          return [
+          finishResolve([
             {
               name: "Terminal",
               description: "Terminal command output",
-              content: output.stdout ?? "",
-              status: status,
+              content: handoffContent,
+              status: `Command moved to background (${jobId})`,
             },
-          ];
-        } catch (error: any) {
-          const status = `Command failed with: ${error.message || error.toString()}`;
-          return [
-            {
-              name: "Terminal",
-              description: "Terminal command output",
-              content: error.stderr ?? error.toString(),
-              status: status,
-            },
-          ];
-        }
-      } else {
-        // For non-streaming but also not waiting for completion, use spawn
-        // but don't attach any listeners other than error
-        try {
-          // Use spawn with color environment
-          const { shell: detachedShell, args: detachedArgs } =
-            getShellCommand(command);
-          const childProc = childProcess.spawn(detachedShell, detachedArgs, {
-            cwd,
-            env: getColorEnv(), // Add color environment
-            // Detach the process so it's not tied to the parent
-            detached: true,
-            // Redirect to /dev/null equivalent (works cross-platform)
-            stdio: "ignore",
-          });
-
-          // Even for detached processes, add event handlers to clean up the background process map
-          childProc.on("close", () => {
-            if (isProcessBackgrounded(toolCallId)) {
-              removeBackgroundedProcess(toolCallId);
-            }
-          });
-
-          childProc.on("error", () => {
-            if (isProcessBackgrounded(toolCallId)) {
-              removeBackgroundedProcess(toolCallId);
-            }
-          });
-
-          // Unref the child to allow the Node.js process to exit
-          childProc.unref();
-          const status = "Command is running in the background...";
-          return [
-            {
-              name: "Terminal",
-              description: "Terminal command output",
-              content: status,
-              status: status,
-            },
-          ];
-        } catch (error: any) {
-          const status = `Command failed with: ${error.message || error.toString()}`;
-          return [
-            {
-              name: "Terminal",
-              description: "Terminal command output",
-              content: status,
-              status: status,
-            },
-          ];
-        }
+          ]);
+        }, foregroundTimeoutMs);
       }
-    }
+
+      const handleData = (data: Buffer, isStderr: boolean) => {
+        const newOutput = getDecodedOutput(data);
+        terminalJobRegistry.appendOutput(jobId, newOutput);
+
+        // If user manually backgrounded or timeout promoted this job, keep
+        // buffering in terminalJobRegistry without mutating foreground UI state.
+        if (promotedToBackground || isProcessBackgrounded(toolCallId)) {
+          return;
+        }
+
+        terminalOutput += newOutput;
+
+        if (toolCallId && waitForCompletion) {
+          updateProcessOutput(toolCallId, terminalOutput);
+        }
+
+        if (extras.onPartialOutput) {
+          const item: {
+            name: string;
+            description: string;
+            content: string;
+            status?: string;
+          } = {
+            name: "Terminal",
+            description: "Terminal command output",
+            content: terminalOutput,
+          };
+          if (!isStderr) {
+            item.status = waitForCompletion
+              ? ""
+              : `Command is running in the background (${jobId})...`;
+          }
+          extras.onPartialOutput({
+            toolCallId,
+            contextItems: [item],
+          });
+        }
+      };
+
+      childProc.stdout?.on("data", (data: Buffer) => handleData(data, false));
+      childProc.stderr?.on("data", (data: Buffer) => handleData(data, true));
+
+      // If we don't need to wait for completion, resolve immediately with jobId
+      if (!waitForCompletion) {
+        const status = `Command is running in the background (${jobId})...`;
+        const content = terminalOutput
+          ? `${terminalOutput}\n${formatStartedBackgroundNotice(jobId)}`
+          : formatStartedBackgroundNotice(jobId);
+        // Advance read cursor for any initial output already returned
+        terminalJobRegistry.readDelta(jobId);
+        finishResolve([
+          {
+            name: "Terminal",
+            description: "Terminal command output",
+            content,
+            status,
+          },
+        ]);
+      }
+
+      childProc.on("close", (code, signal) => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+
+        terminalJobRegistry.markClosed(jobId, code, signal);
+
+        const wasManuallyBackgrounded =
+          Boolean(toolCallId) && isProcessBackgrounded(toolCallId);
+        if (toolCallId) {
+          if (wasManuallyBackgrounded) {
+            removeBackgroundedProcess(toolCallId);
+          }
+          removeRunningProcess(toolCallId);
+        }
+
+        if (promotedToBackground || !waitForCompletion) {
+          if (extras.onPartialOutput) {
+            const status =
+              code === 0 || !code
+                ? `\nBackground command completed (${jobId})`
+                : `\nBackground command failed with exit code ${code} (${jobId})`;
+            const fullOutput =
+              terminalJobRegistry.getBufferedOutput(jobId) || terminalOutput;
+            extras.onPartialOutput({
+              toolCallId,
+              contextItems: [
+                {
+                  name: "Terminal",
+                  description: "Terminal command output",
+                  content: fullOutput,
+                  status,
+                },
+              ],
+            });
+          }
+          return;
+        }
+
+        if (wasManuallyBackgrounded) {
+          return;
+        }
+
+        // Consume buffered output so job_output doesn't duplicate completed foreground output
+        terminalJobRegistry.readDelta(jobId);
+
+        if (!code || code === 0) {
+          finishResolve([
+            {
+              name: "Terminal",
+              description: "Terminal command output",
+              content: terminalOutput,
+              status: "Command completed",
+            },
+          ]);
+        } else {
+          const failStatus = hasStreaming
+            ? `Command failed with exit code ${code}`
+            : `Command failed with: Command failed with exit code ${code}`;
+          finishResolve([
+            {
+              name: "Terminal",
+              description: "Terminal command output",
+              content: terminalOutput,
+              status: failStatus,
+            },
+          ]);
+        }
+      });
+
+      childProc.on("error", (error) => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = undefined;
+        }
+
+        terminalJobRegistry.markFailed(jobId, error);
+
+        if (toolCallId) {
+          if (isProcessBackgrounded(toolCallId)) {
+            removeBackgroundedProcess(toolCallId);
+            return;
+          }
+          removeRunningProcess(toolCallId);
+        }
+
+        if (promotedToBackground || !waitForCompletion) {
+          return;
+        }
+
+        if (hasStreaming) {
+          finishReject(error);
+        } else {
+          const status = `Command failed with: ${error.message || error.toString()}`;
+          finishResolve([
+            {
+              name: "Terminal",
+              description: "Terminal command output",
+              content: error.toString(),
+              status,
+            },
+          ]);
+        }
+      });
+    });
   }
 
   // For remote environments (SSH, WSL, Dev Container, Codespaces, etc.),

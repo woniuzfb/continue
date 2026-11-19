@@ -300,10 +300,32 @@ class VsCodeIde implements IDE {
   }
 
   async writeFile(fileUri: string, contents: string): Promise<void> {
-    await vscode.workspace.fs.writeFile(
-      vscode.Uri.parse(fileUri),
-      Buffer.from(contents),
+    const uri = vscode.Uri.parse(fileUri);
+    const openTextDocument = vscode.workspace.textDocuments.find((doc) =>
+      URI.equal(doc.uri.toString(), uri.toString()),
     );
+    if (openTextDocument !== undefined) {
+      if (openTextDocument.getText() !== contents) {
+        const fullRange = new vscode.Range(
+          openTextDocument.positionAt(0),
+          openTextDocument.positionAt(openTextDocument.getText().length),
+        );
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(uri, fullRange, contents);
+        const applied = await vscode.workspace.applyEdit(edit);
+        if (applied && (await openTextDocument.save())) {
+          return;
+        }
+      } else if (openTextDocument.isDirty) {
+        if (await openTextDocument.save()) {
+          return;
+        }
+      } else {
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(contents));
+        return;
+      }
+    }
+    await vscode.workspace.fs.writeFile(uri, Buffer.from(contents));
   }
 
   async removeFile(fileUri: string): Promise<void> {
