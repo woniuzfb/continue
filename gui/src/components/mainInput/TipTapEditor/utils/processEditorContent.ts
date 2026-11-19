@@ -71,11 +71,14 @@ export function processEditorContent(editorState: JSONContent) {
 
         contextRequests.push(...ctxItems);
 
-        // 空段落也要贡献 \n 以保留空行,但避免在开头或图片后产生空文本 part
+        // 空段落也要贡献 \n 以保留空行,但避免在开头或图片后产生空文本 part；
+        // 若图片前已有文本，图片后的新段落需保留前导 \n，避免历史消息剥离
+        // data: imageUrl 后经 toChatMessage .join("") 展平时前后文字粘连
         if (parts[parts.length - 1]?.type === "text") {
           (parts[parts.length - 1] as TextMessagePart).text += "\n" + text;
         } else if (text) {
-          parts.push({ type: "text", text });
+          const hasPriorText = parts.some((part) => part.type === "text");
+          parts.push({ type: "text", text: hasPriorText ? "\n" + text : text });
         }
         break;
       case CodeBlock.name:

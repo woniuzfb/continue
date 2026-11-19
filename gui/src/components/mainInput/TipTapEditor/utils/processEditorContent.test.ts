@@ -429,8 +429,9 @@ describe("processEditorContent", () => {
 
     const result = processEditorContent(editorState);
 
-    // First two paragraphs should be merged, but the third should be separate
-    // because there's an image in between
+    // First two paragraphs should be merged, and the third stays separate
+    // because there's an image in between, retaining a leading newline so
+    // stripping the image in history doesn't glue adjacent text together.
     expect(result.parts).toEqual([
       {
         type: "text",
@@ -442,9 +443,82 @@ describe("processEditorContent", () => {
       },
       {
         type: "text",
-        text: "Third paragraph",
+        text: "\nThird paragraph",
       },
     ]);
+  });
+
+  test("processEditorContent does not prepend newline when image precedes the first text", () => {
+    const editorState: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "image",
+          attrs: {
+            src: "data:image/jpeg;base64,AAAA",
+          },
+        },
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "Describe this image",
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = processEditorContent(editorState);
+
+    expect(result.parts).toEqual([
+      {
+        type: "imageUrl",
+        imageUrl: { url: "data:image/jpeg;base64,AAAA" },
+      },
+      {
+        type: "text",
+        text: "Describe this image",
+      },
+    ]);
+  });
+
+  test("processEditorContent preserves paragraph break across attached image and empty paragraph", () => {
+    const editorState: JSONContent = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "看下 debug" }],
+        },
+        {
+          type: "image",
+          attrs: { src: "data:image/jpeg;base64,AAAA" },
+        },
+        {
+          type: "paragraph",
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "而且我发现问题" }],
+        },
+      ],
+    };
+
+    const result = processEditorContent(editorState);
+
+    expect(result.parts).toEqual([
+      { type: "text", text: "看下 debug" },
+      { type: "imageUrl", imageUrl: { url: "data:image/jpeg;base64,AAAA" } },
+      { type: "text", text: "\n而且我发现问题" },
+    ]);
+    // Simulating history replay after stripping data: imageUrl and joining with ""
+    const replayed = result.parts
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { type: "text"; text: string }).text)
+      .join("");
+    expect(replayed).toBe("看下 debug\n而且我发现问题");
   });
 
   test("processEditorContent should handle unexpected content types gracefully", () => {

@@ -5,7 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatHistoryItemWithMessageId } from "../../redux/slices/sessionHistory";
 import { useAppSelector } from "../../redux/hooks";
 import { createMockStore, getEmptyRootState } from "../../util/test/mockStore";
-import { initialSessionRuntime } from "../../redux/slices/sessionsSlice";
+import {
+  initialSessionRuntime,
+  setActiveSessionId,
+  setSessionPagination,
+} from "../../redux/slices/sessionsSlice";
 import { useAutoScroll } from "./useAutoScroll";
 import { SessionScope } from "../../components/mainInput/TipTapEditor/SessionScope";
 
@@ -490,6 +494,235 @@ describe("useAutoScroll fill-viewport auto-pagination (lazy history deadlock)", 
     await settle();
 
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("fills the viewport once a previously hidden session becomes active", async () => {
+    const { store } = mountLazy(2, "other-session");
+    const handler = vi.fn(() => ({
+      items: diskItems(4),
+      firstTurnItems: [],
+      hasMore: true,
+      total: 20,
+      session: {},
+    }));
+    store.mockIdeMessenger.responseHandlers["history/loadPage"] =
+      handler as any;
+
+    await settle();
+    expect(handler).not.toHaveBeenCalled();
+
+    act(() => {
+      store.dispatch(setActiveSessionId({ sessionId: "lazy-session" }));
+    });
+    await settle();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(
+      (store.getState() as any).sessions.sessionsById["lazy-session"].history
+        .length,
+    ).toBe(6);
+  });
+
+  it("keeps paging when prepending zero-height rows leaves the user stuck at scrollTop=0", async () => {
+    // Start with an overflowing initial page (e.g. a thinking block + long reply)
+    // where scrollHeight > clientHeight, so initial mount stays at the bottom.
+    const scrollable = new FakeScrollElement();
+    scrollable.clientHeight = 100;
+    scrollable.scrollHeight = 300;
+    const state = getEmptyRootState() as any;
+    const initial = diskItems(4).map((it: any) => ({
+      ...it,
+      message: { ...it.message, id: `m-${it.message.content}` },
+    }));
+    state.sessions = {
+      activeSessionId: "lazy-session",
+      tabOrder: ["lazy-session"],
+      tabDescriptors: {
+        "lazy-session": {
+          sessionId: "lazy-session",
+          title: "t",
+          loadState: "loaded",
+        },
+      },
+      sessionsById: {
+        "lazy-session": initialSessionRuntime("lazy-session", "t", {
+          history: initial,
+          pagination: {
+            truncated: true,
+            loadedOffset: 16,
+            loadedDiskCount: 4,
+            hasMore: true,
+            loading: false,
+            requestGeneration: 0,
+            persistPending: false,
+          },
+        }),
+      },
+    };
+    const store = createMockStore(state);
+    let pageCalls = 0;
+    const handler = vi.fn(() => {
+      pageCalls += 1;
+      if (pageCalls === 1) {
+        // Page 1: 4 zero-height tool rows -> scrollHeight does NOT grow, scrollTop stays 0.
+        return {
+          items: Array.from({ length: 4 }, (_, i) => ({
+            message: {
+              role: "tool",
+              content: `tool-${i}`,
+              toolCallId: `c-${i}`,
+            },
+            contextItems: [],
+          })),
+          firstTurnItems: [],
+          hasMore: true,
+          total: 20,
+          session: {},
+        };
+      }
+      // Page 2: visible rows grow scrollHeight by 120px, moving scrollTop away from 0.
+      scrollable.scrollHeight += 120;
+      return {
+        items: diskItems(4),
+        firstTurnItems: [],
+        hasMore: true,
+        total: 20,
+        session: {},
+      };
+    });
+    store.mockIdeMessenger.responseHandlers["history/loadPage"] =
+      handler as any;
+
+    renderHook(
+      () => {
+        const ref = useRef<HTMLDivElement>(scrollable as any);
+        const h = useAppSelector(
+          (s) => s.sessions.sessionsById["lazy-session"]?.history ?? [],
+        );
+        useAutoScroll(ref, h, "lazy-session");
+      },
+      {
+        wrapper: ({ children }) => (
+          <Provider store={store}>
+            <SessionScope sessionId="lazy-session">{children}</SessionScope>
+          </Provider>
+        ),
+      },
+    );
+
+    await settle();
+    expect(handler).not.toHaveBeenCalled();
+
+    // User scrolls up to the top (scrollTop = 0) and hits the thinking block.
+    act(() => {
+      scrollable.scrollTop = 0;
+      scrollable.dispatchScroll();
+    });
+    await settle();
+
+    // Page 1 added 0px so scrollTop stayed at 0; the hook must automatically
+    // fetch page 2 instead of deadlocking at scrollTop = 0.
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(scrollable.scrollTop).toBe(120);
+    expect(
+      (store.getState() as any).sessions.sessionsById["lazy-session"].history
+        .length,
+    ).toBe(12);
+  });
+
+  it("unlocks top-of-scroll pagination immediately when loadMoreHistory is skipped by persistPending", async () => {
+    const scrollable = new FakeScrollElement();
+    scrollable.clientHeight = 100;
+    scrollable.scrollHeight = 300;
+    const state = getEmptyRootState() as any;
+    const initial = diskItems(4).map((it: any) => ({
+      ...it,
+      message: { ...it.message, id: `m-${it.message.content}` },
+    }));
+    state.sessions = {
+      activeSessionId: "lazy-session",
+      tabOrder: ["lazy-session"],
+      tabDescriptors: {
+        "lazy-session": {
+          sessionId: "lazy-session",
+          title: "t",
+          loadState: "loaded",
+        },
+      },
+      sessionsById: {
+        "lazy-session": initialSessionRuntime("lazy-session", "t", {
+          history: initial,
+          pagination: {
+            truncated: true,
+            loadedOffset: 16,
+            loadedDiskCount: 4,
+            hasMore: true,
+            loading: false,
+            requestGeneration: 0,
+            persistPending: true,
+          },
+        }),
+      },
+    };
+    const store = createMockStore(state);
+    const handler = vi.fn(() => {
+      scrollable.scrollHeight += 120;
+      return {
+        items: diskItems(4),
+        firstTurnItems: [],
+        hasMore: true,
+        total: 20,
+        session: {},
+      };
+    });
+    store.mockIdeMessenger.responseHandlers["history/loadPage"] =
+      handler as any;
+
+    renderHook(
+      () => {
+        const ref = useRef<HTMLDivElement>(scrollable as any);
+        const h = useAppSelector(
+          (s) => s.sessions.sessionsById["lazy-session"]?.history ?? [],
+        );
+        useAutoScroll(ref, h, "lazy-session");
+      },
+      {
+        wrapper: ({ children }) => (
+          <Provider store={store}>
+            <SessionScope sessionId="lazy-session">{children}</SessionScope>
+          </Provider>
+        ),
+      },
+    );
+
+    await settle();
+
+    // First scroll to top while persistPending=true: thunk returns early without
+    // setting loading=true; isPrependingRef must unlock instead of staying stuck.
+    act(() => {
+      scrollable.scrollTop = 0;
+      scrollable.dispatchScroll();
+    });
+    await settle();
+    expect(handler).not.toHaveBeenCalled();
+
+    // Once persistPending clears, scrolling at top must immediately load the page.
+    act(() => {
+      store.dispatch(
+        setSessionPagination({
+          sessionId: "lazy-session",
+          pagination: { persistPending: false },
+        }),
+      );
+      scrollable.dispatchScroll();
+    });
+    await settle();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(
+      (store.getState() as any).sessions.sessionsById["lazy-session"].history
+        .length,
+    ).toBe(8);
   });
 });
 

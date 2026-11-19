@@ -66,6 +66,9 @@ export const useAutoScroll = (
 ) => {
   const dispatch = useAppDispatch();
   const store = useStore<RootState>();
+  const activeSessionId = useAppSelector(
+    (state) => state.sessions.activeSessionId,
+  );
   const hasMoreHistory = useSessionHasMoreHistory();
   const isHistoryLoading = useSessionIsHistoryLoading();
   const isStreaming = useSessionIsStreaming();
@@ -410,6 +413,7 @@ export const useAutoScroll = (
               }
             : null;
           isPrependingRef.current = true;
+          const prevLengthAtDispatch = latestHistoryLengthRef.current;
           void dispatch(
             loadMoreHistoryThunk({
               sessionId,
@@ -417,7 +421,20 @@ export const useAutoScroll = (
                 store.getState().sessions.sessionsById[sessionId]?.pagination
                   .requestGeneration ?? 0,
             }),
-          );
+          ).finally(() => {
+            const latestSession =
+              store.getState().sessions.sessionsById[sessionId];
+            if (
+              isPrependingRef.current &&
+              currentSessionIdRef.current === sessionId &&
+              !latestSession?.pagination.loading &&
+              (latestSession?.history.length ?? prevLengthAtDispatch) <=
+                prevLengthAtDispatch
+            ) {
+              prependAnchorRef.current = null;
+              isPrependingRef.current = false;
+            }
+          });
         }
       });
     };
@@ -495,9 +512,8 @@ export const useAutoScroll = (
   useEffect(() => {
     // 方案.md §九.2: a hidden tab must not fill its viewport or page in more
     // history; only the visible session may do that.
-    if (store.getState().sessions.activeSessionId !== sessionId) return;
+    if (activeSessionId !== sessionId) return;
     if (!hasMoreHistory || isHistoryLoading || isStreaming) return;
-    if (isPrependingRef.current) return;
     if (fillViewportAttemptsRef.current >= 3) return;
     const prevLengthAtDispatch = history.length;
     // 双 rAF：等 React 渲染 + 行布局完成后测量才准确
@@ -507,14 +523,25 @@ export const useAutoScroll = (
         const elem = ref.current;
         if (!elem) return;
         if (currentSessionIdRef.current !== sessionId) return;
-        // isRestoring 检查放在帧回调内：mount 时 restore（layout effect）
-        // 先置位再排队清位的 frame；本 effect 的帧排在 restore frame 之后，
-        // 执行到此处时 restore 已完成。若在 effect body 检查，首次挂载会
-        // 被 isRestoring=true 挡住且之后无重跑信号，补页永远不触发。
+        // isRestoring / isPrepending 检查放在帧回调内：mount 时 restore
+        // 与 prepend 锚定（均为 layout effect）先置位再排队单帧 rAF 清位；
+        // 本 effect 的双 rAF 排在它们之后，执行到此处时均已完成。若在 effect
+        // body 检查，prepend 刚完成触发的本次重跑会被 isPrepending=true 挡死
+        // 且之后无重跑信号，零高度页续页永远不会触发。
         if (isRestoringSessionScrollRef.current) return;
         if (isPrependingRef.current) return;
-        // 不足一屏（无滚动空间，scroll handler 无法触发）
-        if (elem.scrollHeight <= elem.clientHeight) {
+        // 两种死锁都需要主动补页：
+        // 1. 不足一屏（scrollHeight <= clientHeight），无滚动条，scroll 事件永不触发；
+        // 2. 用户已停在顶部（scrollTop < 50，例如刚 prepend 了一页全零高度的 tool 行
+        //    或恢复到了顶部），浏览器对继续上滚不再派发 scroll 事件，必须续页直到
+        //    顶部上方长出可滚动高度或历史加载完。
+        const underfilled = elem.scrollHeight <= elem.clientHeight;
+        const stuckAtTop =
+          !underfilled &&
+          userHasScrolled &&
+          elem.scrollTop < 50 &&
+          !suppressAutoScrollRef?.current;
+        if (underfilled || stuckAtTop) {
           // The deadlock breaker firing. If this appears right after a `history-trim` or a
           // `history-shrunk`, the trim left the transcript with no scroll room — which is what
           // the keep floor's scroll buffer exists to prevent (方案.md §7.2.8).
@@ -529,7 +556,22 @@ export const useAutoScroll = (
           isPrependingRef.current = true;
           prevScrollHeightRef.current = elem.scrollHeight;
           prevScrollTopRef.current = elem.scrollTop;
-          prependAnchorRef.current = null; // 顶部无可见锚，prepend 后走 scrollHeight-delta 恢复
+          if (stuckAtTop) {
+            const containerTop = elem.getBoundingClientRect().top;
+            const visibleMessage = Array.from(
+              elem.querySelectorAll<HTMLElement>("[data-message-id]"),
+            ).find(
+              (node) => node.getBoundingClientRect().bottom > containerTop,
+            );
+            prependAnchorRef.current = visibleMessage
+              ? {
+                  messageId: visibleMessage.dataset.messageId!,
+                  top: visibleMessage.getBoundingClientRect().top,
+                }
+              : null;
+          } else {
+            prependAnchorRef.current = null; // 顶部无可见锚，prepend 后走 scrollHeight-delta 恢复
+          }
           void dispatch(
             loadMoreHistoryThunk({
               sessionId,
@@ -537,7 +579,20 @@ export const useAutoScroll = (
                 store.getState().sessions.sessionsById[sessionId]?.pagination
                   .requestGeneration ?? 0,
             }),
-          );
+          ).finally(() => {
+            const latestSession =
+              store.getState().sessions.sessionsById[sessionId];
+            if (
+              isPrependingRef.current &&
+              currentSessionIdRef.current === sessionId &&
+              !latestSession?.pagination.loading &&
+              (latestSession?.history.length ?? prevLengthAtDispatch) <=
+                prevLengthAtDispatch
+            ) {
+              prependAnchorRef.current = null;
+              isPrependingRef.current = false;
+            }
+          });
           // prepend 成功（history 增长）由上面的 effect 链路重置 isPrependingRef；
           // 这里只兜底失败场景：若干帧后 history 未增长则立即解锁并允许重试。
           setTimeout(() => {
@@ -557,13 +612,17 @@ export const useAutoScroll = (
     };
     // history.length：prepend 成功后重测（循环填满视口）
     // isHistoryLoading：失败路径（loading true→false）也重测一次
+    // activeSessionId：隐藏 tab 切换为激活态时补测一次
   }, [
+    activeSessionId,
     history.length,
     hasMoreHistory,
     isHistoryLoading,
     isStreaming,
+    userHasScrolled,
     sessionId,
     ref,
     dispatch,
+    suppressAutoScrollRef,
   ]);
 };
